@@ -24,4 +24,6 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 ## Repository Practices
 
 - Keep source code, comments, filenames, and documentation in English.
+- Keep code concise and avoid unnecessary complexity or verbosity.
+- Design structures carefully so each implementation is clear, cohesive, and efficient.
 - Do not add third-party dependencies or unrelated generated files.
