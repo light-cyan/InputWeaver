@@ -1,10 +1,13 @@
 #include "core/action_queue.hpp"
 #include "core/fixed_rules.hpp"
 #include "core/producer_done_drain.hpp"
+#include "app/action_scheduler.hpp"
+#include "app/remap_engine.hpp"
+#include "app/runtime.hpp"
 #include "diagnostics/diagnostic_log.hpp"
-#include "platform/windows/hook_thread.hpp"
 #include "platform/windows/input_classifier.hpp"
 #include "platform/windows/input_injector.hpp"
+#include "platform/windows/low_level_hooks.hpp"
 #include "platform/windows/process_locator.hpp"
 #include "platform/windows/process_context.hpp"
 
@@ -19,54 +22,55 @@
 
 namespace ukr {
 
-struct HookRuntimeTestAccess final {
+struct RuntimeTestAccess final {
     static void SetSendInput(
-        HookRuntime& runtime,
+        AppRuntime& runtime,
         SendInputFunction sendInput) noexcept {
-        runtime.injector_ = InputInjector(runtime.options_.selfTag, sendInput);
+        runtime.actionScheduler_->injector_ =
+            InputInjector(runtime.options_.selfTag, sendInput);
     }
 
     static void ExecuteEligible(
-        HookRuntime& runtime,
+        AppRuntime& runtime,
         const ActionBatch& batch) noexcept {
         InjectionDiagnosticRecord record{};
         record.sourceSequence = batch.sourceSequence;
         record.targetPid = batch.targetPid;
-        runtime.ExecuteEligibleActionBatch(batch, record);
+        runtime.actionScheduler_->ExecuteEligibleActionBatch(batch, record);
     }
 
-    static void Process(HookRuntime& runtime, const ActionBatch& batch) noexcept {
-        runtime.ProcessActionBatch(batch);
+    static void Process(AppRuntime& runtime, const ActionBatch& batch) noexcept {
+        runtime.actionScheduler_->ProcessActionBatch(batch);
     }
 
-    static bool Enqueue(HookRuntime& runtime, const ActionBatch& batch) noexcept {
-        return runtime.actionQueue_.TryPush(batch);
+    static bool Enqueue(AppRuntime& runtime, const ActionBatch& batch) noexcept {
+        return runtime.actionScheduler_->actionQueue_.TryPush(batch);
     }
 
-    static bool NewCapturesEnabled(const HookRuntime& runtime) noexcept {
-        return runtime.rules_.NewCapturesEnabled();
+    static bool NewCapturesEnabled(const AppRuntime& runtime) noexcept {
+        return runtime.remapEngine_->NewCapturesEnabled();
     }
 
-    static bool QueueEmpty(const HookRuntime& runtime) noexcept {
-        return runtime.actionQueue_.Empty();
+    static bool QueueEmpty(const AppRuntime& runtime) noexcept {
+        return runtime.actionScheduler_->actionQueue_.Empty();
     }
 
-    static bool ShutdownRequested(const HookRuntime& runtime) noexcept {
+    static bool ShutdownRequested(const AppRuntime& runtime) noexcept {
         return runtime.shutdownRequested_.load(std::memory_order_acquire);
     }
 
     static bool CreateEvents(
-        HookRuntime& runtime,
-        std::wstring& errorMessage) noexcept {
-        return runtime.CreateRuntimeEvents(errorMessage);
+        AppRuntime& runtime,
+        std::wstring& errorMessage) {
+        return runtime.CreateComponents(errorMessage);
     }
 
-    static void SignalProducerDone(HookRuntime& runtime) noexcept {
-        SetEvent(runtime.producerDoneEvent_);
+    static void SignalProducerDone(AppRuntime& runtime) noexcept {
+        runtime.actionScheduler_->NotifyProducerDone();
     }
 
-    static void DrainForShutdown(HookRuntime& runtime) noexcept {
-        runtime.DrainActionsForShutdown();
+    static void DrainForShutdown(AppRuntime& runtime) noexcept {
+        runtime.actionScheduler_->DrainForShutdown();
     }
 };
 
@@ -822,14 +826,21 @@ void TestInjectionCircuitBreaker()
     Check(breaker.IsOpen(), "success does not silently rearm an opened circuit");
 }
 
-void TestHookRuntimeFailureCircuit()
+void TestAppRuntimeFailureCircuit()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5232U);
     ukr::DiagnosticLog diagnosticLog;
-    ukr::HookRuntimeOptions options{};
+    ukr::AppRuntimeOptions options{};
     options.selfTag = selfTag;
-    ukr::HookRuntime runtime(options, nullptr, diagnosticLog);
-    ukr::HookRuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
+    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+    std::wstring componentError;
+    const bool componentsCreated =
+        ukr::RuntimeTestAccess::CreateEvents(runtime, componentError);
+    Check(componentsCreated, "runtime failure test creates components");
+    if (!componentsCreated) {
+        return;
+    }
+    ukr::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
     ResetFakeSend(FakeSendMode::Fail);
 
     const ukr::ActionBatch first = ukr::MakeTapActionBatch(
@@ -838,66 +849,66 @@ void TestHookRuntimeFailureCircuit()
         81, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
     const ukr::ActionBatch third = ukr::MakeTapActionBatch(
         82, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::HookRuntimeTestAccess::ExecuteEligible(runtime, first);
-    ukr::HookRuntimeTestAccess::ExecuteEligible(runtime, second);
+    ukr::RuntimeTestAccess::ExecuteEligible(runtime, first);
+    ukr::RuntimeTestAccess::ExecuteEligible(runtime, second);
 
     ukr::ActionBatch queuedFirst{};
     queuedFirst.sourceSequence = 83;
     ukr::ActionBatch queuedSecond{};
     queuedSecond.sourceSequence = 84;
     Check(
-        ukr::HookRuntimeTestAccess::Enqueue(runtime, queuedFirst)
-            && ukr::HookRuntimeTestAccess::Enqueue(runtime, queuedSecond),
+        ukr::RuntimeTestAccess::Enqueue(runtime, queuedFirst)
+            && ukr::RuntimeTestAccess::Enqueue(runtime, queuedSecond),
         "runtime failure test queues work behind the third injection");
-    ukr::HookRuntimeTestAccess::ExecuteEligible(runtime, third);
+    ukr::RuntimeTestAccess::ExecuteEligible(runtime, third);
 
-    const ukr::HookRuntimeMetrics opened = runtime.Metrics();
+    const ukr::AppRuntimeMetrics opened = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 3 && opened.injectionFailures == 3,
         "three failed runtime injections are counted once each");
     Check(
         opened.circuitBreakerOpen
-            && !ukr::HookRuntimeTestAccess::NewCapturesEnabled(runtime),
+            && !ukr::RuntimeTestAccess::NewCapturesEnabled(runtime),
         "third consecutive runtime failure opens the circuit and disables captures");
     Check(
         opened.cancelledBatches == 2
-            && ukr::HookRuntimeTestAccess::QueueEmpty(runtime),
+            && ukr::RuntimeTestAccess::QueueEmpty(runtime),
         "opening the runtime circuit cancels all remaining queued batches");
 
     const std::size_t callsBeforeRejectedBatch = g_fakeSendState.callCount;
     const ukr::ActionBatch rejected = ukr::MakeTapActionBatch(
         85, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::HookRuntimeTestAccess::Process(runtime, rejected);
-    const ukr::HookRuntimeMetrics afterRejectedBatch = runtime.Metrics();
+    ukr::RuntimeTestAccess::Process(runtime, rejected);
+    const ukr::AppRuntimeMetrics afterRejectedBatch = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == callsBeforeRejectedBatch
             && afterRejectedBatch.cancelledBatches == 3,
         "an open runtime circuit rejects later work before SendInput");
 }
 
-void TestHookRuntimePersistentCleanupFailure()
+void TestAppRuntimePersistentCleanupFailure()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5233U);
     ukr::DiagnosticLog diagnosticLog;
-    ukr::HookRuntimeOptions options{};
+    ukr::AppRuntimeOptions options{};
     options.selfTag = selfTag;
-    ukr::HookRuntime runtime(options, nullptr, diagnosticLog);
-    ukr::HookRuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
+    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
 
     std::wstring eventError;
     const bool eventsCreated =
-        ukr::HookRuntimeTestAccess::CreateEvents(runtime, eventError);
+        ukr::RuntimeTestAccess::CreateEvents(runtime, eventError);
     Check(eventsCreated, "persistent cleanup test creates runtime events");
     if (!eventsCreated) {
         return;
     }
+    ukr::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
 
     ResetFakeSend(FakeSendMode::PartialThenCleanupFail);
     const ukr::ActionBatch batch = ukr::MakeTapActionBatch(
         90, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::HookRuntimeTestAccess::ExecuteEligible(runtime, batch);
+    ukr::RuntimeTestAccess::ExecuteEligible(runtime, batch);
 
-    const ukr::HookRuntimeMetrics beforeShutdownDrain = runtime.Metrics();
+    const ukr::AppRuntimeMetrics beforeShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 6
             && beforeShutdownDrain.injectionFailures == 5,
@@ -905,8 +916,8 @@ void TestHookRuntimePersistentCleanupFailure()
     Check(
         beforeShutdownDrain.circuitBreakerOpen
             && beforeShutdownDrain.unresolvedSyntheticReleases == 1
-            && ukr::HookRuntimeTestAccess::ShutdownRequested(runtime)
-            && !ukr::HookRuntimeTestAccess::NewCapturesEnabled(runtime),
+            && ukr::RuntimeTestAccess::ShutdownRequested(runtime)
+            && !ukr::RuntimeTestAccess::NewCapturesEnabled(runtime),
         "persistent cleanup failure opens the circuit and requests shutdown with owned state");
 
     bool everyCleanupIsTaggedRelease = true;
@@ -922,9 +933,9 @@ void TestHookRuntimePersistentCleanupFailure()
         everyCleanupIsTaggedRelease,
         "every immediate and owned cleanup attempt is a tagged key release");
 
-    ukr::HookRuntimeTestAccess::SignalProducerDone(runtime);
-    ukr::HookRuntimeTestAccess::DrainForShutdown(runtime);
-    const ukr::HookRuntimeMetrics afterShutdownDrain = runtime.Metrics();
+    ukr::RuntimeTestAccess::SignalProducerDone(runtime);
+    ukr::RuntimeTestAccess::DrainForShutdown(runtime);
+    const ukr::AppRuntimeMetrics afterShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 9
             && afterShutdownDrain.injectionFailures == 8,
@@ -1245,7 +1256,7 @@ void TestShutdownGraceWithFakeClock()
     Check(grace.RemainingSlice(2100, 50) == 0, "expired shutdown grace has no remaining wait");
 }
 
-void TestHookRuntimeLifecycle()
+void TestAppRuntimeLifecycle()
 {
     ukr::DiagnosticLog diagnosticLog;
     std::wstring errorMessage;
@@ -1257,9 +1268,9 @@ void TestHookRuntimeLifecycle()
 
     {
         constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5231U);
-        ukr::HookRuntimeOptions options{};
+        ukr::AppRuntimeOptions options{};
         options.selfTag = selfTag;
-        ukr::HookRuntime runtime(options, nullptr, diagnosticLog);
+        ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
         const bool runtimeStarted = runtime.Start(errorMessage);
         Check(runtimeStarted, "observer runtime installs both low-level hooks");
         if (runtimeStarted) {
@@ -1268,7 +1279,7 @@ void TestHookRuntimeLifecycle()
             Check(
                 WaitForSingleObject(runtime.StoppedEvent(), 0) == WAIT_OBJECT_0,
                 "observer runtime signals hook-thread termination");
-            const ukr::HookRuntimeMetrics metrics = runtime.Metrics();
+            const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
             Check(
                 metrics.suppressedEvents == 0 && metrics.queuedBatches == 0 &&
                     metrics.unresolvedSyntheticReleases == 0,
@@ -1293,14 +1304,14 @@ int main()
     TestEmergencyStopAndCapturedRelease();
     TestInjectorPreparationAndFailureHandling();
     TestInjectionCircuitBreaker();
-    TestHookRuntimeFailureCircuit();
-    TestHookRuntimePersistentCleanupFailure();
+    TestAppRuntimeFailureCircuit();
+    TestAppRuntimePersistentCleanupFailure();
     TestDiagnosticPrivacyAndBounds();
     TestProcessLocator();
     TestProcessContextValidation();
     TestTargetProcessLifecycle();
     TestShutdownGraceWithFakeClock();
-    TestHookRuntimeLifecycle();
+    TestAppRuntimeLifecycle();
 
     if (g_failureCount != 0) {
         std::cerr << g_failureCount << " Phase 1 automated test(s) failed.\n";

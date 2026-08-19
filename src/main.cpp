@@ -1,5 +1,5 @@
 #include "diagnostics/diagnostic_log.hpp"
-#include "platform/windows/hook_thread.hpp"
+#include "app/runtime.hpp"
 #include "platform/windows/process_locator.hpp"
 #include "platform/windows/process_context.hpp"
 
@@ -124,7 +124,7 @@ ukr::SelfTag GenerateSelfTag() noexcept {
 }
 
 void PrintMetrics(
-    const ukr::HookRuntimeMetrics& metrics,
+    const ukr::AppRuntimeMetrics& metrics,
     const ukr::DiagnosticLog& diagnosticLog) {
     std::wcout << L"Session stopped. hook_events=" << metrics.hookEvents
                << L" suppressed=" << metrics.suppressedEvents
@@ -179,7 +179,7 @@ int RunObserver(
     const CommandLineOptions& options,
     ukr::SelfTag selfTag,
     ukr::DiagnosticLog& diagnosticLog) {
-    ukr::HookRuntime runtime({false, options.traceInput, selfTag}, nullptr, diagnosticLog);
+    ukr::AppRuntime runtime({false, options.traceInput, selfTag}, nullptr, diagnosticLog);
     std::wstring errorMessage;
     if (!runtime.Start(errorMessage)) {
         std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -195,7 +195,7 @@ int RunObserver(
         runtime.RequestStop();
     }
     runtime.Wait();
-    const ukr::HookRuntimeMetrics metrics = runtime.Metrics();
+    const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
     PrintMetrics(metrics, diagnosticLog);
     if (waitResult == WAIT_FAILED) {
         std::wcerr << L"WaitForMultipleObjects failed with Win32 error " << waitError << L".\n";
@@ -270,7 +270,7 @@ int RunTargeted(
                    << L"Fixed rules are active only while this process is foreground.\n"
                    << L"Press physical Ctrl+Shift+F12 to stop.\n";
 
-        ukr::HookRuntime runtime({true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
+        ukr::AppRuntime runtime({true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
         std::wstring errorMessage;
         if (!runtime.Start(errorMessage)) {
             std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -284,7 +284,7 @@ int RunTargeted(
             runtime.RequestStop();
         }
         runtime.Wait();
-        const ukr::HookRuntimeMetrics metrics = runtime.Metrics();
+        const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
         PrintMetrics(metrics, diagnosticLog);
 
         if (waitResult == WAIT_FAILED) {

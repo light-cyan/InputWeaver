@@ -1,0 +1,391 @@
+#include "low_level_hooks.hpp"
+
+#include "input_classifier.hpp"
+
+namespace ukr {
+namespace {
+
+inline constexpr UINT kWakeMessage = WM_APP + 1U;
+
+std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
+
+[[nodiscard]] std::int64_t ReadPerformanceCounter() noexcept {
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    return counter.QuadPart;
+}
+
+[[nodiscard]] bool NormalizeKeyboardMessage(
+    WPARAM message,
+    const KBDLLHOOKSTRUCT& source,
+    SelfTag selfTag,
+    InputEvent& event) noexcept {
+    switch (message) {
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            event.transition = Transition::Down;
+            break;
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            event.transition = Transition::Up;
+            break;
+        default:
+            return false;
+    }
+
+    event.device = DeviceKind::Keyboard;
+    event.origin = ClassifyKeyboard(source, selfTag);
+    event.code = source.vkCode;
+    event.scanCode = source.scanCode;
+    event.flags = source.flags;
+    event.timestamp = source.time;
+    event.extraInfo = source.dwExtraInfo;
+    return true;
+}
+
+[[nodiscard]] bool NormalizeMouseMessage(
+    WPARAM message,
+    const MSLLHOOKSTRUCT& source,
+    SelfTag selfTag,
+    InputEvent& event) noexcept {
+    event.device = DeviceKind::Mouse;
+    event.origin = ClassifyMouse(source, selfTag);
+    event.flags = source.flags;
+    event.mouseData = source.mouseData;
+    event.position = source.pt;
+    event.timestamp = source.time;
+    event.extraInfo = source.dwExtraInfo;
+
+    switch (message) {
+        case WM_LBUTTONDOWN:
+            event.transition = Transition::Down;
+            event.code = VK_LBUTTON;
+            return true;
+        case WM_LBUTTONUP:
+            event.transition = Transition::Up;
+            event.code = VK_LBUTTON;
+            return true;
+        case WM_RBUTTONDOWN:
+            event.transition = Transition::Down;
+            event.code = VK_RBUTTON;
+            return true;
+        case WM_RBUTTONUP:
+            event.transition = Transition::Up;
+            event.code = VK_RBUTTON;
+            return true;
+        case WM_MBUTTONDOWN:
+            event.transition = Transition::Down;
+            event.code = VK_MBUTTON;
+            return true;
+        case WM_MBUTTONUP:
+            event.transition = Transition::Up;
+            event.code = VK_MBUTTON;
+            return true;
+        case WM_XBUTTONDOWN:
+            event.transition = Transition::Down;
+            event.code = HIWORD(source.mouseData) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;
+            return true;
+        case WM_XBUTTONUP:
+            event.transition = Transition::Up;
+            event.code = HIWORD(source.mouseData) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;
+            return true;
+        case WM_MOUSEMOVE:
+            event.transition = Transition::Move;
+            return true;
+        case WM_MOUSEWHEEL:
+            event.transition = Transition::VerticalWheel;
+            return true;
+        case WM_MOUSEHWHEEL:
+            event.transition = Transition::HorizontalWheel;
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+LowLevelHooks::LowLevelHooks(
+    SelfTag selfTag,
+    LowLevelInputSink& sink,
+    TargetProcessContext* targetContext,
+    StopRequest stopRequest,
+    std::atomic<bool>& shutdownRequested,
+    HANDLE shutdownEvent,
+    HANDLE producerDoneEvent) noexcept
+    : selfTag_(selfTag),
+      sink_(sink),
+      targetContext_(targetContext),
+      stopRequest_(stopRequest),
+      shutdownRequested_(shutdownRequested),
+      shutdownEvent_(shutdownEvent),
+      producerDoneEvent_(producerDoneEvent) {}
+
+LowLevelHooks::~LowLevelHooks() {
+    if (thread_.joinable()) {
+        stopRequest_.Request();
+        Wake();
+        Wait();
+    }
+    CloseEvents();
+}
+
+bool LowLevelHooks::Start(std::wstring& errorMessage) {
+    if (started_.exchange(true, std::memory_order_acq_rel)) {
+        errorMessage = L"The low-level hooks have already been started.";
+        return false;
+    }
+    if (selfTag_ == 0 || shutdownEvent_ == nullptr || producerDoneEvent_ == nullptr) {
+        errorMessage = L"The low-level hook dependencies are invalid.";
+        return false;
+    }
+    if (!CreateEvents(errorMessage)) {
+        return false;
+    }
+
+    try {
+        thread_ = std::thread(&LowLevelHooks::ThreadMain, this);
+    } catch (...) {
+        SetEvent(producerDoneEvent_);
+        errorMessage = L"Cannot create the low-level hook thread.";
+        return false;
+    }
+
+    if (WaitForSingleObject(readyEvent_, 10000) != WAIT_OBJECT_0) {
+        stopRequest_.Request();
+        Wake();
+        Wait();
+        errorMessage = L"The low-level hook thread did not become ready within ten seconds.";
+        return false;
+    }
+
+    const DWORD startupError = startupError_.load(std::memory_order_acquire);
+    if (startupError != ERROR_SUCCESS) {
+        stopRequest_.Request();
+        Wake();
+        Wait();
+        errorMessage = L"Cannot start the low-level hooks. Win32 error " +
+                       std::to_wstring(startupError) + L".";
+        return false;
+    }
+    return true;
+}
+
+void LowLevelHooks::Wake() noexcept {
+    const DWORD threadId = threadId_.load(std::memory_order_acquire);
+    if (threadId != 0) {
+        PostThreadMessageW(threadId, kWakeMessage, 0, 0);
+    }
+}
+
+void LowLevelHooks::Wait() noexcept {
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
+
+HANDLE LowLevelHooks::StoppedEvent() const noexcept {
+    return stoppedEvent_;
+}
+
+LRESULT CALLBACK LowLevelHooks::KeyboardHookProcedure(
+    int code,
+    WPARAM wParam,
+    LPARAM lParam) noexcept {
+    LowLevelHooks* hooks = gActiveHooks.load(std::memory_order_acquire);
+    if (hooks == nullptr || code != HC_ACTION) {
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+    return hooks->HandleKeyboardHook(code, wParam, lParam);
+}
+
+LRESULT CALLBACK LowLevelHooks::MouseHookProcedure(
+    int code,
+    WPARAM wParam,
+    LPARAM lParam) noexcept {
+    LowLevelHooks* hooks = gActiveHooks.load(std::memory_order_acquire);
+    if (hooks == nullptr || code != HC_ACTION) {
+        return CallNextHookEx(nullptr, code, wParam, lParam);
+    }
+    return hooks->HandleMouseHook(code, wParam, lParam);
+}
+
+LRESULT LowLevelHooks::HandleKeyboardHook(int code, WPARAM wParam, LPARAM lParam) noexcept {
+    const std::int64_t startCounter = ReadPerformanceCounter();
+    const auto* source = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    if (source == nullptr) {
+        return CallNextHookEx(keyboardHook_, code, wParam, lParam);
+    }
+
+    InputEvent event{};
+    if (!NormalizeKeyboardMessage(wParam, *source, selfTag_, event)) {
+        return CallNextHookEx(keyboardHook_, code, wParam, lParam);
+    }
+    const bool lowerIntegrity = (source->flags & LLKHF_LOWER_IL_INJECTED) != 0;
+    return sink_.HandleInput(event, lowerIntegrity, startCounter) == InputDecision::Suppress
+        ? 1
+        : CallNextHookEx(keyboardHook_, code, wParam, lParam);
+}
+
+LRESULT LowLevelHooks::HandleMouseHook(int code, WPARAM wParam, LPARAM lParam) noexcept {
+    const std::int64_t startCounter = ReadPerformanceCounter();
+    const auto* source = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+    if (source == nullptr) {
+        return CallNextHookEx(mouseHook_, code, wParam, lParam);
+    }
+
+    InputEvent event{};
+    if (!NormalizeMouseMessage(wParam, *source, selfTag_, event)) {
+        return CallNextHookEx(mouseHook_, code, wParam, lParam);
+    }
+    const bool lowerIntegrity = (source->flags & LLMHF_LOWER_IL_INJECTED) != 0;
+    return sink_.HandleInput(event, lowerIntegrity, startCounter) == InputDecision::Suppress
+        ? 1
+        : CallNextHookEx(mouseHook_, code, wParam, lParam);
+}
+
+void LowLevelHooks::ThreadMain() noexcept {
+    threadId_.store(GetCurrentThreadId(), std::memory_order_release);
+    MSG initialMessage{};
+    PeekMessageW(&initialMessage, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+
+    LowLevelHooks* expected = nullptr;
+    if (!gActiveHooks.compare_exchange_strong(
+            expected, this, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        startupError_.store(ERROR_ALREADY_EXISTS, std::memory_order_release);
+        SetEvent(readyEvent_);
+        SetEvent(producerDoneEvent_);
+        SetEvent(stoppedEvent_);
+        return;
+    }
+
+    const HINSTANCE module = GetModuleHandleW(nullptr);
+    keyboardHook_ = SetWindowsHookExW(
+        WH_KEYBOARD_LL, &LowLevelHooks::KeyboardHookProcedure, module, 0);
+    if (keyboardHook_ == nullptr) {
+        startupError_.store(GetLastError(), std::memory_order_release);
+    } else {
+        mouseHook_ = SetWindowsHookExW(
+            WH_MOUSE_LL, &LowLevelHooks::MouseHookProcedure, module, 0);
+        if (mouseHook_ == nullptr) {
+            startupError_.store(GetLastError(), std::memory_order_release);
+        }
+    }
+
+    if (startupError_.load(std::memory_order_acquire) == ERROR_SUCCESS) {
+        SeedObservedPhysicalState();
+    } else {
+        stopRequest_.Request();
+    }
+    SetEvent(readyEvent_);
+
+    bool shuttingDown =
+        startupError_.load(std::memory_order_acquire) != ERROR_SUCCESS;
+    ShutdownGraceWindow shutdownGrace(kCapturedReleaseGraceMilliseconds);
+    if (shuttingDown) {
+        shutdownGrace.Begin(GetTickCount64());
+    }
+
+    while (!shuttingDown || sink_.HasCapturedInputs()) {
+        if (!shuttingDown) {
+            HANDLE handles[2] = {shutdownEvent_, nullptr};
+            DWORD handleCount = 1;
+            if (targetContext_ != nullptr && targetContext_->IsValid()) {
+                handles[handleCount++] = targetContext_->TargetHandle();
+            }
+            const DWORD waitResult = MsgWaitForMultipleObjectsEx(
+                handleCount, handles, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (waitResult == WAIT_OBJECT_0) {
+                shuttingDown = true;
+                shutdownGrace.Begin(GetTickCount64());
+            } else if (handleCount == 2 && waitResult == WAIT_OBJECT_0 + 1) {
+                stopRequest_.Request();
+                shuttingDown = true;
+                shutdownGrace.Begin(GetTickCount64());
+            } else if (waitResult == WAIT_FAILED) {
+                stopRequest_.Request();
+                shuttingDown = true;
+                shutdownGrace.Begin(GetTickCount64());
+            }
+        } else {
+            const ULONGLONG now = GetTickCount64();
+            if (shutdownGrace.Expired(now)) {
+                break;
+            }
+            const DWORD remaining = shutdownGrace.RemainingSlice(now, 50);
+            MsgWaitForMultipleObjectsEx(
+                0, nullptr, remaining, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT || message.message == kWakeMessage) {
+                continue;
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+
+        if (!shuttingDown && shutdownRequested_.load(std::memory_order_acquire)) {
+            shuttingDown = true;
+            shutdownGrace.Begin(GetTickCount64());
+        }
+    }
+
+    sink_.FlushDiagnostics(ReadPerformanceCounter());
+    if (mouseHook_ != nullptr) {
+        UnhookWindowsHookEx(mouseHook_);
+        mouseHook_ = nullptr;
+    }
+    if (keyboardHook_ != nullptr) {
+        UnhookWindowsHookEx(keyboardHook_);
+        keyboardHook_ = nullptr;
+    }
+    expected = this;
+    gActiveHooks.compare_exchange_strong(
+        expected, nullptr, std::memory_order_acq_rel, std::memory_order_acquire);
+    threadId_.store(0, std::memory_order_release);
+    SetEvent(producerDoneEvent_);
+    SetEvent(stoppedEvent_);
+}
+
+void LowLevelHooks::SeedObservedPhysicalState() noexcept {
+    constexpr DWORD keyboardControls[] = {
+        VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F12,
+        VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT};
+    for (const DWORD code : keyboardControls) {
+        sink_.SeedPhysicalState(
+            DeviceKind::Keyboard,
+            code,
+            (GetAsyncKeyState(static_cast<int>(code)) & 0x8000) != 0);
+    }
+    sink_.SeedPhysicalState(
+        DeviceKind::Mouse,
+        VK_MBUTTON,
+        (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
+}
+
+bool LowLevelHooks::CreateEvents(std::wstring& errorMessage) noexcept {
+    readyEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    stoppedEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (readyEvent_ == nullptr || stoppedEvent_ == nullptr) {
+        const DWORD error = GetLastError();
+        CloseEvents();
+        errorMessage = L"Cannot create low-level hook events. Win32 error " +
+                       std::to_wstring(error) + L".";
+        return false;
+    }
+    return true;
+}
+
+void LowLevelHooks::CloseEvents() noexcept {
+    HANDLE* events[] = {&readyEvent_, &stoppedEvent_};
+    for (HANDLE* event : events) {
+        if (*event != nullptr) {
+            CloseHandle(*event);
+            *event = nullptr;
+        }
+    }
+}
+
+}  // namespace ukr

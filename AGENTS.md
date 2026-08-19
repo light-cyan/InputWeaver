@@ -4,7 +4,7 @@
 
 UniversalKeyRemapper is a planned Windows key and mouse remapping utility written in C++. It is intended to run with administrator privileges when required by a target application and to read user-defined `.krm` mapping configurations. The original mapping-language design, including key states, actions, sequences, variables, and mouse events, is retained in `legacy/OriginalDesign.md` as historical reference material.
 
-The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exploratory mouse-hook prototype that is not part of the application implementation. Current directories are `src/core/` for platform-independent runtime data and rules, `src/platform/windows/` for Win32 integration, `src/diagnostics/` for logging, `tests/` for automated tests, `script/` for build and run batch files, `res/` for runtime resources, and `bin/` for generated executables.
+The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exploratory mouse-hook prototype that is not part of the application implementation. Current directories are `src/app/` for runtime orchestration, remapping, and action scheduling, `src/core/` for platform-independent runtime data and rules, `src/platform/windows/` for Win32 integration, `src/diagnostics/` for logging, `tests/` for automated tests, `script/` for build and run batch files, `res/` for runtime resources, and `bin/` for generated executables.
 
 ## Environment
 
@@ -33,23 +33,22 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 
 ### Phase 1: Input Loop and Self-Injection Isolation
 
-- Status: `In Progress`.
+- Status: `Complete` (2026-08-19).
 - Plan: `docs/phase-1/ImplementationPlan.md`.
 - Code design: `docs/phase-1/CodeDesign.md`.
-- Verification: `docs/phase-1/Verification.md`; runtime responsibility separation remains before completion.
+- Verification: `docs/phase-1/Verification.md`.
 - Scope: low-level keyboard and mouse hooks, origin classification, self-tagged `SendInput`, recursion prevention, executable-based target discovery, foreground-scoped fixed test rules, bounded operational logging, opt-in input tracing, and Phase 1 verification without the `.krm` parser.
-- Start rule: change the status to `In Progress` when Phase 1 source implementation begins.
-- Completion rule: change the status to `Complete` only after the plan's completion gate is satisfied, then add the completion date and a link to `docs/phase-1/Verification.md`.
 
 ## Shared Agent Messages
 
 - 2026-08-19 | Phase 1 design | Commit `3aa8c3e` records `docs/phase-1/ImplementationPlan.md` and `docs/phase-1/CodeDesign.md` as the implementation boundary, architecture, verification requirements, and completion gate.
-- 2026-08-19 | Phase 1 implementation | Source implementation started after design commit `3aa8c3e`. Keep the status `In Progress` until the complete build, automated-test, manual-verification, and verification-record gate is satisfied.
+- 2026-08-19 | Phase 1 implementation | Source implementation started after design commit `3aa8c3e`.
 - 2026-08-19 | Phase 1 CLI boundary | `UniversalKeyRemapper.exe` is a console application. Observer mode accepts logging options, while `--test-rules --target <exe-name-or-absolute-path>` activates the fixed Phase 1 rules only when the uniquely resolved target owns the foreground window.
 - 2026-08-19 | Phase 1 diagnostics | `--log <jsonl-path>` records bounded operational events by default. `--trace-input` is an explicit expansion that includes redacted normalized input and aggregated mouse movement.
 - 2026-08-19 | Phase 1 interactive verification | The current 32-bit tag produced 28 real injected mouse hook events classified as `SelfInjected` and `SelfTag`, with no external classification or recursive rule activation. All 43 recorded injection batches completed without failure or cancellation.
 - 2026-08-19 | Phase 1 CLI implementation | The console build locates targets by executable basename or absolute path, retains and revalidates process identity, waits for target start or restart, filters routine input from operational logs, and uses a 32-bit self tag for keyboard and mouse round trips. The canonical strict build and automated tests pass.
 - 2026-08-19 | Console termination | `Ctrl+C` is consumed without stopping the process. Physical `Ctrl+Shift+F12` is the interactive stop chord.
+- 2026-08-19 | Phase 1 completion | Low-level hooks, remap decisions, action scheduling, and application lifecycle are separated into cohesive modules. The strict canonical build, automated suite, `-fanalyzer`, and real 32-bit keyboard and mouse self-tag round trip pass; Phase 1 is complete.
 
 ## Repository Practices
 

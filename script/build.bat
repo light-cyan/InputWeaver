@@ -15,8 +15,11 @@ if errorlevel 1 exit /b %errorlevel%
 echo [2/3] Building UniversalKeyRemapper.exe...
 %UKR_CXX% %UKR_COMMON% -municode ^
     "src\main.cpp" ^
-    "src\platform\windows\hook_thread.cpp" ^
+    "src\app\runtime.cpp" ^
+    "src\app\remap_engine.cpp" ^
+    "src\app\action_scheduler.cpp" ^
     "src\core\fixed_rules.cpp" ^
+    "src\platform\windows\low_level_hooks.cpp" ^
     "src\platform\windows\input_injector.cpp" ^
     "src\platform\windows\process_context.cpp" ^
     "src\platform\windows\process_locator.cpp" ^
@@ -29,8 +32,11 @@ if errorlevel 1 exit /b %errorlevel%
 echo [3/3] Building Phase1Tests.exe...
 %UKR_CXX% %UKR_COMMON% ^
     "tests\runtime_tests.cpp" ^
-    "src\platform\windows\hook_thread.cpp" ^
+    "src\app\runtime.cpp" ^
+    "src\app\remap_engine.cpp" ^
+    "src\app\action_scheduler.cpp" ^
     "src\core\fixed_rules.cpp" ^
+    "src\platform\windows\low_level_hooks.cpp" ^
     "src\platform\windows\input_injector.cpp" ^
     "src\platform\windows\process_context.cpp" ^
     "src\platform\windows\process_locator.cpp" ^

@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 is `In Progress`. The current CLI, executable locator, logging policy, 32-bit self tag, and reorganized source tree build and pass automated tests. Real keyboard and mouse injection is classified as `SelfInjected` without recursive rule activation. Runtime responsibility separation remains before completion.
+Phase 1 is `Complete` as of 2026-08-19. The CLI, executable locator, logging policy, 32-bit self tag, and responsibility-separated runtime build and pass automated and static analysis. Real keyboard and mouse injection is classified as `SelfInjected` without recursive rule activation.
 
 ## Environment
 
@@ -80,7 +80,7 @@ The first physical-input run observed these fixed-rule results:
 
 The current 32-bit tag retest recorded 14 generated middle-button taps as 28 `SelfInjected` hook events with `SelfTag`. No injected mouse event was classified as external or entered rule evaluation. The run recorded 43 complete injection batches with no short send, error, cancellation, cleanup, or circuit-breaker activation.
 
-## Required Interactive Retest
+## Additional Manual Checks
 
 - Resolve an ordinary interactive target once by executable basename and once by absolute executable path.
 - Confirm that a missing selector waits and that an ambiguous basename waits unless exactly one matching instance owns the foreground window.
@@ -104,4 +104,4 @@ The current 32-bit tag retest recorded 14 generated middle-button taps as 28 `Se
 
 ## Repository State
 
-The Phase 1 design is committed as `3aa8c3e`. The implementation and this verification record remain uncommitted for review. Generated files under `bin/` are ignored by Git.
+The Phase 1 design is committed as `3aa8c3e`, and the verified target-scoped input runtime baseline is committed as `aa33991`. Generated files under `bin/` are ignored by Git.

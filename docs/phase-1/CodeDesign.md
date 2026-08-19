@@ -47,7 +47,10 @@ normalize and classify origin
 - `src/core/fixed_rules.hpp` and `src/core/fixed_rules.cpp`: fixed Phase 1 mappings, physical state, captured source pairs, repeats, output conflict checks, and emergency shutdown state.
 - `src/core/action_queue.hpp`: fixed-capacity single-producer/single-consumer action ring with transactional single-batch and atomic multi-batch publication.
 - `src/platform/windows/input_injector.hpp` and `src/platform/windows/input_injector.cpp`: keyboard and mouse `INPUT` preparation, tagging, send-result validation, and partial-send cleanup.
-- `src/platform/windows/hook_thread.hpp` and `src/platform/windows/hook_thread.cpp`: hook lifecycle, callback normalization, action worker, final target checks, circuit breaker, owned-output cleanup, and runtime metrics.
+- `src/platform/windows/low_level_hooks.hpp` and `src/platform/windows/low_level_hooks.cpp`: low-level hook lifecycle, callback normalization, message pumping, physical-state seeding, and captured-release shutdown grace.
+- `src/app/remap_engine.hpp` and `src/app/remap_engine.cpp`: rule evaluation, synchronous suppression decisions, target and pointer routing, physical output state, and hook diagnostics.
+- `src/app/action_scheduler.hpp` and `src/app/action_scheduler.cpp`: transactional action publication, final target checks, `SendInput`, circuit breaking, cancellation, and owned-output cleanup.
+- `src/app/runtime.hpp` and `src/app/runtime.cpp`: application component construction, startup, shutdown coordination, and combined metrics.
 - `src/diagnostics/diagnostic_log.hpp` and `src/diagnostics/diagnostic_log.cpp`: bounded operational records, optional redacted input trace, asynchronous formatting, JSONL byte limit, and drop counters.
 - `tests/runtime_tests.cpp`: pure tests and Win32 integration tests, including a child process for target lifecycle coverage.
 
