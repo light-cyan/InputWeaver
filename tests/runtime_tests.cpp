@@ -20,7 +20,7 @@
 #include <string_view>
 #include <thread>
 
-namespace ukr {
+namespace inputweaver {
 
 struct RuntimeTestAccess final {
     static void SetSendInput(
@@ -87,7 +87,7 @@ private:
     }
 };
 
-}  // namespace ukr
+}  // namespace inputweaver
 
 namespace {
 
@@ -104,7 +104,7 @@ struct FakeSendState {
     FakeSendMode mode{FakeSendMode::Complete};
     std::size_t callCount{};
     std::array<UINT, 16> counts{};
-    std::array<std::array<INPUT, ukr::kMaximumPreparedInputs>, 16> inputs{};
+    std::array<std::array<INPUT, inputweaver::kMaximumPreparedInputs>, 16> inputs{};
 };
 
 FakeSendState g_fakeSendState;
@@ -154,26 +154,26 @@ void Check(bool condition, std::string_view name)
     }
 }
 
-ukr::InputEvent KeyboardEvent(
+inputweaver::InputEvent KeyboardEvent(
     DWORD code,
-    ukr::Transition transition,
-    ukr::InputOrigin origin = ukr::InputOrigin::PhysicalCandidate)
+    inputweaver::Transition transition,
+    inputweaver::InputOrigin origin = inputweaver::InputOrigin::PhysicalCandidate)
 {
-    ukr::InputEvent event{};
-    event.device = ukr::DeviceKind::Keyboard;
+    inputweaver::InputEvent event{};
+    event.device = inputweaver::DeviceKind::Keyboard;
     event.origin = origin;
     event.transition = transition;
     event.code = code;
     return event;
 }
 
-ukr::InputEvent MouseButtonEvent(
+inputweaver::InputEvent MouseButtonEvent(
     DWORD code,
-    ukr::Transition transition,
-    ukr::InputOrigin origin = ukr::InputOrigin::PhysicalCandidate)
+    inputweaver::Transition transition,
+    inputweaver::InputOrigin origin = inputweaver::InputOrigin::PhysicalCandidate)
 {
-    ukr::InputEvent event{};
-    event.device = ukr::DeviceKind::Mouse;
+    inputweaver::InputEvent event{};
+    event.device = inputweaver::DeviceKind::Mouse;
     event.origin = origin;
     event.transition = transition;
     event.code = code;
@@ -182,40 +182,40 @@ ukr::InputEvent MouseButtonEvent(
 
 void TestOriginClassification()
 {
-    constexpr ukr::SelfTag selfTag = static_cast<ukr::SelfTag>(0x51A7BEEFU);
+    constexpr inputweaver::SelfTag selfTag = static_cast<inputweaver::SelfTag>(0x51A7BEEFU);
 
     KBDLLHOOKSTRUCT keyboard{};
     keyboard.dwExtraInfo = selfTag;
     Check(
-        ukr::ClassifyKeyboard(keyboard, selfTag) == ukr::InputOrigin::PhysicalCandidate,
+        inputweaver::ClassifyKeyboard(keyboard, selfTag) == inputweaver::InputOrigin::PhysicalCandidate,
         "non-injected keyboard remains physical with matching extra info");
 
     keyboard.flags = LLKHF_INJECTED;
     Check(
-        ukr::ClassifyKeyboard(keyboard, selfTag) == ukr::InputOrigin::SelfInjected,
+        inputweaver::ClassifyKeyboard(keyboard, selfTag) == inputweaver::InputOrigin::SelfInjected,
         "tagged injected keyboard is self-injected");
 
     keyboard.flags = LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED;
     keyboard.dwExtraInfo = selfTag + 1;
     Check(
-        ukr::ClassifyKeyboard(keyboard, selfTag) == ukr::InputOrigin::ExternalInjected,
+        inputweaver::ClassifyKeyboard(keyboard, selfTag) == inputweaver::InputOrigin::ExternalInjected,
         "other injected keyboard is external despite lower-integrity flag");
 
     MSLLHOOKSTRUCT mouse{};
     mouse.dwExtraInfo = selfTag;
     Check(
-        ukr::ClassifyMouse(mouse, selfTag) == ukr::InputOrigin::PhysicalCandidate,
+        inputweaver::ClassifyMouse(mouse, selfTag) == inputweaver::InputOrigin::PhysicalCandidate,
         "non-injected mouse remains physical with matching extra info");
 
     mouse.flags = LLMHF_INJECTED;
     Check(
-        ukr::ClassifyMouse(mouse, selfTag) == ukr::InputOrigin::SelfInjected,
+        inputweaver::ClassifyMouse(mouse, selfTag) == inputweaver::InputOrigin::SelfInjected,
         "tagged injected mouse is self-injected");
 
     mouse.flags = LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED;
     mouse.dwExtraInfo = selfTag + 1;
     Check(
-        ukr::ClassifyMouse(mouse, selfTag) == ukr::InputOrigin::ExternalInjected,
+        inputweaver::ClassifyMouse(mouse, selfTag) == inputweaver::InputOrigin::ExternalInjected,
         "other injected mouse is external despite lower-integrity flag");
 
 #if UINTPTR_MAX > UINT32_MAX
@@ -223,46 +223,46 @@ void TestOriginClassification()
     mouse.dwExtraInfo = static_cast<ULONG_PTR>(selfTag) |
                         (static_cast<ULONG_PTR>(0xA5A5A5A5U) << 32U);
     Check(
-        ukr::ClassifyMouse(mouse, selfTag) == ukr::InputOrigin::SelfInjected,
+        inputweaver::ClassifyMouse(mouse, selfTag) == inputweaver::InputOrigin::SelfInjected,
         "mouse classification tolerates upper-bit loss or rewriting");
 #endif
 }
 
 void TestBatchBuilders()
 {
-    const ukr::ActionBatch tap = ukr::MakeTapActionBatch(
+    const inputweaver::ActionBatch tap = inputweaver::MakeTapActionBatch(
         17,
         4,
         1234,
-        ukr::DeviceKind::Keyboard,
+        inputweaver::DeviceKind::Keyboard,
         VK_F8);
     Check(tap.sourceSequence == 17, "tap retains source sequence");
     Check(tap.outputStateGeneration == 4, "tap retains output generation");
     Check(tap.targetPid == 1234, "tap retains target PID");
     Check(tap.actionCount == 2, "tap has paired actions");
     Check(
-        tap.actions[0].transition == ukr::Transition::Down
-            && tap.actions[1].transition == ukr::Transition::Up,
+        tap.actions[0].transition == inputweaver::Transition::Down
+            && tap.actions[1].transition == inputweaver::Transition::Up,
         "tap has down then up");
     Check(
         tap.actions[0].code == VK_F8 && tap.actions[1].code == VK_F8,
         "tap uses the requested control");
     Check(!tap.requiresPointerTarget, "keyboard-only tap does not require pointer routing");
 
-    const ukr::ActionBatch pointerBoundTap = ukr::MakeTapActionBatch(
+    const inputweaver::ActionBatch pointerBoundTap = inputweaver::MakeTapActionBatch(
         18,
         0,
         1234,
-        ukr::DeviceKind::Keyboard,
+        inputweaver::DeviceKind::Keyboard,
         VK_F5,
         true);
     Check(pointerBoundTap.requiresPointerTarget, "explicitly pointer-bound tap retains its route guard");
 
-    const ukr::ActionBatch move = ukr::MakeRelativeMouseMoveBatch(19, 1234, 3, -2);
+    const inputweaver::ActionBatch move = inputweaver::MakeRelativeMouseMoveBatch(19, 1234, 3, -2);
     Check(move.actionCount == 1, "relative mouse batch has one action");
     Check(
-        move.actions[0].device == ukr::DeviceKind::Mouse
-            && move.actions[0].transition == ukr::Transition::Move,
+        move.actions[0].device == inputweaver::DeviceKind::Mouse
+            && move.actions[0].transition == inputweaver::Transition::Move,
         "relative mouse batch describes movement");
     Check(
         move.actions[0].valueX == 3 && move.actions[0].valueY == -2,
@@ -273,249 +273,249 @@ void TestBatchBuilders()
 void TestKeyboardRulesAndRecursion()
 {
     constexpr DWORD targetPid = 100;
-    ukr::FixedRuleEngine rules;
+    inputweaver::FixedRuleEngine rules;
 
-    const ukr::RuleEvaluation f6 = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 1);
-    Check(f6.kind == ukr::RuleEvaluationKind::ActionReady, "physical F6 prepares an action");
-    Check(f6.rule == ukr::RuleId::F6ToF7, "physical F6 selects the F6-to-F7 rule");
+    const inputweaver::RuleEvaluation f6 = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 1);
+    Check(f6.kind == inputweaver::RuleEvaluationKind::ActionReady, "physical F6 prepares an action");
+    Check(f6.rule == inputweaver::RuleId::F6ToF7, "physical F6 selects the F6-to-F7 rule");
     Check(
-        f6.batch.outputDevice == ukr::DeviceKind::Keyboard
+        f6.batch.outputDevice == inputweaver::DeviceKind::Keyboard
             && f6.batch.outputCode == VK_F7,
         "physical F6 prepares F7 output");
     Check(rules.CanInject(f6.batch), "fresh F6 output state is injectable");
     Check(rules.CommitCapture(f6), "accepted F6 action captures its source");
 
-    const ukr::RuleEvaluation repeat = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 2);
+    const inputweaver::RuleEvaluation repeat = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 2);
     Check(
-        repeat.kind == ukr::RuleEvaluationKind::SuppressCaptured,
+        repeat.kind == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured F6 repeat is suppressed without another action");
 
-    const ukr::RuleEvaluation selfF7Down = rules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Down, ukr::InputOrigin::SelfInjected),
+    const inputweaver::RuleEvaluation selfF7Down = rules.Evaluate(
+        KeyboardEvent(VK_F7, inputweaver::Transition::Down, inputweaver::InputOrigin::SelfInjected),
         true,
         targetPid,
         3);
-    const ukr::RuleEvaluation selfF7Up = rules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Up, ukr::InputOrigin::SelfInjected),
+    const inputweaver::RuleEvaluation selfF7Up = rules.Evaluate(
+        KeyboardEvent(VK_F7, inputweaver::Transition::Up, inputweaver::InputOrigin::SelfInjected),
         true,
         targetPid,
         4);
     Check(
-        selfF7Down.kind == ukr::RuleEvaluationKind::Forward
-            && selfF7Up.kind == ukr::RuleEvaluationKind::Forward,
+        selfF7Down.kind == inputweaver::RuleEvaluationKind::Forward
+            && selfF7Up.kind == inputweaver::RuleEvaluationKind::Forward,
         "self-tagged F7 pair is forwarded and cannot produce F8");
 
-    const ukr::RuleEvaluation f6Up = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Up), false, targetPid, 5);
+    const inputweaver::RuleEvaluation f6Up = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Up), false, targetPid, 5);
     Check(
-        f6Up.kind == ukr::RuleEvaluationKind::SuppressCaptured,
+        f6Up.kind == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured F6 release stays suppressed after mode change");
     Check(!rules.HasCapturedInputs(), "F6 release clears paired capture");
 
-    const ukr::RuleEvaluation f7 = rules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Down), true, targetPid, 6);
-    Check(f7.kind == ukr::RuleEvaluationKind::ActionReady, "physical F7 prepares an action");
+    const inputweaver::RuleEvaluation f7 = rules.Evaluate(
+        KeyboardEvent(VK_F7, inputweaver::Transition::Down), true, targetPid, 6);
+    Check(f7.kind == inputweaver::RuleEvaluationKind::ActionReady, "physical F7 prepares an action");
     Check(
-        f7.rule == ukr::RuleId::F7ToF8 && f7.batch.outputCode == VK_F8,
+        f7.rule == inputweaver::RuleId::F7ToF8 && f7.batch.outputCode == VK_F8,
         "physical F7 prepares F8 output");
     Check(rules.CommitCapture(f7), "accepted F7 action captures its source");
     Check(
-        rules.Evaluate(KeyboardEvent(VK_F7, ukr::Transition::Up), true, targetPid, 7).kind
-            == ukr::RuleEvaluationKind::SuppressCaptured,
+        rules.Evaluate(KeyboardEvent(VK_F7, inputweaver::Transition::Up), true, targetPid, 7).kind
+            == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured F7 release is suppressed");
 
-    const ukr::RuleEvaluation externalF6 = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down, ukr::InputOrigin::ExternalInjected),
+    const inputweaver::RuleEvaluation externalF6 = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down, inputweaver::InputOrigin::ExternalInjected),
         true,
         targetPid,
         8);
     Check(
-        externalF6.kind == ukr::RuleEvaluationKind::Forward,
+        externalF6.kind == inputweaver::RuleEvaluationKind::Forward,
         "external injected F6 is forwarded without a rule");
 }
 
 void TestCrossDeviceRulesAndRecursion()
 {
     constexpr DWORD targetPid = 200;
-    ukr::FixedRuleEngine rules;
+    inputweaver::FixedRuleEngine rules;
 
-    const ukr::RuleEvaluation f9 = rules.Evaluate(
-        KeyboardEvent(VK_F9, ukr::Transition::Down), true, targetPid, 10);
-    Check(f9.kind == ukr::RuleEvaluationKind::ActionReady, "physical F9 prepares an action");
+    const inputweaver::RuleEvaluation f9 = rules.Evaluate(
+        KeyboardEvent(VK_F9, inputweaver::Transition::Down), true, targetPid, 10);
+    Check(f9.kind == inputweaver::RuleEvaluationKind::ActionReady, "physical F9 prepares an action");
     Check(
-        f9.rule == ukr::RuleId::F9ToMiddle
-            && f9.batch.outputDevice == ukr::DeviceKind::Mouse
+        f9.rule == inputweaver::RuleId::F9ToMiddle
+            && f9.batch.outputDevice == inputweaver::DeviceKind::Mouse
             && f9.batch.outputCode == VK_MBUTTON
             && f9.batch.requiresPointerTarget,
         "physical F9 prepares a middle-button click");
     Check(rules.CommitCapture(f9), "accepted F9 action captures its source");
 
-    const ukr::RuleEvaluation selfMiddleDown = rules.Evaluate(
+    const inputweaver::RuleEvaluation selfMiddleDown = rules.Evaluate(
         MouseButtonEvent(
             VK_MBUTTON,
-            ukr::Transition::Down,
-            ukr::InputOrigin::SelfInjected),
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::SelfInjected),
         true,
         targetPid,
         11);
-    const ukr::RuleEvaluation selfMiddleUp = rules.Evaluate(
+    const inputweaver::RuleEvaluation selfMiddleUp = rules.Evaluate(
         MouseButtonEvent(
             VK_MBUTTON,
-            ukr::Transition::Up,
-            ukr::InputOrigin::SelfInjected),
+            inputweaver::Transition::Up,
+            inputweaver::InputOrigin::SelfInjected),
         true,
         targetPid,
         12);
     Check(
-        selfMiddleDown.kind == ukr::RuleEvaluationKind::Forward
-            && selfMiddleUp.kind == ukr::RuleEvaluationKind::Forward,
+        selfMiddleDown.kind == inputweaver::RuleEvaluationKind::Forward
+            && selfMiddleUp.kind == inputweaver::RuleEvaluationKind::Forward,
         "self-tagged middle click is forwarded and cannot produce F10");
 
     Check(
-        rules.Evaluate(KeyboardEvent(VK_F9, ukr::Transition::Up), true, targetPid, 13).kind
-            == ukr::RuleEvaluationKind::SuppressCaptured,
+        rules.Evaluate(KeyboardEvent(VK_F9, inputweaver::Transition::Up), true, targetPid, 13).kind
+            == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured F9 release is suppressed");
 
-    const ukr::RuleEvaluation middle = rules.Evaluate(
-        MouseButtonEvent(VK_MBUTTON, ukr::Transition::Down), true, targetPid, 14);
-    Check(middle.kind == ukr::RuleEvaluationKind::ActionReady, "physical middle prepares an action");
+    const inputweaver::RuleEvaluation middle = rules.Evaluate(
+        MouseButtonEvent(VK_MBUTTON, inputweaver::Transition::Down), true, targetPid, 14);
+    Check(middle.kind == inputweaver::RuleEvaluationKind::ActionReady, "physical middle prepares an action");
     Check(
-        middle.rule == ukr::RuleId::MiddleToF10
-            && middle.batch.outputDevice == ukr::DeviceKind::Keyboard
+        middle.rule == inputweaver::RuleId::MiddleToF10
+            && middle.batch.outputDevice == inputweaver::DeviceKind::Keyboard
             && middle.batch.outputCode == VK_F10
             && middle.batch.requiresPointerTarget,
         "physical middle prepares F10 output");
     Check(rules.CommitCapture(middle), "accepted middle action captures its source");
     Check(
         rules.Evaluate(
-            MouseButtonEvent(VK_MBUTTON, ukr::Transition::Down), true, targetPid, 15).kind
-            == ukr::RuleEvaluationKind::SuppressCaptured,
+            MouseButtonEvent(VK_MBUTTON, inputweaver::Transition::Down), true, targetPid, 15).kind
+            == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured middle repeat is suppressed");
     Check(
         rules.Evaluate(
-            MouseButtonEvent(VK_MBUTTON, ukr::Transition::Up), true, targetPid, 16).kind
-            == ukr::RuleEvaluationKind::SuppressCaptured,
+            MouseButtonEvent(VK_MBUTTON, inputweaver::Transition::Up), true, targetPid, 16).kind
+            == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured middle release is suppressed");
 }
 
 void TestOutputConflictAndGeneration()
 {
     constexpr DWORD targetPid = 300;
-    ukr::FixedRuleEngine conflictRules;
+    inputweaver::FixedRuleEngine conflictRules;
 
-    const ukr::RuleEvaluation heldF7 = conflictRules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Down), true, targetPid, 20);
-    Check(heldF7.kind == ukr::RuleEvaluationKind::ActionReady, "physical F7 state is tracked");
+    const inputweaver::RuleEvaluation heldF7 = conflictRules.Evaluate(
+        KeyboardEvent(VK_F7, inputweaver::Transition::Down), true, targetPid, 20);
+    Check(heldF7.kind == inputweaver::RuleEvaluationKind::ActionReady, "physical F7 state is tracked");
 
-    const ukr::RuleEvaluation conflictedF6 = conflictRules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 21);
+    const inputweaver::RuleEvaluation conflictedF6 = conflictRules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 21);
     Check(
-        conflictedF6.kind == ukr::RuleEvaluationKind::Forward
-            && conflictedF6.rule == ukr::RuleId::F6ToF7,
+        conflictedF6.kind == inputweaver::RuleEvaluationKind::Forward
+            && conflictedF6.rule == inputweaver::RuleId::F6ToF7,
         "F6 is forwarded when physical F7 is held");
     Check(!conflictRules.HasCapturedInputs(), "output conflict creates no source capture");
     Check(
         conflictRules.Evaluate(
-            KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 22).kind
-            == ukr::RuleEvaluationKind::Forward,
+            KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 22).kind
+            == inputweaver::RuleEvaluationKind::Forward,
         "repeat after output conflict remains forwarded");
     (void)conflictRules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Up), true, targetPid, 23);
+        KeyboardEvent(VK_F6, inputweaver::Transition::Up), true, targetPid, 23);
     (void)conflictRules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Up), true, targetPid, 24);
+        KeyboardEvent(VK_F7, inputweaver::Transition::Up), true, targetPid, 24);
 
-    ukr::FixedRuleEngine generationRules;
-    const ukr::RuleEvaluation queuedF6 = generationRules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 25);
+    inputweaver::FixedRuleEngine generationRules;
+    const inputweaver::RuleEvaluation queuedF6 = generationRules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 25);
     Check(generationRules.CanInject(queuedF6.batch), "unchanged output generation passes worker check");
 
     (void)generationRules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Down), true, targetPid, 26);
+        KeyboardEvent(VK_F7, inputweaver::Transition::Down), true, targetPid, 26);
     Check(!generationRules.CanInject(queuedF6.batch), "newly held output cancels queued action");
     const unsigned long long heldState = generationRules.PackedOutputState(
-        ukr::DeviceKind::Keyboard,
+        inputweaver::DeviceKind::Keyboard,
         VK_F7);
-    Check(ukr::PhysicalOutputIsDown(heldState), "published output state records down bit");
+    Check(inputweaver::PhysicalOutputIsDown(heldState), "published output state records down bit");
 
     (void)generationRules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Up), true, targetPid, 27);
+        KeyboardEvent(VK_F7, inputweaver::Transition::Up), true, targetPid, 27);
     Check(
         !generationRules.CanInject(queuedF6.batch),
         "changed output generation stays cancelled after physical release");
     const unsigned long long releasedState = generationRules.PackedOutputState(
-        ukr::DeviceKind::Keyboard,
+        inputweaver::DeviceKind::Keyboard,
         VK_F7);
     Check(
-        !ukr::PhysicalOutputIsDown(releasedState)
-            && ukr::PhysicalOutputGeneration(releasedState)
+        !inputweaver::PhysicalOutputIsDown(releasedState)
+            && inputweaver::PhysicalOutputGeneration(releasedState)
                 > queuedF6.batch.outputStateGeneration,
         "published output generation advances on each physical edge");
 
     (void)generationRules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Up), true, targetPid, 28);
+        KeyboardEvent(VK_F6, inputweaver::Transition::Up), true, targetPid, 28);
 
-    ukr::FixedRuleEngine seededRules;
-    seededRules.SeedPhysicalState(ukr::DeviceKind::Keyboard, VK_F7, true);
+    inputweaver::FixedRuleEngine seededRules;
+    seededRules.SeedPhysicalState(inputweaver::DeviceKind::Keyboard, VK_F7, true);
     Check(
         seededRules.Evaluate(
-            KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 33).kind
-            == ukr::RuleEvaluationKind::Forward,
+            KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 33).kind
+            == inputweaver::RuleEvaluationKind::Forward,
         "startup-seeded held output prevents an unsafe tap");
-    seededRules.SeedPhysicalState(ukr::DeviceKind::Keyboard, VK_F6, true);
+    seededRules.SeedPhysicalState(inputweaver::DeviceKind::Keyboard, VK_F6, true);
     Check(
         seededRules.Evaluate(
-            KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 34).kind
-            == ukr::RuleEvaluationKind::Forward,
+            KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 34).kind
+            == inputweaver::RuleEvaluationKind::Forward,
         "startup-seeded held source treats the first observed down as repeat");
 }
 
 void TestQueueCapacityAndCaptureCommit()
 {
-    ukr::ActionQueue queue;
-    for (std::size_t index = 0; index < ukr::kActionQueueCapacity; ++index) {
-        ukr::ActionBatch batch{};
+    inputweaver::ActionQueue queue;
+    for (std::size_t index = 0; index < inputweaver::kActionQueueCapacity; ++index) {
+        inputweaver::ActionBatch batch{};
         batch.sourceSequence = index;
         Check(queue.TryPush(batch), "queue accepts every documented-capacity slot");
     }
-    Check(queue.SizeApprox() == ukr::kActionQueueCapacity, "queue reports full documented capacity");
+    Check(queue.SizeApprox() == inputweaver::kActionQueueCapacity, "queue reports full documented capacity");
 
-    ukr::ActionBatch rejected{};
-    rejected.sourceSequence = ukr::kActionQueueCapacity;
+    inputweaver::ActionBatch rejected{};
+    rejected.sourceSequence = inputweaver::kActionQueueCapacity;
     Check(!queue.TryPush(rejected), "queue rejects the item after documented capacity");
     Check(queue.RejectedPushCount() == 1, "queue counts rejected pushes");
 
-    for (std::size_t index = 0; index < ukr::kActionQueueCapacity / 2; ++index) {
-        ukr::ActionBatch popped{};
+    for (std::size_t index = 0; index < inputweaver::kActionQueueCapacity / 2; ++index) {
+        inputweaver::ActionBatch popped{};
         Check(queue.TryPop(popped), "queue pops initial items");
         Check(popped.sourceSequence == index, "queue preserves initial FIFO order");
     }
 
-    for (std::size_t index = 0; index < ukr::kActionQueueCapacity / 2; ++index) {
-        ukr::ActionBatch batch{};
-        batch.sourceSequence = ukr::kActionQueueCapacity + index;
+    for (std::size_t index = 0; index < inputweaver::kActionQueueCapacity / 2; ++index) {
+        inputweaver::ActionBatch batch{};
+        batch.sourceSequence = inputweaver::kActionQueueCapacity + index;
         Check(queue.TryPush(batch), "queue reuses wrapped slots");
     }
 
-    for (std::size_t index = ukr::kActionQueueCapacity / 2;
-         index < ukr::kActionQueueCapacity + ukr::kActionQueueCapacity / 2;
+    for (std::size_t index = inputweaver::kActionQueueCapacity / 2;
+         index < inputweaver::kActionQueueCapacity + inputweaver::kActionQueueCapacity / 2;
          ++index) {
-        ukr::ActionBatch popped{};
+        inputweaver::ActionBatch popped{};
         Check(queue.TryPop(popped), "queue pops wrapped items");
         Check(popped.sourceSequence == index, "queue preserves wrapped FIFO order");
     }
     Check(queue.Empty(), "queue is empty after all pops");
 
-    ukr::ActionQueue pairQueue;
-    ukr::ActionBatch firstPair{};
+    inputweaver::ActionQueue pairQueue;
+    inputweaver::ActionBatch firstPair{};
     firstPair.sourceSequence = 900;
-    ukr::ActionBatch secondPair{};
+    inputweaver::ActionBatch secondPair{};
     secondPair.sourceSequence = 901;
     Check(
         pairQueue.TryPushPair(firstPair, secondPair),
         "queue atomically accepts a two-batch publication pair");
-    ukr::ActionBatch poppedPair{};
+    inputweaver::ActionBatch poppedPair{};
     Check(
         pairQueue.TryPop(poppedPair) && poppedPair.sourceSequence == 900,
         "atomic pair preserves its first batch");
@@ -523,53 +523,53 @@ void TestQueueCapacityAndCaptureCommit()
         pairQueue.TryPop(poppedPair) && poppedPair.sourceSequence == 901,
         "atomic pair preserves its second batch");
 
-    ukr::FixedRuleEngine transactionRules;
-    const ukr::RuleEvaluation transactionalF6 = transactionRules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, 401, 43);
+    inputweaver::FixedRuleEngine transactionRules;
+    const inputweaver::RuleEvaluation transactionalF6 = transactionRules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, 401, 43);
     transactionRules.DisableNewCaptures();
-    ukr::ActionQueue transactionQueue;
-    const ukr::ActionQueuePushResult transactionResult =
+    inputweaver::ActionQueue transactionQueue;
+    const inputweaver::ActionQueuePushResult transactionResult =
         transactionQueue.TryPushWithCommit(
             transactionalF6.batch,
             [&transactionRules, &transactionalF6]() noexcept {
                 return transactionRules.CommitCapture(transactionalF6);
             });
     Check(
-        transactionResult == ukr::ActionQueuePushResult::CommitRejected,
+        transactionResult == inputweaver::ActionQueuePushResult::CommitRejected,
         "capture commit rejects a concurrent disable at the queue publication boundary");
     Check(
         transactionQueue.Empty() && !transactionRules.HasCapturedInputs(),
         "commit rejection publishes no action and creates no capture");
 
-    ukr::FixedRuleEngine rules;
-    const ukr::RuleEvaluation f6 = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, 400, 40);
+    inputweaver::FixedRuleEngine rules;
+    const inputweaver::RuleEvaluation f6 = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, 400, 40);
 
-    ukr::ActionQueue fullQueue;
-    ukr::ActionBatch filler{};
-    for (std::size_t index = 0; index < ukr::kActionQueueCapacity; ++index) {
+    inputweaver::ActionQueue fullQueue;
+    inputweaver::ActionBatch filler{};
+    for (std::size_t index = 0; index < inputweaver::kActionQueueCapacity; ++index) {
         Check(fullQueue.TryPush(filler), "capture test fills action queue");
     }
     Check(!fullQueue.TryPush(f6.batch), "action-ready batch is rejected by a full queue");
     Check(!rules.HasCapturedInputs(), "queue rejection does not capture the source");
     Check(
-        rules.Evaluate(KeyboardEvent(VK_F6, ukr::Transition::Down), true, 400, 41).kind
-            == ukr::RuleEvaluationKind::Forward,
+        rules.Evaluate(KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, 400, 41).kind
+            == inputweaver::RuleEvaluationKind::Forward,
         "repeat is forwarded when initial action was not queued");
     Check(
-        rules.Evaluate(KeyboardEvent(VK_F6, ukr::Transition::Up), true, 400, 42).kind
-            == ukr::RuleEvaluationKind::Forward,
+        rules.Evaluate(KeyboardEvent(VK_F6, inputweaver::Transition::Up), true, 400, 42).kind
+            == inputweaver::RuleEvaluationKind::Forward,
         "release is forwarded when initial action was not queued");
 }
 
 void TestQueueSpscConcurrency()
 {
     constexpr std::size_t itemCount = 50'000;
-    ukr::ActionQueue queue;
+    inputweaver::ActionQueue queue;
 
     std::thread producer([&queue]() {
         for (std::size_t index = 0; index < itemCount; ++index) {
-            ukr::ActionBatch batch{};
+            inputweaver::ActionBatch batch{};
             batch.sourceSequence = index;
             while (!queue.TryPush(batch)) {
                 std::this_thread::yield();
@@ -580,7 +580,7 @@ void TestQueueSpscConcurrency()
     bool ordered = true;
     std::size_t consumed = 0;
     while (consumed < itemCount) {
-        ukr::ActionBatch batch{};
+        inputweaver::ActionBatch batch{};
         if (!queue.TryPop(batch)) {
             std::this_thread::yield();
             continue;
@@ -596,31 +596,31 @@ void TestQueueSpscConcurrency()
 
 void TestRuntimeQueueFullErrorSignal()
 {
-    ukr::DiagnosticLog diagnosticLog;
-    ukr::AppRuntimeOptions options{};
-    options.selfTag = static_cast<ukr::SelfTag>(0x51554555U);
-    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::DiagnosticLog diagnosticLog;
+    inputweaver::AppRuntimeOptions options{};
+    options.selfTag = static_cast<inputweaver::SelfTag>(0x51554555U);
+    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
     std::wstring componentError;
     const bool componentsCreated =
-        ukr::RuntimeTestAccess::CreateEvents(runtime, componentError);
+        inputweaver::RuntimeTestAccess::CreateEvents(runtime, componentError);
     Check(componentsCreated, "queue error test creates runtime components");
     if (!componentsCreated) {
         return;
     }
 
-    for (std::size_t index = 0; index < ukr::kActionQueueCapacity; ++index) {
-        ukr::ActionBatch batch{};
+    for (std::size_t index = 0; index < inputweaver::kActionQueueCapacity; ++index) {
+        inputweaver::ActionBatch batch{};
         batch.sourceSequence = index;
         Check(
-            ukr::RuntimeTestAccess::Enqueue(runtime, batch),
+            inputweaver::RuntimeTestAccess::Enqueue(runtime, batch),
             "queue error test fills the action queue");
     }
 
-    ukr::ActionBatch rejected{};
-    rejected.sourceSequence = ukr::kActionQueueCapacity;
+    inputweaver::ActionBatch rejected{};
+    rejected.sourceSequence = inputweaver::kActionQueueCapacity;
     Check(
-        ukr::RuntimeTestAccess::Schedule(runtime, rejected)
-            == ukr::ActionQueuePushResult::Full,
+        inputweaver::RuntimeTestAccess::Schedule(runtime, rejected)
+            == inputweaver::ActionQueuePushResult::Full,
         "runtime scheduler reports a full action queue");
     Check(
         WaitForSingleObject(runtime.ActionQueueErrorEvent(), 0) == WAIT_OBJECT_0,
@@ -630,8 +630,8 @@ void TestRuntimeQueueFullErrorSignal()
         "visible queue error retains the rejection metric");
 
     Check(
-        ukr::RuntimeTestAccess::Schedule(runtime, rejected)
-            == ukr::ActionQueuePushResult::Full,
+        inputweaver::RuntimeTestAccess::Schedule(runtime, rejected)
+            == inputweaver::ActionQueuePushResult::Full,
         "later full action queue attempts remain fail-open");
     Check(
         WaitForSingleObject(runtime.ActionQueueErrorEvent(), 0) == WAIT_TIMEOUT,
@@ -640,8 +640,8 @@ void TestRuntimeQueueFullErrorSignal()
 
 void TestProducerDoneDrainCoordinator()
 {
-    ukr::ActionQueue queue;
-    ukr::ActionBatch initial{};
+    inputweaver::ActionQueue queue;
+    inputweaver::ActionBatch initial{};
     initial.sourceSequence = 100;
     Check(queue.TryPush(initial), "producer-done test publishes its initial batch");
 
@@ -650,9 +650,9 @@ void TestProducerDoneDrainCoordinator()
     bool firstLatePublished = false;
     bool finalLatePublished = false;
     unsigned int waitCount = 0;
-    ukr::DrainUntilProducerDone(
+    inputweaver::DrainUntilProducerDone(
         [&]() noexcept {
-            ukr::ActionBatch batch{};
+            inputweaver::ActionBatch batch{};
             while (queue.TryPop(batch)) {
                 if (batch.sourceSequence >= 100 && batch.sourceSequence <= 102) {
                     ++cancellationCounts[static_cast<std::size_t>(batch.sourceSequence - 100)];
@@ -662,15 +662,15 @@ void TestProducerDoneDrainCoordinator()
             }
         },
         [&]() noexcept {
-            ukr::ActionBatch late{};
+            inputweaver::ActionBatch late{};
             if (waitCount++ == 0) {
                 late.sourceSequence = 101;
                 firstLatePublished = queue.TryPush(late);
-                return ukr::ProducerDrainWaitResult::Continue;
+                return inputweaver::ProducerDrainWaitResult::Continue;
             }
             late.sourceSequence = 102;
             finalLatePublished = queue.TryPush(late);
-            return ukr::ProducerDrainWaitResult::ProducerDone;
+            return inputweaver::ProducerDrainWaitResult::ProducerDone;
         });
 
     Check(
@@ -686,53 +686,53 @@ void TestProducerDoneDrainCoordinator()
 void TestEmergencyStopAndCapturedRelease()
 {
     constexpr DWORD targetPid = 500;
-    ukr::FixedRuleEngine rules;
+    inputweaver::FixedRuleEngine rules;
 
-    const ukr::RuleEvaluation f6 = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Down), true, targetPid, 50);
+    const inputweaver::RuleEvaluation f6 = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Down), true, targetPid, 50);
     Check(rules.CommitCapture(f6), "emergency test starts with a captured F6");
 
     (void)rules.Evaluate(
-        KeyboardEvent(VK_LCONTROL, ukr::Transition::Down), false, targetPid, 51);
+        KeyboardEvent(VK_LCONTROL, inputweaver::Transition::Down), false, targetPid, 51);
     (void)rules.Evaluate(
-        KeyboardEvent(VK_LSHIFT, ukr::Transition::Down), false, targetPid, 52);
+        KeyboardEvent(VK_LSHIFT, inputweaver::Transition::Down), false, targetPid, 52);
     Check(
         rules.Evaluate(
-            KeyboardEvent(VK_F12, ukr::Transition::Down, ukr::InputOrigin::SelfInjected),
+            KeyboardEvent(VK_F12, inputweaver::Transition::Down, inputweaver::InputOrigin::SelfInjected),
             false,
             targetPid,
-            53).kind == ukr::RuleEvaluationKind::Forward,
+            53).kind == inputweaver::RuleEvaluationKind::Forward,
         "injected F12 cannot activate emergency stop");
 
-    const ukr::RuleEvaluation emergency = rules.Evaluate(
-        KeyboardEvent(VK_F12, ukr::Transition::Down), false, targetPid, 54);
+    const inputweaver::RuleEvaluation emergency = rules.Evaluate(
+        KeyboardEvent(VK_F12, inputweaver::Transition::Down), false, targetPid, 54);
     Check(
-        emergency.kind == ukr::RuleEvaluationKind::EmergencyStop,
+        emergency.kind == inputweaver::RuleEvaluationKind::EmergencyStop,
         "physical Ctrl+Shift+F12 requests emergency stop");
     Check(!rules.NewCapturesEnabled(), "emergency stop disables new captures");
 
-    const ukr::RuleEvaluation f6Up = rules.Evaluate(
-        KeyboardEvent(VK_F6, ukr::Transition::Up), false, targetPid, 55);
+    const inputweaver::RuleEvaluation f6Up = rules.Evaluate(
+        KeyboardEvent(VK_F6, inputweaver::Transition::Up), false, targetPid, 55);
     Check(
-        f6Up.kind == ukr::RuleEvaluationKind::SuppressCaptured,
+        f6Up.kind == inputweaver::RuleEvaluationKind::SuppressCaptured,
         "captured release remains suppressed after emergency stop");
     Check(!rules.HasCapturedInputs(), "captured release drains after emergency stop");
 
-    const ukr::RuleEvaluation f7 = rules.Evaluate(
-        KeyboardEvent(VK_F7, ukr::Transition::Down), true, targetPid, 56);
+    const inputweaver::RuleEvaluation f7 = rules.Evaluate(
+        KeyboardEvent(VK_F7, inputweaver::Transition::Down), true, targetPid, 56);
     Check(
-        f7.kind == ukr::RuleEvaluationKind::Forward,
+        f7.kind == inputweaver::RuleEvaluationKind::Forward,
         "new diagnostic action remains disabled after emergency stop");
 }
 
 void TestInjectorPreparationAndFailureHandling()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x6B524D31U);
-    ukr::InputInjector injector(selfTag, &FakeSendInput);
+    inputweaver::InputInjector injector(selfTag, &FakeSendInput);
 
-    const ukr::ActionBatch keyboardBatch = ukr::MakeTapActionBatch(
-        60, 0, 600, ukr::DeviceKind::Keyboard, VK_F7);
-    const ukr::PreparedInputBatch keyboard = injector.Prepare(keyboardBatch);
+    const inputweaver::ActionBatch keyboardBatch = inputweaver::MakeTapActionBatch(
+        60, 0, 600, inputweaver::DeviceKind::Keyboard, VK_F7);
+    const inputweaver::PreparedInputBatch keyboard = injector.Prepare(keyboardBatch);
     Check(keyboard.Succeeded() && keyboard.count == 2, "injector prepares a keyboard tap");
     Check(
         keyboard.inputs[0].type == INPUT_KEYBOARD
@@ -748,18 +748,18 @@ void TestInjectorPreparationAndFailureHandling()
             && (keyboard.inputs[1].ki.dwFlags & KEYEVENTF_KEYUP) != 0,
         "keyboard tap has a scan code and paired release");
 
-    const ukr::ActionBatch extendedBatch = ukr::MakeTapActionBatch(
-        61, 0, 600, ukr::DeviceKind::Keyboard, VK_RIGHT);
-    const ukr::PreparedInputBatch extended = injector.Prepare(extendedBatch);
+    const inputweaver::ActionBatch extendedBatch = inputweaver::MakeTapActionBatch(
+        61, 0, 600, inputweaver::DeviceKind::Keyboard, VK_RIGHT);
+    const inputweaver::PreparedInputBatch extended = injector.Prepare(extendedBatch);
     Check(
         extended.Succeeded()
             && (extended.inputs[0].ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0
             && (extended.inputs[1].ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0,
         "extended keyboard controls carry the extended-key flag");
 
-    const ukr::ActionBatch mouseBatch = ukr::MakeTapActionBatch(
-        62, 0, 600, ukr::DeviceKind::Mouse, VK_MBUTTON);
-    const ukr::PreparedInputBatch mouse = injector.Prepare(mouseBatch);
+    const inputweaver::ActionBatch mouseBatch = inputweaver::MakeTapActionBatch(
+        62, 0, 600, inputweaver::DeviceKind::Mouse, VK_MBUTTON);
+    const inputweaver::PreparedInputBatch mouse = injector.Prepare(mouseBatch);
     Check(mouse.Succeeded() && mouse.count == 2, "injector prepares a middle-button tap");
     Check(
         mouse.inputs[0].mi.dwExtraInfo == selfTag
@@ -770,8 +770,8 @@ void TestInjectorPreparationAndFailureHandling()
             && (mouse.inputs[1].mi.dwFlags & MOUSEEVENTF_MIDDLEUP) != 0,
         "middle-button tap has paired button flags");
 
-    const ukr::ActionBatch moveBatch = ukr::MakeRelativeMouseMoveBatch(63, 600, 2, -1);
-    const ukr::PreparedInputBatch move = injector.Prepare(moveBatch);
+    const inputweaver::ActionBatch moveBatch = inputweaver::MakeRelativeMouseMoveBatch(63, 600, 2, -1);
+    const inputweaver::PreparedInputBatch move = injector.Prepare(moveBatch);
     Check(
         move.Succeeded() && move.count == 1
             && move.inputs[0].mi.dwExtraInfo == selfTag
@@ -779,16 +779,16 @@ void TestInjectorPreparationAndFailureHandling()
         "relative mouse INPUT carries the self tag");
 
     ResetFakeSend(FakeSendMode::Complete);
-    const ukr::InjectionResult complete = injector.Inject(keyboardBatch);
+    const inputweaver::InjectionResult complete = injector.Inject(keyboardBatch);
     Check(complete.Succeeded(), "complete fake SendInput succeeds");
     Check(
         g_fakeSendState.callCount == 1 && g_fakeSendState.counts[0] == 2,
         "complete batch uses one SendInput call");
 
     ResetFakeSend(FakeSendMode::PartialFirstCall);
-    const ukr::InjectionResult partial = injector.Inject(keyboardBatch);
+    const inputweaver::InjectionResult partial = injector.Inject(keyboardBatch);
     Check(
-        partial.outcome == ukr::InjectionOutcome::SendPartial
+        partial.outcome == inputweaver::InjectionOutcome::SendPartial
             && partial.sent == 1 && partial.cleanupAttempted,
         "partial SendInput result requests cleanup");
     Check(
@@ -801,22 +801,22 @@ void TestInjectorPreparationAndFailureHandling()
         "cleanup release retains the self tag");
 
     ResetFakeSend(FakeSendMode::Fail);
-    const ukr::InjectionResult failed = injector.Inject(keyboardBatch);
+    const inputweaver::InjectionResult failed = injector.Inject(keyboardBatch);
     Check(
-        failed.outcome == ukr::InjectionOutcome::SendFailed
+        failed.outcome == inputweaver::InjectionOutcome::SendFailed
             && failed.sent == 0 && failed.error == ERROR_ACCESS_DENIED,
         "failed SendInput preserves the immediate Win32 error");
     Check(!failed.cleanupAttempted, "zero inserted inputs require no cleanup");
 
-    const ukr::InputInjector invalidInjector(0, &FakeSendInput);
+    const inputweaver::InputInjector invalidInjector(0, &FakeSendInput);
     Check(
         !invalidInjector.Prepare(keyboardBatch).Succeeded(),
         "zero self tag is rejected before injection");
 
     ResetFakeSend(FakeSendMode::PartialThenCleanupFail);
-    const ukr::InjectionResult unresolvedCleanup = injector.Inject(mouseBatch);
+    const inputweaver::InjectionResult unresolvedCleanup = injector.Inject(mouseBatch);
     Check(
-        unresolvedCleanup.outcome == ukr::InjectionOutcome::SendPartial
+        unresolvedCleanup.outcome == inputweaver::InjectionOutcome::SendPartial
             && unresolvedCleanup.error == ERROR_NOT_ENOUGH_MEMORY,
         "partial mouse send preserves its primary failure");
     Check(
@@ -826,24 +826,24 @@ void TestInjectorPreparationAndFailureHandling()
             && unresolvedCleanup.cleanupError == ERROR_RETRY,
         "cleanup failure is reported separately from the primary send error");
 
-    ukr::ActionBatch invalidTransition = keyboardBatch;
-    invalidTransition.actions[0].transition = ukr::Transition::Move;
+    inputweaver::ActionBatch invalidTransition = keyboardBatch;
+    invalidTransition.actions[0].transition = inputweaver::Transition::Move;
     Check(
         !injector.Prepare(invalidTransition).Succeeded(),
         "keyboard movement is rejected as an invalid action");
-    ukr::ActionBatch invalidMouse = mouseBatch;
+    inputweaver::ActionBatch invalidMouse = mouseBatch;
     invalidMouse.actions[0].code = 0xFEU;
     Check(
         !injector.Prepare(invalidMouse).Succeeded(),
         "unsupported mouse buttons are rejected before SendInput");
 
-    ukr::ActionBatch wheelBatch{};
+    inputweaver::ActionBatch wheelBatch{};
     wheelBatch.actions[0] = {
-        ukr::DeviceKind::Mouse, ukr::Transition::VerticalWheel, 0, 0, WHEEL_DELTA};
+        inputweaver::DeviceKind::Mouse, inputweaver::Transition::VerticalWheel, 0, 0, WHEEL_DELTA};
     wheelBatch.actions[1] = {
-        ukr::DeviceKind::Mouse, ukr::Transition::HorizontalWheel, 0, -WHEEL_DELTA, 0};
+        inputweaver::DeviceKind::Mouse, inputweaver::Transition::HorizontalWheel, 0, -WHEEL_DELTA, 0};
     wheelBatch.actionCount = 2;
-    const ukr::PreparedInputBatch wheels = injector.Prepare(wheelBatch);
+    const inputweaver::PreparedInputBatch wheels = injector.Prepare(wheelBatch);
     Check(
         wheels.Succeeded()
             && (wheels.inputs[0].mi.dwFlags & MOUSEEVENTF_WHEEL) != 0
@@ -854,21 +854,21 @@ void TestInjectorPreparationAndFailureHandling()
     preparedKeyboardHook.flags = LLKHF_INJECTED;
     preparedKeyboardHook.dwExtraInfo = keyboard.inputs[0].ki.dwExtraInfo;
     Check(
-        ukr::ClassifyKeyboard(preparedKeyboardHook, selfTag)
-            == ukr::InputOrigin::SelfInjected,
+        inputweaver::ClassifyKeyboard(preparedKeyboardHook, selfTag)
+            == inputweaver::InputOrigin::SelfInjected,
         "prepared keyboard tag closes the injector-to-classifier contract");
     MSLLHOOKSTRUCT preparedMouseHook{};
     preparedMouseHook.flags = LLMHF_INJECTED;
     preparedMouseHook.dwExtraInfo = mouse.inputs[0].mi.dwExtraInfo;
     Check(
-        ukr::ClassifyMouse(preparedMouseHook, selfTag)
-            == ukr::InputOrigin::SelfInjected,
+        inputweaver::ClassifyMouse(preparedMouseHook, selfTag)
+            == inputweaver::InputOrigin::SelfInjected,
         "prepared mouse tag closes the injector-to-classifier contract");
 }
 
 void TestInjectionCircuitBreaker()
 {
-    ukr::InjectionCircuitBreaker breaker(3);
+    inputweaver::InjectionCircuitBreaker breaker(3);
     Check(!breaker.RecordFailure(), "first injection failure keeps the circuit closed");
     Check(!breaker.RecordFailure(), "second injection failure keeps the circuit closed");
     breaker.RecordSuccess();
@@ -886,57 +886,57 @@ void TestInjectionCircuitBreaker()
 void TestAppRuntimeFailureCircuit()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5232U);
-    ukr::DiagnosticLog diagnosticLog;
-    ukr::AppRuntimeOptions options{};
+    inputweaver::DiagnosticLog diagnosticLog;
+    inputweaver::AppRuntimeOptions options{};
     options.selfTag = selfTag;
-    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
     std::wstring componentError;
     const bool componentsCreated =
-        ukr::RuntimeTestAccess::CreateEvents(runtime, componentError);
+        inputweaver::RuntimeTestAccess::CreateEvents(runtime, componentError);
     Check(componentsCreated, "runtime failure test creates components");
     if (!componentsCreated) {
         return;
     }
-    ukr::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
+    inputweaver::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
     ResetFakeSend(FakeSendMode::Fail);
 
-    const ukr::ActionBatch first = ukr::MakeTapActionBatch(
-        80, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    const ukr::ActionBatch second = ukr::MakeTapActionBatch(
-        81, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    const ukr::ActionBatch third = ukr::MakeTapActionBatch(
-        82, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::RuntimeTestAccess::ExecuteEligible(runtime, first);
-    ukr::RuntimeTestAccess::ExecuteEligible(runtime, second);
+    const inputweaver::ActionBatch first = inputweaver::MakeTapActionBatch(
+        80, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
+    const inputweaver::ActionBatch second = inputweaver::MakeTapActionBatch(
+        81, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
+    const inputweaver::ActionBatch third = inputweaver::MakeTapActionBatch(
+        82, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
+    inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, first);
+    inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, second);
 
-    ukr::ActionBatch queuedFirst{};
+    inputweaver::ActionBatch queuedFirst{};
     queuedFirst.sourceSequence = 83;
-    ukr::ActionBatch queuedSecond{};
+    inputweaver::ActionBatch queuedSecond{};
     queuedSecond.sourceSequence = 84;
     Check(
-        ukr::RuntimeTestAccess::Enqueue(runtime, queuedFirst)
-            && ukr::RuntimeTestAccess::Enqueue(runtime, queuedSecond),
+        inputweaver::RuntimeTestAccess::Enqueue(runtime, queuedFirst)
+            && inputweaver::RuntimeTestAccess::Enqueue(runtime, queuedSecond),
         "runtime failure test queues work behind the third injection");
-    ukr::RuntimeTestAccess::ExecuteEligible(runtime, third);
+    inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, third);
 
-    const ukr::AppRuntimeMetrics opened = runtime.Metrics();
+    const inputweaver::AppRuntimeMetrics opened = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 3 && opened.injectionFailures == 3,
         "three failed runtime injections are counted once each");
     Check(
         opened.circuitBreakerOpen
-            && !ukr::RuntimeTestAccess::NewCapturesEnabled(runtime),
+            && !inputweaver::RuntimeTestAccess::NewCapturesEnabled(runtime),
         "third consecutive runtime failure opens the circuit and disables captures");
     Check(
         opened.cancelledBatches == 2
-            && ukr::RuntimeTestAccess::QueueEmpty(runtime),
+            && inputweaver::RuntimeTestAccess::QueueEmpty(runtime),
         "opening the runtime circuit cancels all remaining queued batches");
 
     const std::size_t callsBeforeRejectedBatch = g_fakeSendState.callCount;
-    const ukr::ActionBatch rejected = ukr::MakeTapActionBatch(
-        85, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::RuntimeTestAccess::Process(runtime, rejected);
-    const ukr::AppRuntimeMetrics afterRejectedBatch = runtime.Metrics();
+    const inputweaver::ActionBatch rejected = inputweaver::MakeTapActionBatch(
+        85, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
+    inputweaver::RuntimeTestAccess::Process(runtime, rejected);
+    const inputweaver::AppRuntimeMetrics afterRejectedBatch = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == callsBeforeRejectedBatch
             && afterRejectedBatch.cancelledBatches == 3,
@@ -946,26 +946,26 @@ void TestAppRuntimeFailureCircuit()
 void TestAppRuntimePersistentCleanupFailure()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5233U);
-    ukr::DiagnosticLog diagnosticLog;
-    ukr::AppRuntimeOptions options{};
+    inputweaver::DiagnosticLog diagnosticLog;
+    inputweaver::AppRuntimeOptions options{};
     options.selfTag = selfTag;
-    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
 
     std::wstring eventError;
     const bool eventsCreated =
-        ukr::RuntimeTestAccess::CreateEvents(runtime, eventError);
+        inputweaver::RuntimeTestAccess::CreateEvents(runtime, eventError);
     Check(eventsCreated, "persistent cleanup test creates runtime events");
     if (!eventsCreated) {
         return;
     }
-    ukr::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
+    inputweaver::RuntimeTestAccess::SetSendInput(runtime, &FakeSendInput);
 
     ResetFakeSend(FakeSendMode::PartialThenCleanupFail);
-    const ukr::ActionBatch batch = ukr::MakeTapActionBatch(
-        90, 0, 0, ukr::DeviceKind::Keyboard, VK_F7);
-    ukr::RuntimeTestAccess::ExecuteEligible(runtime, batch);
+    const inputweaver::ActionBatch batch = inputweaver::MakeTapActionBatch(
+        90, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
+    inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, batch);
 
-    const ukr::AppRuntimeMetrics beforeShutdownDrain = runtime.Metrics();
+    const inputweaver::AppRuntimeMetrics beforeShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 6
             && beforeShutdownDrain.injectionFailures == 5,
@@ -973,8 +973,8 @@ void TestAppRuntimePersistentCleanupFailure()
     Check(
         beforeShutdownDrain.circuitBreakerOpen
             && beforeShutdownDrain.unresolvedSyntheticReleases == 1
-            && ukr::RuntimeTestAccess::ShutdownRequested(runtime)
-            && !ukr::RuntimeTestAccess::NewCapturesEnabled(runtime),
+            && inputweaver::RuntimeTestAccess::ShutdownRequested(runtime)
+            && !inputweaver::RuntimeTestAccess::NewCapturesEnabled(runtime),
         "persistent cleanup failure opens the circuit and requests shutdown with owned state");
 
     bool everyCleanupIsTaggedRelease = true;
@@ -990,9 +990,9 @@ void TestAppRuntimePersistentCleanupFailure()
         everyCleanupIsTaggedRelease,
         "every immediate and owned cleanup attempt is a tagged key release");
 
-    ukr::RuntimeTestAccess::SignalProducerDone(runtime);
-    ukr::RuntimeTestAccess::DrainForShutdown(runtime);
-    const ukr::AppRuntimeMetrics afterShutdownDrain = runtime.Metrics();
+    inputweaver::RuntimeTestAccess::SignalProducerDone(runtime);
+    inputweaver::RuntimeTestAccess::DrainForShutdown(runtime);
+    const inputweaver::AppRuntimeMetrics afterShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 9
             && afterShutdownDrain.injectionFailures == 8,
@@ -1005,81 +1005,81 @@ void TestAppRuntimePersistentCleanupFailure()
 
 void TestDiagnosticPrivacyAndBounds()
 {
-    ukr::HookDiagnosticRecord ordinary{};
+    inputweaver::HookDiagnosticRecord ordinary{};
     ordinary.sequence = 71;
-    ordinary.device = ukr::DeviceKind::Keyboard;
-    ordinary.transition = ukr::Transition::Down;
+    ordinary.device = inputweaver::DeviceKind::Keyboard;
+    ordinary.transition = inputweaver::Transition::Down;
     ordinary.code = 'A';
     ordinary.scanCode = 30;
-    ordinary.extraInfo = ukr::ExtraInfoCategory::OtherNonzero;
-    ukr::ApplyPrivacyRedaction(ordinary);
+    ordinary.extraInfo = inputweaver::ExtraInfoCategory::OtherNonzero;
+    inputweaver::ApplyPrivacyRedaction(ordinary);
     Check(
-        ordinary.control == ukr::DiagnosticControl::OtherKeyboard
+        ordinary.control == inputweaver::DiagnosticControl::OtherKeyboard
             && ordinary.code == 0 && ordinary.scanCode == 0,
         "ordinary letter diagnostics clear virtual key and scan code");
-    const std::string ordinaryJson = ukr::FormatHookDiagnosticJson(ordinary);
+    const std::string ordinaryJson = inputweaver::FormatHookDiagnosticJson(ordinary);
     Check(
         ordinaryJson.find("OtherKeyboard") != std::string::npos
             && ordinaryJson.find("\"code\":65") == std::string::npos
             && ordinaryJson.find("\"scan\":30") == std::string::npos,
         "formatted diagnostics cannot reconstruct the ordinary letter code");
 
-    constexpr ukr::SelfTag selfTag = static_cast<ukr::SelfTag>(0x7100U);
+    constexpr inputweaver::SelfTag selfTag = static_cast<inputweaver::SelfTag>(0x7100U);
     Check(
-        ukr::CategorizeExtraInfo(0, selfTag) == ukr::ExtraInfoCategory::Zero
-            && ukr::CategorizeExtraInfo(selfTag, selfTag) == ukr::ExtraInfoCategory::OwnTag
-            && ukr::CategorizeExtraInfo(static_cast<ULONG_PTR>(selfTag + 1U), selfTag)
-                == ukr::ExtraInfoCategory::OtherNonzero,
+        inputweaver::CategorizeExtraInfo(0, selfTag) == inputweaver::ExtraInfoCategory::Zero
+            && inputweaver::CategorizeExtraInfo(selfTag, selfTag) == inputweaver::ExtraInfoCategory::OwnTag
+            && inputweaver::CategorizeExtraInfo(static_cast<ULONG_PTR>(selfTag + 1U), selfTag)
+                == inputweaver::ExtraInfoCategory::OtherNonzero,
         "extra information is reduced to three non-raw categories");
 #if UINTPTR_MAX > UINT32_MAX
     const ULONG_PTR widenedSelfTag = static_cast<ULONG_PTR>(selfTag) |
                                      (static_cast<ULONG_PTR>(0xDEADBEEFU) << 32U);
     Check(
-        ukr::CategorizeExtraInfo(widenedSelfTag, selfTag) ==
-            ukr::ExtraInfoCategory::OwnTag,
+        inputweaver::CategorizeExtraInfo(widenedSelfTag, selfTag) ==
+            inputweaver::ExtraInfoCategory::OwnTag,
         "diagnostic tag classification compares the portable low 32 bits");
 #endif
 
-    ukr::HookDiagnosticRecord ordinaryMouseMove{};
-    ordinaryMouseMove.device = ukr::DeviceKind::Mouse;
-    ordinaryMouseMove.transition = ukr::Transition::Move;
+    inputweaver::HookDiagnosticRecord ordinaryMouseMove{};
+    ordinaryMouseMove.device = inputweaver::DeviceKind::Mouse;
+    ordinaryMouseMove.transition = inputweaver::Transition::Move;
     Check(
-        !ukr::ShouldPublishHookDiagnostic(ordinaryMouseMove, false) &&
-            ukr::ShouldPublishHookDiagnostic(ordinaryMouseMove, true),
+        !inputweaver::ShouldPublishHookDiagnostic(ordinaryMouseMove, false) &&
+            inputweaver::ShouldPublishHookDiagnostic(ordinaryMouseMove, true),
         "ordinary mouse movement is logged only in explicit input trace mode");
-    ordinaryMouseMove.origin = ukr::InputOrigin::SelfInjected;
+    ordinaryMouseMove.origin = inputweaver::InputOrigin::SelfInjected;
     Check(
-        ukr::ShouldPublishHookDiagnostic(ordinaryMouseMove, false),
+        inputweaver::ShouldPublishHookDiagnostic(ordinaryMouseMove, false),
         "operational logging retains self-injected mouse movement");
-    ukr::HookDiagnosticRecord matchedRule{};
+    inputweaver::HookDiagnosticRecord matchedRule{};
     matchedRule.ruleId = 1;
     Check(
-        ukr::ShouldPublishHookDiagnostic(matchedRule, false),
+        inputweaver::ShouldPublishHookDiagnostic(matchedRule, false),
         "operational logging retains matched rules");
 
-    ukr::SpscDiagnosticRing<ukr::HookDiagnosticRecord, 3> ring;
+    inputweaver::SpscDiagnosticRing<inputweaver::HookDiagnosticRecord, 3> ring;
     for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
-        ukr::HookDiagnosticRecord record{};
+        inputweaver::HookDiagnosticRecord record{};
         record.sequence = sequence;
         Check(ring.TryPush(record), "diagnostic ring accepts every capacity slot");
     }
-    ukr::HookDiagnosticRecord overflow{};
+    inputweaver::HookDiagnosticRecord overflow{};
     Check(!ring.TryPush(overflow), "diagnostic ring rejects the item after capacity");
     for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
-        ukr::HookDiagnosticRecord record{};
+        inputweaver::HookDiagnosticRecord record{};
         Check(ring.TryPop(record) && record.sequence == sequence, "diagnostic ring preserves FIFO order");
     }
     Check(ring.Empty(), "diagnostic ring drains completely");
 
     Check(
-        ukr::JsonlAppendFits(ukr::kMaximumJsonlBytes - 10, 10),
+        inputweaver::JsonlAppendFits(inputweaver::kMaximumJsonlBytes - 10, 10),
         "JSONL writer may fill exactly to its byte limit");
     Check(
-        !ukr::JsonlAppendFits(ukr::kMaximumJsonlBytes - 10, 11)
-            && !ukr::JsonlAppendFits(ukr::kMaximumJsonlBytes + 1, 0),
+        !inputweaver::JsonlAppendFits(inputweaver::kMaximumJsonlBytes - 10, 11)
+            && !inputweaver::JsonlAppendFits(inputweaver::kMaximumJsonlBytes + 1, 0),
         "JSONL writer rejects all appends beyond its byte limit");
 
-    ukr::DiagnosticLog disabledLog;
+    inputweaver::DiagnosticLog disabledLog;
     std::wstring disabledError;
     Check(
         disabledLog.Start(L"", disabledError) && !disabledLog.Enabled(),
@@ -1096,19 +1096,19 @@ void TestDiagnosticPrivacyAndBounds()
     const DWORD temporaryLength = GetTempPathW(MAX_PATH, temporaryDirectory);
     const bool temporaryPathReady = temporaryLength != 0 && temporaryLength < MAX_PATH &&
                                     GetTempFileNameW(
-                                        temporaryDirectory, L"ukr", 0, temporaryFile) != 0;
+                                        temporaryDirectory, L"iwv", 0, temporaryFile) != 0;
     Check(temporaryPathReady, "test obtains a temporary JSONL path");
     if (temporaryPathReady) {
-        ukr::DiagnosticLog boundedLog;
+        inputweaver::DiagnosticLog boundedLog;
         std::wstring errorMessage;
         const bool started = boundedLog.Start(temporaryFile, errorMessage, 1024);
         Check(started, "bounded JSONL diagnostic worker starts");
         if (started) {
             for (std::uint64_t sequence = 0; sequence < 20; ++sequence) {
-                ukr::HookDiagnosticRecord record{};
+                inputweaver::HookDiagnosticRecord record{};
                 record.sequence = sequence;
-                record.device = ukr::DeviceKind::Keyboard;
-                record.transition = ukr::Transition::Down;
+                record.device = inputweaver::DeviceKind::Keyboard;
+                record.transition = inputweaver::Transition::Down;
                 record.code = VK_F6;
                 (void)boundedLog.TryPushHook(record);
             }
@@ -1150,80 +1150,80 @@ void TestProcessLocator()
         ? modulePath
         : modulePath.substr(separator + 1U);
 
-    const ukr::win32::LocateResult byPath =
-        ukr::win32::LocateExecutable(modulePath);
-    const auto containsCurrentProcess = [](const ukr::win32::LocateResult& result) {
+    const inputweaver::win32::LocateResult byPath =
+        inputweaver::win32::LocateExecutable(modulePath);
+    const auto containsCurrentProcess = [](const inputweaver::win32::LocateResult& result) {
         return std::any_of(
             result.matches.begin(),
             result.matches.end(),
-            [](const ukr::win32::LocatedProcess& process) {
+            [](const inputweaver::win32::LocatedProcess& process) {
                 return process.processId == GetCurrentProcessId();
             });
     };
     Check(
-        byPath.status != ukr::win32::LocateStatus::Error &&
+        byPath.status != inputweaver::win32::LocateStatus::Error &&
             containsCurrentProcess(byPath),
         "absolute-path target discovery finds the current executable");
 
-    const ukr::win32::LocateResult byBasename =
-        ukr::win32::LocateExecutable(basename);
+    const inputweaver::win32::LocateResult byBasename =
+        inputweaver::win32::LocateExecutable(basename);
     Check(
-        byBasename.status != ukr::win32::LocateStatus::Error &&
+        byBasename.status != inputweaver::win32::LocateStatus::Error &&
             containsCurrentProcess(byBasename),
         "basename target discovery is case-insensitive and finds the current executable");
 
     const std::wstring missing = L"InputWeaver.NoSuchProcess." +
                                  std::to_wstring(GetCurrentProcessId()) + L".exe";
     Check(
-        ukr::win32::LocateExecutable(missing).status ==
-            ukr::win32::LocateStatus::None,
+        inputweaver::win32::LocateExecutable(missing).status ==
+            inputweaver::win32::LocateStatus::None,
         "a missing executable selector returns the waiting state");
     Check(
-        ukr::win32::LocateExecutable(L"relative\\target.exe").status ==
-            ukr::win32::LocateStatus::Error,
+        inputweaver::win32::LocateExecutable(L"relative\\target.exe").status ==
+            inputweaver::win32::LocateStatus::Error,
         "a path selector must be absolute");
 
     std::wstring embeddedNull = L"InputWeaverTests.exe";
     embeddedNull.push_back(L'\0');
     embeddedNull += L"ignored";
     Check(
-        ukr::win32::LocateExecutable(embeddedNull).status ==
-            ukr::win32::LocateStatus::Error,
+        inputweaver::win32::LocateExecutable(embeddedNull).status ==
+            inputweaver::win32::LocateStatus::Error,
         "an executable selector cannot contain an embedded NUL");
 }
 
 void TestProcessContextValidation()
 {
-    ukr::TargetProcessContext context;
-    const ukr::ProcessContextResult invalid = context.Initialize(0);
+    inputweaver::TargetProcessContext context;
+    const inputweaver::ProcessContextResult invalid = context.Initialize(0);
     Check(
-        invalid.error == ukr::ProcessContextError::InvalidPid && !context.IsValid(),
+        invalid.error == inputweaver::ProcessContextError::InvalidPid && !context.IsValid(),
         "zero target PID is rejected");
 
-    const ukr::IntegrityLevelResult currentIntegrity =
-        ukr::QueryProcessIntegrityLevel(GetCurrentProcess());
+    const inputweaver::IntegrityLevelResult currentIntegrity =
+        inputweaver::QueryProcessIntegrityLevel(GetCurrentProcess());
     if (!currentIntegrity.succeeded) {
         std::cerr << "Current integrity query Win32 error: "
                   << currentIntegrity.win32Error << '\n';
     }
     Check(currentIntegrity.succeeded, "current process integrity level is queryable");
     Check(
-        ukr::IsTargetIntegrityCompatible(
+        inputweaver::IsTargetIntegrityCompatible(
             SECURITY_MANDATORY_MEDIUM_RID,
             SECURITY_MANDATORY_LOW_RID),
         "a lower-integrity target is compatible");
     Check(
-        ukr::IsTargetIntegrityCompatible(
+        inputweaver::IsTargetIntegrityCompatible(
             SECURITY_MANDATORY_MEDIUM_RID,
             SECURITY_MANDATORY_MEDIUM_RID),
         "an equal-integrity target is compatible");
     Check(
-        !ukr::IsTargetIntegrityCompatible(
+        !inputweaver::IsTargetIntegrityCompatible(
             SECURITY_MANDATORY_MEDIUM_RID,
             SECURITY_MANDATORY_HIGH_RID),
         "a higher-integrity target is rejected");
 
-    const ukr::ProcessContextResult currentProcess =
+    const inputweaver::ProcessContextResult currentProcess =
         context.Initialize(GetCurrentProcessId());
     Check(
         currentProcess.Succeeded() && context.IsValid()
@@ -1265,13 +1265,13 @@ void TestTargetProcessLifecycle()
         return;
     }
 
-    ukr::TargetProcessContext context;
-    const ukr::ProcessContextResult mismatched = context.Initialize(
+    inputweaver::TargetProcessContext context;
+    const inputweaver::ProcessContextResult mismatched = context.Initialize(
         process.dwProcessId, targetPath + L".wrong");
     Check(
-        mismatched.error == ukr::ProcessContextError::TargetImageMismatch,
+        mismatched.error == inputweaver::ProcessContextError::TargetImageMismatch,
         "target context rejects a reused PID with the wrong image path");
-    const ukr::ProcessContextResult initialized =
+    const inputweaver::ProcessContextResult initialized =
         context.Initialize(process.dwProcessId, targetPath);
     Check(initialized.Succeeded(), "target context accepts a live same-integrity process");
     const DWORD resumeResult = ResumeThread(process.hThread);
@@ -1291,7 +1291,7 @@ void TestTargetProcessLifecycle()
         Check(
             !context.IsTargetForeground(),
             "a signaled retained target disables foreground routing");
-        const ukr::ScreenPoint point{0, 0};
+        const inputweaver::ScreenPoint point{0, 0};
         Check(
             !context.IsTargetPointerTarget(point),
             "a signaled retained target disables pointer routing");
@@ -1303,7 +1303,7 @@ void TestTargetProcessLifecycle()
 
 void TestShutdownGraceWithFakeClock()
 {
-    ukr::ShutdownGraceWindow grace(2000);
+    inputweaver::ShutdownGraceWindow grace(2000);
     Check(!grace.Expired(100), "inactive shutdown grace is not expired");
     grace.Begin(100);
     Check(!grace.Expired(2099), "captured-release grace remains active before its deadline");
@@ -1315,7 +1315,7 @@ void TestShutdownGraceWithFakeClock()
 
 void TestAppRuntimeLifecycle()
 {
-    ukr::DiagnosticLog diagnosticLog;
+    inputweaver::DiagnosticLog diagnosticLog;
     std::wstring errorMessage;
     const bool logStarted = diagnosticLog.Start(L"", errorMessage);
     Check(logStarted && !diagnosticLog.Enabled(), "runtime lifecycle starts without a logging worker");
@@ -1324,10 +1324,10 @@ void TestAppRuntimeLifecycle()
     }
 
     {
-        constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5231U);
-        ukr::AppRuntimeOptions options{};
+        constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x49575631U);
+        inputweaver::AppRuntimeOptions options{};
         options.selfTag = selfTag;
-        ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+        inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
         const bool runtimeStarted = runtime.Start(errorMessage);
         Check(runtimeStarted, "observer runtime installs both low-level hooks");
         if (runtimeStarted) {
@@ -1336,7 +1336,7 @@ void TestAppRuntimeLifecycle()
             Check(
                 WaitForSingleObject(runtime.StoppedEvent(), 0) == WAIT_OBJECT_0,
                 "observer runtime signals hook-thread termination");
-            const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
+            const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
             Check(
                 metrics.suppressedEvents == 0 && metrics.queuedBatches == 0 &&
                     metrics.unresolvedSyntheticReleases == 0,

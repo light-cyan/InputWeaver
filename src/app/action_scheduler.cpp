@@ -5,7 +5,7 @@
 
 #include <algorithm>
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 [[nodiscard]] std::int64_t ReadPerformanceCounter() noexcept {
@@ -386,4 +386,4 @@ ProcessId ActionScheduler::TargetPid() const noexcept {
     return targetContext_ == nullptr ? 0 : targetContext_->TargetPid();
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

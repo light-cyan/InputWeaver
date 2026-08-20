@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ukr {
+namespace inputweaver {
 
 enum class ProducerDrainWaitResult : unsigned char {
     Continue,
@@ -22,4 +22,4 @@ void DrainUntilProducerDone(
     drainAvailable();
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

@@ -9,7 +9,7 @@
 
 #include <exception>
 
-namespace ukr {
+namespace inputweaver {
 
 AppRuntime::AppRuntime(
     AppRuntimeOptions options,
@@ -186,4 +186,4 @@ bool AppRuntime::CreateComponents(std::wstring& errorMessage) {
     return true;
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

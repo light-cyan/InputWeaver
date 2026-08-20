@@ -12,7 +12,7 @@
 
 #include <string_view>
 
-namespace ukr {
+namespace inputweaver {
 
 enum class ProcessContextError : unsigned char {
     None,
@@ -96,4 +96,4 @@ private:
     DWORD targetIntegrityRid_{0};
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

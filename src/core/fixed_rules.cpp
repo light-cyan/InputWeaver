@@ -1,6 +1,6 @@
 #include "fixed_rules.hpp"
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 struct RuleDefinition {
@@ -369,4 +369,4 @@ std::size_t FixedRuleEngine::PublishedOutputIndex(
     return code == control::kMouseMiddle ? 2 : kPublishedOutputCount;
 }
 
-} // namespace ukr
+} // namespace inputweaver

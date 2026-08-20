@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ukr {
+namespace inputweaver {
 
 struct StopRequest final {
     void* context{};
@@ -13,4 +13,4 @@ struct StopRequest final {
     }
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

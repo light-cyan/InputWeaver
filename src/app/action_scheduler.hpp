@@ -15,7 +15,7 @@
 
 #include <windows.h>
 
-namespace ukr {
+namespace inputweaver {
 
 class RemapEngine;
 class AppRuntime;
@@ -122,4 +122,4 @@ private:
     std::atomic<std::uint64_t> unresolvedSyntheticReleases_{0};
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

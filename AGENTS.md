@@ -55,6 +55,7 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 - 2026-08-20 | Post-Phase 1 hardening | A full action queue remains fail-open and now signals a one-per-runtime console error while preserving every rejection in metrics and optional JSONL diagnostics. Core input and rule data use standard platform-independent types; Win32 input and point conversion occurs at the Windows adapter boundary. The strict build, automated suite, and `-fanalyzer` pass, and `development/after-phase-1-and-grammar-design/ResearchReport.md` records the current assessment and architecture research.
 - 2026-08-20 | Product identity | The project name is `InputWeaver`, with the subtitle `context-aware input mapping and macro engine`. The application artifact is `InputWeaver.exe`.
 - 2026-08-20 | Language identity | The configuration language is `Weave`, and `.weave` is its sole source-file extension.
+- 2026-08-20 | Internal identity | C++ code uses the `inputweaver` namespace, and build-script variables use the `INPUTWEAVER_` prefix.
 
 ## Repository Practices
 

@@ -2,7 +2,7 @@
 
 #include "input_classifier.hpp"
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 inline constexpr UINT kWakeMessage = WM_APP + 1U;
@@ -406,4 +406,4 @@ void LowLevelHooks::CloseEvents() noexcept {
     }
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

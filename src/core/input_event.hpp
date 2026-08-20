@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ukr {
+namespace inputweaver {
 
 using SelfTag = std::uint32_t;
 using ControlCode = std::uint32_t;
@@ -123,4 +123,4 @@ inline constexpr unsigned long long kPhysicalOutputDownMask = 1ULL;
     return (packedState & kPhysicalOutputDownMask) != 0;
 }
 
-} // namespace ukr
+} // namespace inputweaver

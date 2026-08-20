@@ -8,7 +8,7 @@
 #include <atomic>
 #include <cstdint>
 
-namespace ukr {
+namespace inputweaver {
 
 class ActionScheduler;
 struct RuntimeTestAccess;
@@ -85,4 +85,4 @@ private:
     std::atomic<std::uint64_t> maximumHookMicroseconds_{0};
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

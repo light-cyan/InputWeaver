@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ukr::win32 {
+namespace inputweaver::win32 {
 
 enum class LocateStatus : std::uint8_t {
     None,
@@ -47,4 +47,4 @@ struct LocateResult {
 [[nodiscard]] LocateResult LocateExecutable(
     std::wstring_view selector) noexcept;
 
-}  // namespace ukr::win32
+}  // namespace inputweaver::win32

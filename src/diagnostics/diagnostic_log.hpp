@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-namespace ukr {
+namespace inputweaver {
 
 inline constexpr std::size_t kHookDiagnosticCapacity = 4096;
 inline constexpr std::size_t kInjectionDiagnosticCapacity = 512;
@@ -183,4 +183,4 @@ private:
     std::thread worker_;
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

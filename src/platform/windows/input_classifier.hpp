@@ -2,7 +2,7 @@
 
 #include "core/input_event.hpp"
 
-namespace ukr {
+namespace inputweaver {
 
 [[nodiscard]] inline InputOrigin ClassifyKeyboard(
     const KBDLLHOOKSTRUCT& event,
@@ -30,4 +30,4 @@ namespace ukr {
         : InputOrigin::ExternalInjected;
 }
 
-} // namespace ukr
+} // namespace inputweaver

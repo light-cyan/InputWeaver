@@ -12,7 +12,7 @@
 
 #include <windows.h>
 
-namespace ukr {
+namespace inputweaver {
 
 inline constexpr DWORD kCapturedReleaseGraceMilliseconds = 2000;
 
@@ -109,4 +109,4 @@ private:
     HHOOK mouseHook_{nullptr};
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

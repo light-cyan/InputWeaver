@@ -12,7 +12,7 @@
 
 #include "core/input_event.hpp"
 
-namespace ukr {
+namespace inputweaver {
 
 inline constexpr std::size_t kMaximumPreparedInputs = kMaxActionsPerBatch;
 
@@ -88,18 +88,18 @@ private:
 class InputInjector final {
 public:
     explicit InputInjector(
-        ukr::SelfTag selfTag,
+        inputweaver::SelfTag selfTag,
         SendInputFunction sendInput = &::SendInput) noexcept;
 
-    [[nodiscard]] ukr::SelfTag Tag() const noexcept;
+    [[nodiscard]] inputweaver::SelfTag Tag() const noexcept;
     [[nodiscard]] PreparedInputBatch Prepare(
         const ActionBatch& batch) const noexcept;
     [[nodiscard]] InjectionResult Inject(
         const ActionBatch& batch) const noexcept;
 
 private:
-    ukr::SelfTag selfTag_;
+    inputweaver::SelfTag selfTag_;
     SendInputFunction sendInput_;
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

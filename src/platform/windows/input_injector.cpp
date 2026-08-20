@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 [[nodiscard]] bool BuildKeyboardInput(
@@ -279,11 +279,11 @@ namespace {
 }  // namespace
 
 InputInjector::InputInjector(
-    ukr::SelfTag selfTag,
+    inputweaver::SelfTag selfTag,
     SendInputFunction sendInput) noexcept
     : selfTag_(selfTag), sendInput_(sendInput) {}
 
-ukr::SelfTag InputInjector::Tag() const noexcept {
+inputweaver::SelfTag InputInjector::Tag() const noexcept {
     return selfTag_;
 }
 
@@ -370,4 +370,4 @@ InjectionResult InputInjector::Inject(const ActionBatch& batch) const noexcept {
     return result;
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

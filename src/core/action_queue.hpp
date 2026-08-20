@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ukr {
+namespace inputweaver {
 
 enum class ActionQueuePushResult : unsigned char {
     Accepted,
@@ -115,4 +115,4 @@ private:
     std::atomic<std::uint64_t> rejectedPushes_{ 0 };
 };
 
-} // namespace ukr
+} // namespace inputweaver

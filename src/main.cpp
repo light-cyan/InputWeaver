@@ -111,7 +111,7 @@ std::uint64_t Mix64(std::uint64_t value) noexcept {
     return value;
 }
 
-ukr::SelfTag GenerateSelfTag() noexcept {
+inputweaver::SelfTag GenerateSelfTag() noexcept {
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
     std::uint64_t seed = static_cast<std::uint64_t>(counter.QuadPart);
@@ -121,12 +121,12 @@ ukr::SelfTag GenerateSelfTag() noexcept {
     const std::uint64_t mixed = Mix64(seed + 0x9E3779B97F4A7C15ULL);
     const std::uint32_t folded = static_cast<std::uint32_t>(mixed) ^
                                  static_cast<std::uint32_t>(mixed >> 32U);
-    return folded == 0 ? static_cast<ukr::SelfTag>(0x554B5231U) : folded;
+    return folded == 0 ? static_cast<inputweaver::SelfTag>(0x49575631U) : folded;
 }
 
 void PrintMetrics(
-    const ukr::AppRuntimeMetrics& metrics,
-    const ukr::DiagnosticLog& diagnosticLog) {
+    const inputweaver::AppRuntimeMetrics& metrics,
+    const inputweaver::DiagnosticLog& diagnosticLog) {
     std::wcout << L"Session stopped. hook_events=" << metrics.hookEvents
                << L" suppressed=" << metrics.suppressedEvents
                << L" queued=" << metrics.queuedBatches
@@ -152,7 +152,7 @@ bool WaitForRetry() noexcept {
            WaitForSingleObject(gConsoleStopEvent, 1000) == WAIT_OBJECT_0;
 }
 
-DWORD WaitForRuntime(ukr::AppRuntime& runtime, DWORD& waitError) {
+DWORD WaitForRuntime(inputweaver::AppRuntime& runtime, DWORD& waitError) {
     const HANDLE waitHandles[] = {
         runtime.StoppedEvent(),
         gConsoleStopEvent,
@@ -164,7 +164,7 @@ DWORD WaitForRuntime(ukr::AppRuntime& runtime, DWORD& waitError) {
             return waitResult;
         }
 
-        const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
+        const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
         std::wcerr
             << L"Runtime error: the action queue reached capacity; the triggering input "
                L"was forwarded to keep the system responsive. "
@@ -173,16 +173,16 @@ DWORD WaitForRuntime(ukr::AppRuntime& runtime, DWORD& waitError) {
 }
 
 bool SelectLocatedProcess(
-    const ukr::win32::LocateResult& located,
-    ukr::win32::LocatedProcess& selected) noexcept {
-    if (const ukr::win32::LocatedProcess* unique = located.UniqueMatch()) {
+    const inputweaver::win32::LocateResult& located,
+    inputweaver::win32::LocatedProcess& selected) noexcept {
+    if (const inputweaver::win32::LocatedProcess* unique = located.UniqueMatch()) {
         selected = *unique;
         return true;
     }
 
-    const ukr::win32::LocatedProcess* foreground = nullptr;
+    const inputweaver::win32::LocatedProcess* foreground = nullptr;
     for (const auto& candidate : located.matches) {
-        if (ukr::IsProcessForeground(candidate.processId)) {
+        if (inputweaver::IsProcessForeground(candidate.processId)) {
             if (foreground != nullptr) {
                 return false;
             }
@@ -198,9 +198,9 @@ bool SelectLocatedProcess(
 
 int RunObserver(
     const CommandLineOptions& options,
-    ukr::SelfTag selfTag,
-    ukr::DiagnosticLog& diagnosticLog) {
-    ukr::AppRuntime runtime({false, options.traceInput, selfTag}, nullptr, diagnosticLog);
+    inputweaver::SelfTag selfTag,
+    inputweaver::DiagnosticLog& diagnosticLog) {
+    inputweaver::AppRuntime runtime({false, options.traceInput, selfTag}, nullptr, diagnosticLog);
     std::wstring errorMessage;
     if (!runtime.Start(errorMessage)) {
         std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -215,7 +215,7 @@ int RunObserver(
         runtime.RequestStop();
     }
     runtime.Wait();
-    const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
+    const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
     PrintMetrics(metrics, diagnosticLog);
     if (waitResult == WAIT_FAILED) {
         std::wcerr << L"WaitForMultipleObjects failed with Win32 error " << waitError << L".\n";
@@ -229,20 +229,20 @@ int RunObserver(
 
 int RunTargeted(
     const CommandLineOptions& options,
-    ukr::SelfTag selfTag,
-    ukr::DiagnosticLog& diagnosticLog) {
+    inputweaver::SelfTag selfTag,
+    inputweaver::DiagnosticLog& diagnosticLog) {
     bool waitingMessagePrinted = false;
     bool ambiguousMessagePrinted = false;
 
     while (!StopWasRequested()) {
-        const ukr::win32::LocateResult located =
-            ukr::win32::LocateExecutable(options.targetSelector);
-        if (located.status == ukr::win32::LocateStatus::Error) {
+        const inputweaver::win32::LocateResult located =
+            inputweaver::win32::LocateExecutable(options.targetSelector);
+        if (located.status == inputweaver::win32::LocateStatus::Error) {
             std::wcerr << L"Error: target search failed with Win32 error "
                        << located.win32Error << L".\n";
             return 3;
         }
-        if (located.status == ukr::win32::LocateStatus::None) {
+        if (located.status == inputweaver::win32::LocateStatus::None) {
             if (!waitingMessagePrinted) {
                 std::wcout << L"Waiting for target " << options.targetSelector << L"...\n";
                 waitingMessagePrinted = true;
@@ -253,7 +253,7 @@ int RunTargeted(
             continue;
         }
 
-        ukr::win32::LocatedProcess selected{};
+        inputweaver::win32::LocatedProcess selected{};
         if (!SelectLocatedProcess(located, selected)) {
             if (!ambiguousMessagePrinted) {
                 std::wcout << L"Multiple target processes match; focus the intended instance:\n";
@@ -271,16 +271,16 @@ int RunTargeted(
 
         waitingMessagePrinted = false;
         ambiguousMessagePrinted = false;
-        ukr::TargetProcessContext targetContext;
-        const ukr::ProcessContextResult targetResult =
+        inputweaver::TargetProcessContext targetContext;
+        const inputweaver::ProcessContextResult targetResult =
             targetContext.Initialize(selected.processId, selected.imagePath);
-        if (targetResult.error == ukr::ProcessContextError::TargetExited ||
-            targetResult.error == ukr::ProcessContextError::TargetImageMismatch) {
+        if (targetResult.error == inputweaver::ProcessContextError::TargetExited ||
+            targetResult.error == inputweaver::ProcessContextError::TargetImageMismatch) {
             continue;
         }
         if (!targetResult.Succeeded()) {
             std::cerr << "Target validation failed: "
-                      << ukr::ProcessContextErrorName(targetResult.error)
+                      << inputweaver::ProcessContextErrorName(targetResult.error)
                       << " (Win32 error " << targetResult.win32Error << ").\n";
             return 3;
         }
@@ -290,7 +290,7 @@ int RunTargeted(
                    << L"Fixed rules are active only while this process is foreground.\n"
                    << L"Press physical Ctrl+Shift+F12 to stop.\n";
 
-        ukr::AppRuntime runtime({true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
+        inputweaver::AppRuntime runtime({true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
         std::wstring errorMessage;
         if (!runtime.Start(errorMessage)) {
             std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -303,7 +303,7 @@ int RunTargeted(
             runtime.RequestStop();
         }
         runtime.Wait();
-        const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
+        const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
         PrintMetrics(metrics, diagnosticLog);
 
         if (waitResult == WAIT_FAILED) {
@@ -344,7 +344,7 @@ int wmain(int argumentCount, wchar_t** arguments) {
         return 0;
     }
 
-    ukr::DiagnosticLog diagnosticLog;
+    inputweaver::DiagnosticLog diagnosticLog;
     if (!diagnosticLog.Start(options.jsonlPath, errorMessage)) {
         std::wcerr << L"Error: " << errorMessage << L"\n";
         return 4;
@@ -367,7 +367,7 @@ int wmain(int argumentCount, wchar_t** arguments) {
         return 5;
     }
 
-    const ukr::SelfTag selfTag = GenerateSelfTag();
+    const inputweaver::SelfTag selfTag = GenerateSelfTag();
     const int result = options.testRules
         ? RunTargeted(options, selfTag, diagnosticLog)
         : RunObserver(options, selfTag, diagnosticLog);

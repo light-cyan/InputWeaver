@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace ukr {
+namespace inputweaver {
 
 enum class RuleId : unsigned char {
     None,
@@ -111,4 +111,4 @@ private:
     std::atomic<std::size_t> capturedCount_{ 0 };
 };
 
-} // namespace ukr
+} // namespace inputweaver

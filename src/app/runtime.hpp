@@ -9,7 +9,7 @@
 
 #include <windows.h>
 
-namespace ukr {
+namespace inputweaver {
 
 class ActionScheduler;
 class DiagnosticLog;
@@ -73,4 +73,4 @@ private:
     std::unique_ptr<LowLevelHooks> lowLevelHooks_;
 };
 
-}  // namespace ukr
+}  // namespace inputweaver

@@ -6,7 +6,7 @@
 #include <limits>
 #include <new>
 
-namespace ukr::win32 {
+namespace inputweaver::win32 {
 namespace {
 
 constexpr DWORD kProcessAccess =
@@ -387,4 +387,4 @@ LocateResult LocateExecutable(std::wstring_view selector) noexcept {
     }
 }
 
-}  // namespace ukr::win32
+}  // namespace inputweaver::win32

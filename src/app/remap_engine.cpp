@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 [[nodiscard]] std::int64_t ReadPerformanceCounter() noexcept {
@@ -253,4 +253,4 @@ bool RemapEngine::TargetPointerRouteIsSafe(
            targetContext_->IsTargetPointerTargetAtCursor();
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

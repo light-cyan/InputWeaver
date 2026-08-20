@@ -4,16 +4,16 @@ cd /d "%~dp0.."
 
 if not exist "bin" mkdir "bin"
 
-set "UKR_CXX=g++"
-set "UKR_WINDRES=windres"
-set "UKR_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
+set "INPUTWEAVER_CXX=g++"
+set "INPUTWEAVER_WINDRES=windres"
+set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
 
 echo [1/3] Compiling the execution manifest...
-%UKR_WINDRES% -DUNICODE -D_UNICODE "res\InputWeaver.rc" -O coff -o "bin\InputWeaver.res.o"
+%INPUTWEAVER_WINDRES% -DUNICODE -D_UNICODE "res\InputWeaver.rc" -O coff -o "bin\InputWeaver.res.o"
 if errorlevel 1 exit /b %errorlevel%
 
 echo [2/3] Building InputWeaver.exe...
-%UKR_CXX% %UKR_COMMON% -municode ^
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
     "src\main.cpp" ^
     "src\app\runtime.cpp" ^
     "src\app\remap_engine.cpp" ^
@@ -30,7 +30,7 @@ echo [2/3] Building InputWeaver.exe...
 if errorlevel 1 exit /b %errorlevel%
 
 echo [3/3] Building InputWeaverTests.exe...
-%UKR_CXX% %UKR_COMMON% ^
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\runtime_tests.cpp" ^
     "src\app\runtime.cpp" ^
     "src\app\remap_engine.cpp" ^

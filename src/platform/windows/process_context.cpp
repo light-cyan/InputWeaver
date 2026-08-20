@@ -5,7 +5,7 @@
 #include <limits>
 #include <utility>
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 constexpr DWORD kTargetProcessAccess =
@@ -461,4 +461,4 @@ DWORD TargetProcessContext::TargetIntegrityRid() const noexcept {
     return targetIntegrityRid_;
 }
 
-}  // namespace ukr
+}  // namespace inputweaver

@@ -3,7 +3,7 @@
 #include <sstream>
 #include <utility>
 
-namespace ukr {
+namespace inputweaver {
 namespace {
 
 const char* DeviceName(DeviceKind value) noexcept {
@@ -391,4 +391,4 @@ void DiagnosticLog::EmitLine(const std::string& line) {
     jsonlBytesWritten_.store(current + written, std::memory_order_relaxed);
 }
 
-}  // namespace ukr
+}  // namespace inputweaver
