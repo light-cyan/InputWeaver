@@ -17,13 +17,13 @@ Phase 1 is `Complete` as of 2026-08-19. The CLI, executable locator, logging pol
 Observer mode:
 
 ```text
-UniversalKeyRemapper.exe [--log <jsonl-path>] [--trace-input]
+InputWeaver.exe [--log <jsonl-path>] [--trace-input]
 ```
 
 Fixed Phase 1 rules:
 
 ```text
-UniversalKeyRemapper.exe --test-rules --target <exe-name-or-absolute-path> [--log <jsonl-path>] [--trace-input]
+InputWeaver.exe --test-rules --target <exe-name-or-absolute-path> [--log <jsonl-path>] [--trace-input]
 ```
 
 The target selector resolves a live process by case-insensitive executable basename or normalized absolute DOS or UNC path. A unique result is selected directly; multiple results require exactly one matching foreground instance, otherwise the console waits. Fixed rules are eligible only while the selected process owns the foreground window, and mouse-bound work additionally requires target pointer-route ownership.
@@ -38,8 +38,8 @@ cmd /c script\build.bat
 
 The canonical build produces:
 
-- `bin/UniversalKeyRemapper.exe`.
-- `bin/Phase1Tests.exe`.
+- `bin/InputWeaver.exe`.
+- `bin/InputWeaverTests.exe`.
 
 The build uses C++20, optimization, Unicode Win32 APIs, `-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror`, and Windows system libraries only. The remapper embeds an `asInvoker`, `uiAccess=false` execution manifest.
 

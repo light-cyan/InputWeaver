@@ -1,4 +1,4 @@
-# UniversalKeyRemapper 语法设计草案 v0
+# InputWeaver 语法设计草案 v0
 
 ## 文档状态
 

@@ -184,9 +184,9 @@ Shutdown disables new matches while hooks continue pairing releases for already 
 
 ## Build Design
 
-`script/build.bat` creates `bin/`, compiles the execution manifest, and builds `UniversalKeyRemapper.exe` and `Phase1Tests.exe` with C++20, Unicode Win32 definitions, strict warnings treated as errors, and Windows system libraries only.
+`script/build.bat` creates `bin/`, compiles the execution manifest, and builds `InputWeaver.exe` and `InputWeaverTests.exe` with C++20, Unicode Win32 definitions, strict warnings treated as errors, and Windows system libraries only.
 
-`script/test.bat` runs `bin/Phase1Tests.exe` and returns its exit code. The build excludes `legacy/MouseHookPrototype.cpp`.
+`script/test.bat` runs `bin/InputWeaverTests.exe` and returns its exit code. The build excludes `legacy/MouseHookPrototype.cpp`.
 
 ## Completion Evidence
 

@@ -1172,7 +1172,7 @@ void TestProcessLocator()
             containsCurrentProcess(byBasename),
         "basename target discovery is case-insensitive and finds the current executable");
 
-    const std::wstring missing = L"UniversalKeyRemapper.NoSuchProcess." +
+    const std::wstring missing = L"InputWeaver.NoSuchProcess." +
                                  std::to_wstring(GetCurrentProcessId()) + L".exe";
     Check(
         ukr::win32::LocateExecutable(missing).status ==
@@ -1183,7 +1183,7 @@ void TestProcessLocator()
             ukr::win32::LocateStatus::Error,
         "a path selector must be absolute");
 
-    std::wstring embeddedNull = L"Phase1Tests.exe";
+    std::wstring embeddedNull = L"InputWeaverTests.exe";
     embeddedNull.push_back(L'\0');
     embeddedNull += L"ignored";
     Check(

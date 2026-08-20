@@ -40,11 +40,12 @@ BOOL WINAPI ConsoleControlHandler(DWORD controlType) noexcept {
 
 void PrintUsage() {
     std::wcout
-        << L"UniversalKeyRemapper\n\n"
+        << L"InputWeaver\n"
+        << L"context-aware input mapping and macro engine\n\n"
         << L"Observer mode:\n"
-        << L"  UniversalKeyRemapper.exe [--log <jsonl-path>] [--trace-input]\n\n"
+        << L"  InputWeaver.exe [--log <jsonl-path>] [--trace-input]\n\n"
         << L"Phase 1 fixed-rule mode:\n"
-        << L"  UniversalKeyRemapper.exe --test-rules --target <exe-name-or-absolute-path>"
+        << L"  InputWeaver.exe --test-rules --target <exe-name-or-absolute-path>"
            L" [--log <jsonl-path>] [--trace-input]\n\n"
         << L"Fixed rules: F6 -> F7, F7 -> F8, F9 -> middle click,"
            L" middle button -> F10.\n"

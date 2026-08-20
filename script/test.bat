@@ -2,10 +2,10 @@
 setlocal
 cd /d "%~dp0.."
 
-if not exist "bin\Phase1Tests.exe" (
-    echo Phase1Tests.exe is missing. Run script\build.bat first.
+if not exist "bin\InputWeaverTests.exe" (
+    echo InputWeaverTests.exe is missing. Run script\build.bat first.
     exit /b 2
 )
 
-"bin\Phase1Tests.exe"
+"bin\InputWeaverTests.exe"
 exit /b %errorlevel%

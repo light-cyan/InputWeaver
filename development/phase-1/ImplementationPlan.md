@@ -29,13 +29,13 @@ Build the smallest end-to-end Windows input pipeline that can observe keyboard a
 Observer mode installs the hooks without suppressing or generating input:
 
 ```text
-UniversalKeyRemapper.exe [--log <jsonl-path>] [--trace-input]
+InputWeaver.exe [--log <jsonl-path>] [--trace-input]
 ```
 
 Fixed-rule verification mode resolves the target process from an executable basename or absolute path:
 
 ```text
-UniversalKeyRemapper.exe --test-rules --target <exe-name-or-absolute-path> [--log <jsonl-path>] [--trace-input]
+InputWeaver.exe --test-rules --target <exe-name-or-absolute-path> [--log <jsonl-path>] [--trace-input]
 ```
 
 `--trace-input` requires `--log`. The `.krm` language is outside Phase 1, so fixed-rule verification mode is the current mapping entry point.
@@ -76,13 +76,13 @@ The low-level hooks observe the interactive desktop because that is how the Wind
 
 ## Deliverables
 
-- `bin/UniversalKeyRemapper.exe`: console hook host, observer, target resolver, and fixed-rule remapper.
-- `bin/Phase1Tests.exe`: dependency-free automated tests with internal helper processes where process lifecycle coverage is required.
+- `bin/InputWeaver.exe`: console hook host, observer, target resolver, and fixed-rule remapper.
+- `bin/InputWeaverTests.exe`: dependency-free automated tests with internal helper processes where process lifecycle coverage is required.
 - `script/build.bat`: canonical Phase 1 build command.
 - `script/test.bat`: canonical automated test command.
-- `script/run_remapper.bat`: canonical fixed-rule console launch wrapper.
-- `res/UniversalKeyRemapper.manifest`: explicit `asInvoker` and `uiAccess=false` execution manifest.
-- `res/UniversalKeyRemapper.rc`: resource script that embeds the execution manifest.
+- `script/run_inputweaver.bat`: canonical fixed-rule console launch wrapper.
+- `res/InputWeaver.manifest`: explicit `asInvoker` and `uiAccess=false` execution manifest.
+- `res/InputWeaver.rc`: resource script that embeds the execution manifest.
 - `docs/phase-1/Verification.md`: build, automated-test, and interactive verification record.
 
 ## Automated Verification

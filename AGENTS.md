@@ -1,8 +1,10 @@
-# UniversalKeyRemapper
+# InputWeaver
+
+context-aware input mapping and macro engine
 
 ## Project Overview
 
-UniversalKeyRemapper is a planned Windows key and mouse remapping utility written in C++. It is intended to run with administrator privileges when required by a target application and to read user-defined `.krm` mapping configurations. The original mapping-language design, including key states, actions, sequences, variables, and mouse events, is retained in `legacy/OriginalDesign.md` as historical reference material.
+InputWeaver is a planned Windows key and mouse remapping utility written in C++. It is intended to run with administrator privileges when required by a target application and to read user-defined `.krm` mapping configurations. The original mapping-language design, including key states, actions, sequences, variables, and mouse events, is retained in `legacy/OriginalDesign.md` as historical reference material.
 
 The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exploratory mouse-hook prototype that is not part of the application implementation. Current directories are `src/app/` for runtime orchestration, remapping, and action scheduling, `src/core/` for platform-independent runtime data and rules, `src/platform/windows/` for Win32 integration, `src/diagnostics/` for logging, `tests/` for automated tests, `script/` for build and run batch files, `res/` for runtime resources, and `bin/` for generated executables.
 
@@ -43,7 +45,7 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 
 - 2026-08-19 | Phase 1 design | Commit `3aa8c3e` records `docs/phase-1/ImplementationPlan.md` and `docs/phase-1/CodeDesign.md` as the implementation boundary, architecture, verification requirements, and completion gate.
 - 2026-08-19 | Phase 1 implementation | Source implementation started after design commit `3aa8c3e`.
-- 2026-08-19 | Phase 1 CLI boundary | `UniversalKeyRemapper.exe` is a console application. Observer mode accepts logging options, while `--test-rules --target <exe-name-or-absolute-path>` activates the fixed Phase 1 rules only when the uniquely resolved target owns the foreground window.
+- 2026-08-19 | Phase 1 CLI boundary | `InputWeaver.exe` is a console application. Observer mode accepts logging options, while `--test-rules --target <exe-name-or-absolute-path>` activates the fixed Phase 1 rules only when the uniquely resolved target owns the foreground window.
 - 2026-08-19 | Phase 1 diagnostics | `--log <jsonl-path>` records bounded operational events by default. `--trace-input` is an explicit expansion that includes redacted normalized input and aggregated mouse movement.
 - 2026-08-19 | Phase 1 interactive verification | The current 32-bit tag produced 28 real injected mouse hook events classified as `SelfInjected` and `SelfTag`, with no external classification or recursive rule activation. All 43 recorded injection batches completed without failure or cancellation.
 - 2026-08-19 | Phase 1 CLI implementation | The console build locates targets by executable basename or absolute path, retains and revalidates process identity, waits for target start or restart, filters routine input from operational logs, and uses a 32-bit self tag for keyboard and mouse round trips. The canonical strict build and automated tests pass.
@@ -51,6 +53,7 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 - 2026-08-19 | Phase 1 completion | Low-level hooks, remap decisions, action scheduling, and application lifecycle are separated into cohesive modules. The strict canonical build, automated suite, `-fanalyzer`, and real 32-bit keyboard and mouse self-tag round trip pass; Phase 1 is complete.
 - 2026-08-20 | Mapping language v1 | `grammar.v1.md` defines the current `.krm` v1 syntax and runtime semantics, and `ImplementationMethod.v1.md` defines its compiler, dispatcher, cooperative task scheduler, cancellation, and output-ownership model. The original drafts and v0 specification are retained with the v1 documents.
 - 2026-08-20 | Post-Phase 1 hardening | A full action queue remains fail-open and now signals a one-per-runtime console error while preserving every rejection in metrics and optional JSONL diagnostics. Core input and rule data use standard platform-independent types; Win32 input and point conversion occurs at the Windows adapter boundary. The strict build, automated suite, and `-fanalyzer` pass, and `development/after-phase-1-and-grammar-design/ResearchReport.md` records the current assessment and architecture research.
+- 2026-08-20 | Product identity | The project name is `InputWeaver`, with the subtitle `context-aware input mapping and macro engine`. The application artifact is `InputWeaver.exe`.
 
 ## Repository Practices
 

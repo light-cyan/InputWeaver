@@ -1,4 +1,4 @@
-# UniversalKeyRemapper 语法说明 v1
+# InputWeaver 语法说明 v1
 
 ## 文档定位
 

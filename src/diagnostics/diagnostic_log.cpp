@@ -351,7 +351,7 @@ void DiagnosticLog::DrainRecords() noexcept {
         try {
             EmitLine(FormatHookDiagnosticJson(hookRecord));
         } catch (...) {
-            OutputDebugStringA("UniversalKeyRemapper diagnostic formatting failed.\n");
+            OutputDebugStringA("InputWeaver diagnostic formatting failed.\n");
         }
     }
 
@@ -360,7 +360,7 @@ void DiagnosticLog::DrainRecords() noexcept {
         try {
             EmitLine(FormatInjectionDiagnosticJson(injectionRecord));
         } catch (...) {
-            OutputDebugStringA("UniversalKeyRemapper injection diagnostic formatting failed.\n");
+            OutputDebugStringA("InputWeaver injection diagnostic formatting failed.\n");
         }
     }
 }
@@ -377,7 +377,7 @@ void DiagnosticLog::EmitLine(const std::string& line) {
     const std::uint64_t current = jsonlBytesWritten_.load(std::memory_order_relaxed);
     if (!JsonlAppendFits(current, terminated.size(), maximumJsonlBytes_)) {
         jsonlTruncated_.store(true, std::memory_order_relaxed);
-        OutputDebugStringA("UniversalKeyRemapper diagnostic JSONL limit reached.\n");
+        OutputDebugStringA("InputWeaver diagnostic JSONL limit reached.\n");
         return;
     }
 
@@ -385,7 +385,7 @@ void DiagnosticLog::EmitLine(const std::string& line) {
     if (!WriteFile(jsonlFile_, terminated.data(), static_cast<DWORD>(terminated.size()), &written, nullptr) ||
         written != terminated.size()) {
         jsonlTruncated_.store(true, std::memory_order_relaxed);
-        OutputDebugStringA("UniversalKeyRemapper diagnostic JSONL write failed.\n");
+        OutputDebugStringA("InputWeaver diagnostic JSONL write failed.\n");
         return;
     }
     jsonlBytesWritten_.store(current + written, std::memory_order_relaxed);
