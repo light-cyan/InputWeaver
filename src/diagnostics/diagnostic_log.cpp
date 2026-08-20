@@ -103,7 +103,10 @@ bool IsExactControl(DiagnosticControl value) noexcept {
 
 }  // namespace
 
-DiagnosticControl ClassifyDiagnosticControl(DeviceKind device, Transition transition, DWORD code) noexcept {
+DiagnosticControl ClassifyDiagnosticControl(
+    DeviceKind device,
+    Transition transition,
+    ControlCode code) noexcept {
     if (device == DeviceKind::Mouse) {
         if (transition == Transition::Move) {
             return DiagnosticControl::MouseMove;
@@ -111,36 +114,38 @@ DiagnosticControl ClassifyDiagnosticControl(DeviceKind device, Transition transi
         if (transition == Transition::VerticalWheel || transition == Transition::HorizontalWheel) {
             return DiagnosticControl::MouseWheel;
         }
-        return code == VK_MBUTTON ? DiagnosticControl::MiddleButton : DiagnosticControl::OtherMouse;
+        return code == control::kMouseMiddle
+            ? DiagnosticControl::MiddleButton
+            : DiagnosticControl::OtherMouse;
     }
 
     switch (code) {
-        case VK_F6:
+        case control::kF6:
             return DiagnosticControl::F6;
-        case VK_F7:
+        case control::kF7:
             return DiagnosticControl::F7;
-        case VK_F8:
+        case control::kF8:
             return DiagnosticControl::F8;
-        case VK_F9:
+        case control::kF9:
             return DiagnosticControl::F9;
-        case VK_F10:
+        case control::kF10:
             return DiagnosticControl::F10;
-        case VK_F12:
+        case control::kF12:
             return DiagnosticControl::F12;
-        case VK_CONTROL:
-        case VK_LCONTROL:
-        case VK_RCONTROL:
+        case control::kControl:
+        case control::kLeftControl:
+        case control::kRightControl:
             return DiagnosticControl::Control;
-        case VK_SHIFT:
-        case VK_LSHIFT:
-        case VK_RSHIFT:
+        case control::kShift:
+        case control::kLeftShift:
+        case control::kRightShift:
             return DiagnosticControl::Shift;
         default:
             return DiagnosticControl::OtherKeyboard;
     }
 }
 
-ExtraInfoCategory CategorizeExtraInfo(ULONG_PTR extraInfo, SelfTag selfTag) noexcept {
+ExtraInfoCategory CategorizeExtraInfo(InputExtraInfo extraInfo, SelfTag selfTag) noexcept {
     if (extraInfo == 0) {
         return ExtraInfoCategory::Zero;
     }
@@ -168,7 +173,7 @@ bool ShouldPublishHookDiagnostic(
            record.ruleId != 0 ||
            record.queueResult != QueueResult::NotAttempted ||
            record.suppressed ||
-           (record.device == DeviceKind::Keyboard && record.code == VK_F12);
+           (record.device == DeviceKind::Keyboard && record.code == control::kF12);
 }
 
 std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record) {

@@ -54,7 +54,7 @@ public:
         const InputEvent& event,
         bool lowerIntegrityInjected,
         std::int64_t startCounter) noexcept = 0;
-    virtual void SeedPhysicalState(DeviceKind device, DWORD code, bool down) noexcept = 0;
+    virtual void SeedPhysicalState(DeviceKind device, ControlCode code, bool down) noexcept = 0;
     virtual bool HasCapturedInputs() const noexcept = 0;
     virtual void FlushDiagnostics(std::int64_t startCounter) noexcept = 0;
 };

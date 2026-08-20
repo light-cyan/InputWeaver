@@ -35,11 +35,11 @@ std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
 
     event.device = DeviceKind::Keyboard;
     event.origin = ClassifyKeyboard(source, selfTag);
-    event.code = source.vkCode;
-    event.scanCode = source.scanCode;
-    event.flags = source.flags;
-    event.timestamp = source.time;
-    event.extraInfo = source.dwExtraInfo;
+    event.code = static_cast<ControlCode>(source.vkCode);
+    event.scanCode = static_cast<ScanCode>(source.scanCode);
+    event.flags = static_cast<RawInputFlags>(source.flags);
+    event.timestamp = static_cast<InputTimestamp>(source.time);
+    event.extraInfo = static_cast<InputExtraInfo>(source.dwExtraInfo);
     return true;
 }
 
@@ -50,44 +50,50 @@ std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
     InputEvent& event) noexcept {
     event.device = DeviceKind::Mouse;
     event.origin = ClassifyMouse(source, selfTag);
-    event.flags = source.flags;
-    event.mouseData = source.mouseData;
-    event.position = source.pt;
-    event.timestamp = source.time;
-    event.extraInfo = source.dwExtraInfo;
+    event.flags = static_cast<RawInputFlags>(source.flags);
+    event.mouseData = static_cast<MouseData>(source.mouseData);
+    event.position = {
+        static_cast<InputCoordinate>(source.pt.x),
+        static_cast<InputCoordinate>(source.pt.y)};
+    event.timestamp = static_cast<InputTimestamp>(source.time);
+    event.extraInfo = static_cast<InputExtraInfo>(source.dwExtraInfo);
 
     switch (message) {
         case WM_LBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = VK_LBUTTON;
+            event.code = control::kMouseLeft;
             return true;
         case WM_LBUTTONUP:
             event.transition = Transition::Up;
-            event.code = VK_LBUTTON;
+            event.code = control::kMouseLeft;
             return true;
         case WM_RBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = VK_RBUTTON;
+            event.code = control::kMouseRight;
             return true;
         case WM_RBUTTONUP:
             event.transition = Transition::Up;
-            event.code = VK_RBUTTON;
+            event.code = control::kMouseRight;
             return true;
         case WM_MBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = VK_MBUTTON;
+            event.code = control::kMouseMiddle;
             return true;
         case WM_MBUTTONUP:
             event.transition = Transition::Up;
-            event.code = VK_MBUTTON;
+            event.code = control::kMouseMiddle;
             return true;
         case WM_XBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = HIWORD(source.mouseData) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;
+            event.code = HIWORD(source.mouseData) == XBUTTON1
+                ? control::kMouseX1
+                : control::kMouseX2;
             return true;
         case WM_XBUTTONUP:
             event.transition = Transition::Up;
-            event.code = HIWORD(source.mouseData) == XBUTTON1 ? VK_XBUTTON1 : VK_XBUTTON2;
+            event.code = HIWORD(source.mouseData) == XBUTTON1
+                ? control::kMouseX1
+                : control::kMouseX2;
             return true;
         case WM_MOUSEMOVE:
             event.transition = Transition::Move;
@@ -350,18 +356,30 @@ void LowLevelHooks::ThreadMain() noexcept {
 }
 
 void LowLevelHooks::SeedObservedPhysicalState() noexcept {
-    constexpr DWORD keyboardControls[] = {
-        VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F12,
-        VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT};
-    for (const DWORD code : keyboardControls) {
+    struct KeyboardControlSeed final {
+        int virtualKey;
+        ControlCode control;
+    };
+    constexpr KeyboardControlSeed keyboardControls[] = {
+        {VK_F6, control::kF6},
+        {VK_F7, control::kF7},
+        {VK_F8, control::kF8},
+        {VK_F9, control::kF9},
+        {VK_F10, control::kF10},
+        {VK_F12, control::kF12},
+        {VK_LCONTROL, control::kLeftControl},
+        {VK_RCONTROL, control::kRightControl},
+        {VK_LSHIFT, control::kLeftShift},
+        {VK_RSHIFT, control::kRightShift}};
+    for (const KeyboardControlSeed& seed : keyboardControls) {
         sink_.SeedPhysicalState(
             DeviceKind::Keyboard,
-            code,
-            (GetAsyncKeyState(static_cast<int>(code)) & 0x8000) != 0);
+            seed.control,
+            (GetAsyncKeyState(seed.virtualKey) & 0x8000) != 0);
     }
     sink_.SeedPhysicalState(
         DeviceKind::Mouse,
-        VK_MBUTTON,
+        control::kMouseMiddle,
         (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
 }
 

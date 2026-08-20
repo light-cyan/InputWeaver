@@ -47,6 +47,14 @@ struct RuntimeTestAccess final {
         return runtime.actionScheduler_->actionQueue_.TryPush(batch);
     }
 
+    static ActionQueuePushResult Schedule(
+        AppRuntime& runtime,
+        const ActionBatch& batch) noexcept {
+        return runtime.actionScheduler_->TrySchedule(
+            batch,
+            {nullptr, &RuntimeTestAccess::CommitCapture});
+    }
+
     static bool NewCapturesEnabled(const AppRuntime& runtime) noexcept {
         return runtime.remapEngine_->NewCapturesEnabled();
     }
@@ -71,6 +79,11 @@ struct RuntimeTestAccess final {
 
     static void DrainForShutdown(AppRuntime& runtime) noexcept {
         runtime.actionScheduler_->DrainForShutdown();
+    }
+
+private:
+    static bool CommitCapture(void*) noexcept {
+        return true;
     }
 };
 
@@ -579,6 +592,50 @@ void TestQueueSpscConcurrency()
     producer.join();
     Check(ordered, "concurrent SPSC queue preserves FIFO order");
     Check(queue.Empty(), "concurrent SPSC queue drains completely");
+}
+
+void TestRuntimeQueueFullErrorSignal()
+{
+    ukr::DiagnosticLog diagnosticLog;
+    ukr::AppRuntimeOptions options{};
+    options.selfTag = static_cast<ukr::SelfTag>(0x51554555U);
+    ukr::AppRuntime runtime(options, nullptr, diagnosticLog);
+    std::wstring componentError;
+    const bool componentsCreated =
+        ukr::RuntimeTestAccess::CreateEvents(runtime, componentError);
+    Check(componentsCreated, "queue error test creates runtime components");
+    if (!componentsCreated) {
+        return;
+    }
+
+    for (std::size_t index = 0; index < ukr::kActionQueueCapacity; ++index) {
+        ukr::ActionBatch batch{};
+        batch.sourceSequence = index;
+        Check(
+            ukr::RuntimeTestAccess::Enqueue(runtime, batch),
+            "queue error test fills the action queue");
+    }
+
+    ukr::ActionBatch rejected{};
+    rejected.sourceSequence = ukr::kActionQueueCapacity;
+    Check(
+        ukr::RuntimeTestAccess::Schedule(runtime, rejected)
+            == ukr::ActionQueuePushResult::Full,
+        "runtime scheduler reports a full action queue");
+    Check(
+        WaitForSingleObject(runtime.ActionQueueErrorEvent(), 0) == WAIT_OBJECT_0,
+        "first full action queue incident signals a visible runtime error");
+    Check(
+        runtime.Metrics().rejectedActionPushes == 1,
+        "visible queue error retains the rejection metric");
+
+    Check(
+        ukr::RuntimeTestAccess::Schedule(runtime, rejected)
+            == ukr::ActionQueuePushResult::Full,
+        "later full action queue attempts remain fail-open");
+    Check(
+        WaitForSingleObject(runtime.ActionQueueErrorEvent(), 0) == WAIT_TIMEOUT,
+        "repeated queue errors do not flood the console notification path");
 }
 
 void TestProducerDoneDrainCoordinator()
@@ -1234,7 +1291,7 @@ void TestTargetProcessLifecycle()
         Check(
             !context.IsTargetForeground(),
             "a signaled retained target disables foreground routing");
-        const POINT point{0, 0};
+        const ukr::ScreenPoint point{0, 0};
         Check(
             !context.IsTargetPointerTarget(point),
             "a signaled retained target disables pointer routing");
@@ -1300,6 +1357,7 @@ int main()
     TestOutputConflictAndGeneration();
     TestQueueCapacityAndCaptureCommit();
     TestQueueSpscConcurrency();
+    TestRuntimeQueueFullErrorSignal();
     TestProducerDoneDrainCoordinator();
     TestEmergencyStopAndCapturedRelease();
     TestInjectorPreparationAndFailureHandling();

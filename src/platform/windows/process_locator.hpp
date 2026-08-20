@@ -8,6 +8,8 @@
 #endif
 #include <windows.h>
 
+#include "core/input_event.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -23,7 +25,7 @@ enum class LocateStatus : std::uint8_t {
 };
 
 struct LocatedProcess {
-    DWORD processId{0};
+    ProcessId processId{0};
     std::wstring imagePath;
 };
 

@@ -52,6 +52,7 @@ public:
     void Wait() noexcept;
 
     [[nodiscard]] HANDLE StoppedEvent() const noexcept;
+    [[nodiscard]] HANDLE ActionQueueErrorEvent() const noexcept;
     [[nodiscard]] AppRuntimeMetrics Metrics() const noexcept;
 
 private:

@@ -193,7 +193,7 @@ bool IsTargetIntegrityCompatible(
     return targetIntegrityRid <= currentIntegrityRid;
 }
 
-bool IsProcessForeground(DWORD processId) noexcept {
+bool IsProcessForeground(ProcessId processId) noexcept {
     if (processId == 0) {
         return false;
     }
@@ -209,8 +209,8 @@ bool IsProcessForeground(DWORD processId) noexcept {
 }
 
 bool IsProcessPointerTarget(
-    DWORD processId,
-    POINT screenPoint) noexcept {
+    ProcessId processId,
+    ScreenPoint screenPoint) noexcept {
     if (processId == 0) {
         return false;
     }
@@ -233,7 +233,9 @@ bool IsProcessPointerTarget(
     }
     const HWND routeWindow = threadInformation.hwndCapture != nullptr
         ? threadInformation.hwndCapture
-        : WindowFromPoint(screenPoint);
+        : WindowFromPoint({
+            static_cast<LONG>(screenPoint.x),
+            static_cast<LONG>(screenPoint.y)});
     return WindowBelongsToProcess(routeWindow, processId);
 }
 
@@ -261,12 +263,12 @@ TargetProcessContext& TargetProcessContext::operator=(
     return *this;
 }
 
-ProcessContextResult TargetProcessContext::Initialize(DWORD targetPid) noexcept {
+ProcessContextResult TargetProcessContext::Initialize(ProcessId targetPid) noexcept {
     return Initialize(targetPid, {});
 }
 
 ProcessContextResult TargetProcessContext::Initialize(
-    DWORD targetPid,
+    ProcessId targetPid,
     std::wstring_view expectedImagePath) noexcept {
     Reset();
 
@@ -428,7 +430,7 @@ bool TargetProcessContext::IsTargetForeground() const noexcept {
 }
 
 bool TargetProcessContext::IsTargetPointerTarget(
-    POINT screenPoint) const noexcept {
+    ScreenPoint screenPoint) const noexcept {
     if (!IsTargetAlive() ||
         !IsProcessPointerTarget(targetPid_, screenPoint)) {
         return false;
@@ -438,10 +440,12 @@ bool TargetProcessContext::IsTargetPointerTarget(
 
 bool TargetProcessContext::IsTargetPointerTargetAtCursor() const noexcept {
     POINT cursor{};
-    return GetCursorPos(&cursor) && IsTargetPointerTarget(cursor);
+    return GetCursorPos(&cursor) && IsTargetPointerTarget({
+        static_cast<InputCoordinate>(cursor.x),
+        static_cast<InputCoordinate>(cursor.y)});
 }
 
-DWORD TargetProcessContext::TargetPid() const noexcept {
+ProcessId TargetProcessContext::TargetPid() const noexcept {
     return targetPid_;
 }
 

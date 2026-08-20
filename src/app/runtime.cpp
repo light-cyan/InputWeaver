@@ -91,6 +91,12 @@ HANDLE AppRuntime::StoppedEvent() const noexcept {
     return lowLevelHooks_ == nullptr ? nullptr : lowLevelHooks_->StoppedEvent();
 }
 
+HANDLE AppRuntime::ActionQueueErrorEvent() const noexcept {
+    return actionScheduler_ == nullptr
+        ? nullptr
+        : actionScheduler_->ActionQueueErrorEvent();
+}
+
 AppRuntimeMetrics AppRuntime::Metrics() const noexcept {
     const RemapEngineMetrics remap = remapEngine_ == nullptr
         ? RemapEngineMetrics{}

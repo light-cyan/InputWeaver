@@ -8,6 +8,8 @@
 #endif
 #include <windows.h>
 
+#include "core/input_event.hpp"
+
 #include <string_view>
 
 namespace ukr {
@@ -54,10 +56,10 @@ struct IntegrityLevelResult {
     DWORD currentIntegrityRid,
     DWORD targetIntegrityRid) noexcept;
 
-[[nodiscard]] bool IsProcessForeground(DWORD processId) noexcept;
+[[nodiscard]] bool IsProcessForeground(ProcessId processId) noexcept;
 [[nodiscard]] bool IsProcessPointerTarget(
-    DWORD processId,
-    POINT screenPoint) noexcept;
+    ProcessId processId,
+    ScreenPoint screenPoint) noexcept;
 
 class TargetProcessContext final {
 public:
@@ -70,26 +72,26 @@ public:
     TargetProcessContext(TargetProcessContext&& other) noexcept;
     TargetProcessContext& operator=(TargetProcessContext&& other) noexcept;
 
-    [[nodiscard]] ProcessContextResult Initialize(DWORD targetPid) noexcept;
+    [[nodiscard]] ProcessContextResult Initialize(ProcessId targetPid) noexcept;
     [[nodiscard]] ProcessContextResult Initialize(
-        DWORD targetPid,
+        ProcessId targetPid,
         std::wstring_view expectedImagePath) noexcept;
     void Reset() noexcept;
 
     [[nodiscard]] bool IsValid() const noexcept;
     [[nodiscard]] bool IsTargetAlive(DWORD* win32Error = nullptr) const noexcept;
     [[nodiscard]] bool IsTargetForeground() const noexcept;
-    [[nodiscard]] bool IsTargetPointerTarget(POINT screenPoint) const noexcept;
+    [[nodiscard]] bool IsTargetPointerTarget(ScreenPoint screenPoint) const noexcept;
     [[nodiscard]] bool IsTargetPointerTargetAtCursor() const noexcept;
 
-    [[nodiscard]] DWORD TargetPid() const noexcept;
+    [[nodiscard]] ProcessId TargetPid() const noexcept;
     [[nodiscard]] HANDLE TargetHandle() const noexcept;
     [[nodiscard]] DWORD CurrentIntegrityRid() const noexcept;
     [[nodiscard]] DWORD TargetIntegrityRid() const noexcept;
 
 private:
     HANDLE targetHandle_{nullptr};
-    DWORD targetPid_{0};
+    ProcessId targetPid_{0};
     DWORD currentIntegrityRid_{0};
     DWORD targetIntegrityRid_{0};
 };

@@ -51,11 +51,11 @@ struct HookDiagnosticRecord {
     std::int64_t qpcTimestamp{};
     std::uint32_t processingMicroseconds{};
     std::uint32_t aggregateCount{1};
-    DWORD foregroundPid{};
-    DWORD rawFlags{};
-    DWORD code{};
-    DWORD scanCode{};
-    DWORD mouseData{};
+    ProcessId foregroundPid{};
+    RawInputFlags rawFlags{};
+    ControlCode code{};
+    ScanCode scanCode{};
+    MouseData mouseData{};
     DeviceKind device{DeviceKind::Keyboard};
     InputOrigin origin{InputOrigin::PhysicalCandidate};
     Transition transition{Transition::Down};
@@ -70,7 +70,7 @@ struct HookDiagnosticRecord {
 struct InjectionDiagnosticRecord {
     std::uint64_t sourceSequence{};
     std::int64_t qpcTimestamp{};
-    DWORD targetPid{};
+    ProcessId targetPid{};
     DWORD win32Error{};
     DWORD cleanupError{};
     std::uint32_t requested{};
@@ -84,8 +84,11 @@ struct InjectionDiagnosticRecord {
     bool circuitBreakerOpen{};
 };
 
-DiagnosticControl ClassifyDiagnosticControl(DeviceKind device, Transition transition, DWORD code) noexcept;
-ExtraInfoCategory CategorizeExtraInfo(ULONG_PTR extraInfo, SelfTag selfTag) noexcept;
+DiagnosticControl ClassifyDiagnosticControl(
+    DeviceKind device,
+    Transition transition,
+    ControlCode code) noexcept;
+ExtraInfoCategory CategorizeExtraInfo(InputExtraInfo extraInfo, SelfTag selfTag) noexcept;
 void ApplyPrivacyRedaction(HookDiagnosticRecord& record) noexcept;
 [[nodiscard]] bool ShouldPublishHookDiagnostic(
     const HookDiagnosticRecord& record,

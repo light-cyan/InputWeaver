@@ -4,17 +4,45 @@
 #include <cstddef>
 #include <cstdint>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
 namespace ukr {
 
 using SelfTag = std::uint32_t;
+using ControlCode = std::uint32_t;
+using ProcessId = std::uint32_t;
+using ScanCode = std::uint32_t;
+using RawInputFlags = std::uint32_t;
+using MouseData = std::uint32_t;
+using InputTimestamp = std::uint32_t;
+using InputExtraInfo = std::uintptr_t;
+using InputCoordinate = std::int32_t;
+
+struct ScreenPoint final {
+    InputCoordinate x{};
+    InputCoordinate y{};
+};
+
+namespace control {
+
+inline constexpr ControlCode kNone = 0x00U;
+inline constexpr ControlCode kMouseLeft = 0x01U;
+inline constexpr ControlCode kMouseRight = 0x02U;
+inline constexpr ControlCode kControl = 0x11U;
+inline constexpr ControlCode kShift = 0x10U;
+inline constexpr ControlCode kMouseMiddle = 0x04U;
+inline constexpr ControlCode kMouseX1 = 0x05U;
+inline constexpr ControlCode kMouseX2 = 0x06U;
+inline constexpr ControlCode kF6 = 0x75U;
+inline constexpr ControlCode kF7 = 0x76U;
+inline constexpr ControlCode kF8 = 0x77U;
+inline constexpr ControlCode kF9 = 0x78U;
+inline constexpr ControlCode kF10 = 0x79U;
+inline constexpr ControlCode kF12 = 0x7BU;
+inline constexpr ControlCode kLeftShift = 0xA0U;
+inline constexpr ControlCode kRightShift = 0xA1U;
+inline constexpr ControlCode kLeftControl = 0xA2U;
+inline constexpr ControlCode kRightControl = 0xA3U;
+
+}  // namespace control
 
 inline constexpr std::size_t kMaxActionsPerBatch = 8;
 inline constexpr std::size_t kActionQueueCapacity = 256;
@@ -47,29 +75,29 @@ struct InputEvent {
     DeviceKind device{};
     InputOrigin origin{};
     Transition transition{};
-    DWORD code{};
-    DWORD scanCode{};
-    DWORD flags{};
-    DWORD mouseData{};
-    POINT position{};
-    DWORD timestamp{};
-    ULONG_PTR extraInfo{};
+    ControlCode code{};
+    ScanCode scanCode{};
+    RawInputFlags flags{};
+    MouseData mouseData{};
+    ScreenPoint position{};
+    InputTimestamp timestamp{};
+    InputExtraInfo extraInfo{};
 };
 
 struct Action {
     DeviceKind device{};
     Transition transition{};
-    DWORD code{};
-    LONG valueX{};
-    LONG valueY{};
+    ControlCode code{};
+    InputCoordinate valueX{};
+    InputCoordinate valueY{};
 };
 
 struct ActionBatch {
     unsigned long long sourceSequence{};
     unsigned long long outputStateGeneration{};
-    DWORD targetPid{};
+    ProcessId targetPid{};
     DeviceKind outputDevice{};
-    DWORD outputCode{};
+    ControlCode outputCode{};
     bool requiresPointerTarget{};
     std::array<Action, kMaxActionsPerBatch> actions{};
     std::size_t actionCount{};

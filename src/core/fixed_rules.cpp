@@ -6,26 +6,26 @@ namespace {
 struct RuleDefinition {
     RuleId id{ RuleId::None };
     DeviceKind outputDevice{};
-    DWORD outputCode{};
+    ControlCode outputCode{};
 };
 
 [[nodiscard]] RuleDefinition FindRule(const InputEvent& event) noexcept
 {
     if (event.device == DeviceKind::Keyboard) {
         switch (event.code) {
-        case VK_F6:
-            return { RuleId::F6ToF7, DeviceKind::Keyboard, VK_F7 };
-        case VK_F7:
-            return { RuleId::F7ToF8, DeviceKind::Keyboard, VK_F8 };
-        case VK_F9:
-            return { RuleId::F9ToMiddle, DeviceKind::Mouse, VK_MBUTTON };
+        case control::kF6:
+            return { RuleId::F6ToF7, DeviceKind::Keyboard, control::kF7 };
+        case control::kF7:
+            return { RuleId::F7ToF8, DeviceKind::Keyboard, control::kF8 };
+        case control::kF9:
+            return { RuleId::F9ToMiddle, DeviceKind::Mouse, control::kMouseMiddle };
         default:
             return {};
         }
     }
 
-    if (event.device == DeviceKind::Mouse && event.code == VK_MBUTTON) {
-        return { RuleId::MiddleToF10, DeviceKind::Keyboard, VK_F10 };
+    if (event.device == DeviceKind::Mouse && event.code == control::kMouseMiddle) {
+        return { RuleId::MiddleToF10, DeviceKind::Keyboard, control::kF10 };
     }
 
     return {};
@@ -36,9 +36,9 @@ struct RuleDefinition {
 ActionBatch MakeTapActionBatch(
     unsigned long long sourceSequence,
     unsigned long long outputStateGeneration,
-    DWORD targetPid,
+    ProcessId targetPid,
     DeviceKind outputDevice,
-    DWORD outputCode,
+    ControlCode outputCode,
     bool requiresPointerTarget) noexcept
 {
     ActionBatch batch{};
@@ -56,9 +56,9 @@ ActionBatch MakeTapActionBatch(
 
 ActionBatch MakeRelativeMouseMoveBatch(
     unsigned long long sourceSequence,
-    DWORD targetPid,
-    LONG valueX,
-    LONG valueY) noexcept
+    ProcessId targetPid,
+    InputCoordinate valueX,
+    InputCoordinate valueY) noexcept
 {
     ActionBatch batch{};
     batch.sourceSequence = sourceSequence;
@@ -80,7 +80,7 @@ FixedRuleEngine::FixedRuleEngine() noexcept
 RuleEvaluation FixedRuleEngine::Evaluate(
     const InputEvent& event,
     bool diagnosticModeActive,
-    DWORD targetPid,
+    ProcessId targetPid,
     unsigned long long sourceSequence) noexcept
 {
     RuleEvaluation evaluation{};
@@ -95,7 +95,7 @@ RuleEvaluation FixedRuleEngine::Evaluate(
 
     if (event.device == DeviceKind::Keyboard
         && event.transition == Transition::Down
-        && event.code == VK_F12
+        && event.code == control::kF12
         && edge.firstDown
         && ControlDown()
         && ShiftDown()) {
@@ -164,7 +164,7 @@ void FixedRuleEngine::DisableNewCaptures() noexcept
 
 void FixedRuleEngine::SeedPhysicalState(
     DeviceKind device,
-    DWORD code,
+    ControlCode code,
     bool down) noexcept
 {
     if (code >= kControlCodeCount) {
@@ -194,7 +194,7 @@ bool FixedRuleEngine::HasCapturedInputs() const noexcept
 
 unsigned long long FixedRuleEngine::PackedOutputState(
     DeviceKind device,
-    DWORD code) const noexcept
+    ControlCode code) const noexcept
 {
     const std::size_t index = PublishedOutputIndex(device, code);
     if (index == kPublishedOutputCount) {
@@ -249,7 +249,7 @@ FixedRuleEngine::PhysicalEdge FixedRuleEngine::UpdatePhysicalState(
     return { true, false };
 }
 
-bool FixedRuleEngine::IsPhysicalDown(DeviceKind device, DWORD code) const noexcept
+bool FixedRuleEngine::IsPhysicalDown(DeviceKind device, ControlCode code) const noexcept
 {
     if (code >= kControlCodeCount) {
         return false;
@@ -261,7 +261,7 @@ bool FixedRuleEngine::IsPhysicalDown(DeviceKind device, DWORD code) const noexce
 
 unsigned long long FixedRuleEngine::PhysicalGeneration(
     DeviceKind device,
-    DWORD code) const noexcept
+    ControlCode code) const noexcept
 {
     if (code >= kControlCodeCount) {
         return 0;
@@ -271,7 +271,7 @@ unsigned long long FixedRuleEngine::PhysicalGeneration(
         : mouseGeneration_[static_cast<std::size_t>(code)];
 }
 
-bool FixedRuleEngine::IsCaptured(DeviceKind device, DWORD code) const noexcept
+bool FixedRuleEngine::IsCaptured(DeviceKind device, ControlCode code) const noexcept
 {
     if (code >= kControlCodeCount) {
         return false;
@@ -281,7 +281,7 @@ bool FixedRuleEngine::IsCaptured(DeviceKind device, DWORD code) const noexcept
         : mouseCaptured_[static_cast<std::size_t>(code)];
 }
 
-RuleId FixedRuleEngine::CapturedRule(DeviceKind device, DWORD code) const noexcept
+RuleId FixedRuleEngine::CapturedRule(DeviceKind device, ControlCode code) const noexcept
 {
     if (code >= kControlCodeCount) {
         return RuleId::None;
@@ -293,7 +293,7 @@ RuleId FixedRuleEngine::CapturedRule(DeviceKind device, DWORD code) const noexce
 
 void FixedRuleEngine::SetCaptured(
     DeviceKind device,
-    DWORD code,
+    ControlCode code,
     bool captured,
     RuleId rule) noexcept
 {
@@ -321,7 +321,7 @@ void FixedRuleEngine::SetCaptured(
     }
 }
 
-void FixedRuleEngine::PublishOutputState(DeviceKind device, DWORD code) noexcept
+void FixedRuleEngine::PublishOutputState(DeviceKind device, ControlCode code) noexcept
 {
     const std::size_t index = PublishedOutputIndex(device, code);
     if (index == kPublishedOutputCount) {
@@ -337,36 +337,36 @@ void FixedRuleEngine::PublishOutputState(DeviceKind device, DWORD code) noexcept
 
 bool FixedRuleEngine::ControlDown() const noexcept
 {
-    return IsPhysicalDown(DeviceKind::Keyboard, VK_CONTROL)
-        || IsPhysicalDown(DeviceKind::Keyboard, VK_LCONTROL)
-        || IsPhysicalDown(DeviceKind::Keyboard, VK_RCONTROL);
+    return IsPhysicalDown(DeviceKind::Keyboard, control::kControl)
+        || IsPhysicalDown(DeviceKind::Keyboard, control::kLeftControl)
+        || IsPhysicalDown(DeviceKind::Keyboard, control::kRightControl);
 }
 
 bool FixedRuleEngine::ShiftDown() const noexcept
 {
-    return IsPhysicalDown(DeviceKind::Keyboard, VK_SHIFT)
-        || IsPhysicalDown(DeviceKind::Keyboard, VK_LSHIFT)
-        || IsPhysicalDown(DeviceKind::Keyboard, VK_RSHIFT);
+    return IsPhysicalDown(DeviceKind::Keyboard, control::kShift)
+        || IsPhysicalDown(DeviceKind::Keyboard, control::kLeftShift)
+        || IsPhysicalDown(DeviceKind::Keyboard, control::kRightShift);
 }
 
 std::size_t FixedRuleEngine::PublishedOutputIndex(
     DeviceKind device,
-    DWORD code) noexcept
+    ControlCode code) noexcept
 {
     if (device == DeviceKind::Keyboard) {
         switch (code) {
-        case VK_F7:
+        case control::kF7:
             return 0;
-        case VK_F8:
+        case control::kF8:
             return 1;
-        case VK_F10:
+        case control::kF10:
             return 3;
         default:
             return kPublishedOutputCount;
         }
     }
 
-    return code == VK_MBUTTON ? 2 : kPublishedOutputCount;
+    return code == control::kMouseMiddle ? 2 : kPublishedOutputCount;
 }
 
 } // namespace ukr

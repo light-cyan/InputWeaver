@@ -64,6 +64,7 @@ public:
         CaptureCommit captureCommit) noexcept;
     [[nodiscard]] bool CircuitBreakerOpen() const noexcept;
     [[nodiscard]] HANDLE ProducerDoneEvent() const noexcept;
+    [[nodiscard]] HANDLE ActionQueueErrorEvent() const noexcept;
     [[nodiscard]] ActionSchedulerMetrics Metrics() const noexcept;
 
 private:
@@ -89,10 +90,10 @@ private:
     void CancelQueuedActions(CancellationReason reason) noexcept;
     void DrainForShutdown() noexcept;
     void RememberOwnedRelease(const ActionBatch& batch) noexcept;
-    void ForgetOwnedRelease(DeviceKind device, DWORD code) noexcept;
+    void ForgetOwnedRelease(DeviceKind device, ControlCode code) noexcept;
     void ReleaseOwnedSyntheticState(unsigned int maximumAttempts) noexcept;
     void OpenCircuit() noexcept;
-    [[nodiscard]] DWORD TargetPid() const noexcept;
+    [[nodiscard]] ProcessId TargetPid() const noexcept;
 
     SelfTag selfTag_;
     TargetProcessContext* targetContext_;
@@ -107,9 +108,11 @@ private:
     HANDLE readyEvent_{nullptr};
     HANDLE producerDoneEvent_{nullptr};
     HANDLE actionEvent_{nullptr};
+    HANDLE actionQueueErrorEvent_{nullptr};
     std::thread workerThread_;
     std::atomic<bool> started_{false};
     std::atomic<bool> circuitBreakerOpen_{false};
+    std::atomic<bool> actionQueueErrorReported_{false};
     std::array<Action, kMaxActionsPerBatch> ownedSyntheticReleases_{};
     std::size_t ownedSyntheticReleaseCount_{0};
 

@@ -114,7 +114,9 @@ InputDecision RemapEngine::HandleInput(
 
     const HWND foregroundWindow = GetForegroundWindow();
     if (foregroundWindow != nullptr) {
-        GetWindowThreadProcessId(foregroundWindow, &record.foregroundPid);
+        DWORD foregroundPid = 0;
+        GetWindowThreadProcessId(foregroundWindow, &foregroundPid);
+        record.foregroundPid = static_cast<ProcessId>(foregroundPid);
     }
     if (targetContext_ == nullptr || !targetContext_->IsTargetForeground() ||
         !TargetPointerRouteIsSafe(event, evaluation.batch)) {
@@ -144,7 +146,7 @@ InputDecision RemapEngine::HandleInput(
 
 void RemapEngine::SeedPhysicalState(
     DeviceKind device,
-    DWORD code,
+    ControlCode code,
     bool down) noexcept {
     rules_.SeedPhysicalState(device, code, down);
 }
@@ -233,7 +235,7 @@ void RemapEngine::RecordMaximumHookDuration(
     }
 }
 
-DWORD RemapEngine::TargetPid() const noexcept {
+ProcessId RemapEngine::TargetPid() const noexcept {
     return targetContext_ == nullptr ? 0 : targetContext_->TargetPid();
 }
 

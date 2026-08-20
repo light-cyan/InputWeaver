@@ -18,8 +18,9 @@ namespace {
         return false;
     }
 
+    const UINT virtualKey = static_cast<UINT>(action.code);
     const UINT mappedScanCode =
-        MapVirtualKeyW(static_cast<UINT>(action.code), MAPVK_VK_TO_VSC_EX);
+        MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC_EX);
     if (mappedScanCode == 0) {
         return false;
     }
@@ -63,7 +64,7 @@ namespace {
             input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
         }
     } else if (prefix == 0xE100U) {
-        input.ki.wVk = static_cast<WORD>(action.code);
+        input.ki.wVk = static_cast<WORD>(virtualKey);
         input.ki.wScan = 0;
     } else {
         return false;
@@ -76,7 +77,7 @@ namespace {
 }
 
 [[nodiscard]] bool GetMouseButtonFlags(
-    DWORD code,
+    ControlCode code,
     Transition transition,
     DWORD& flags,
     DWORD& mouseData) noexcept {
@@ -88,20 +89,20 @@ namespace {
 
     mouseData = 0;
     switch (code) {
-        case VK_LBUTTON:
+        case control::kMouseLeft:
             flags = isDown ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
             return true;
-        case VK_RBUTTON:
+        case control::kMouseRight:
             flags = isDown ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
             return true;
-        case VK_MBUTTON:
+        case control::kMouseMiddle:
             flags = isDown ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
             return true;
-        case VK_XBUTTON1:
+        case control::kMouseX1:
             flags = isDown ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
             mouseData = XBUTTON1;
             return true;
-        case VK_XBUTTON2:
+        case control::kMouseX2:
             flags = isDown ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
             mouseData = XBUTTON2;
             return true;
@@ -129,8 +130,8 @@ namespace {
             if (action.code != 0) {
                 return false;
             }
-            input.mi.dx = action.valueX;
-            input.mi.dy = action.valueY;
+            input.mi.dx = static_cast<LONG>(action.valueX);
+            input.mi.dy = static_cast<LONG>(action.valueY);
             input.mi.dwFlags = MOUSEEVENTF_MOVE;
             return true;
         case Transition::VerticalWheel:

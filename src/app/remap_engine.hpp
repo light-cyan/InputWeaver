@@ -44,7 +44,7 @@ public:
         const InputEvent& event,
         bool lowerIntegrityInjected,
         std::int64_t startCounter) noexcept override;
-    void SeedPhysicalState(DeviceKind device, DWORD code, bool down) noexcept override;
+    void SeedPhysicalState(DeviceKind device, ControlCode code, bool down) noexcept override;
     [[nodiscard]] bool HasCapturedInputs() const noexcept override;
     void FlushDiagnostics(std::int64_t startCounter) noexcept override;
 
@@ -64,7 +64,7 @@ private:
         HookDiagnosticRecord record,
         std::int64_t startCounter) noexcept;
     void RecordMaximumHookDuration(std::int64_t startCounter) noexcept;
-    [[nodiscard]] DWORD TargetPid() const noexcept;
+    [[nodiscard]] ProcessId TargetPid() const noexcept;
     [[nodiscard]] bool TargetPointerRouteIsSafe(
         const InputEvent& source,
         const ActionBatch& batch) const noexcept;

@@ -98,6 +98,10 @@ ActionQueuePushResult ActionScheduler::TrySchedule(
         if (actionEvent_ != nullptr) {
             SetEvent(actionEvent_);
         }
+    } else if (result == ActionQueuePushResult::Full &&
+               actionQueueErrorEvent_ != nullptr &&
+               !actionQueueErrorReported_.exchange(true, std::memory_order_acq_rel)) {
+        SetEvent(actionQueueErrorEvent_);
     }
     return result;
 }
@@ -108,6 +112,10 @@ bool ActionScheduler::CircuitBreakerOpen() const noexcept {
 
 HANDLE ActionScheduler::ProducerDoneEvent() const noexcept {
     return producerDoneEvent_;
+}
+
+HANDLE ActionScheduler::ActionQueueErrorEvent() const noexcept {
+    return actionQueueErrorEvent_;
 }
 
 ActionSchedulerMetrics ActionScheduler::Metrics() const noexcept {
@@ -121,13 +129,16 @@ ActionSchedulerMetrics ActionScheduler::Metrics() const noexcept {
 }
 
 bool ActionScheduler::CreateEvents(std::wstring& errorMessage) noexcept {
-    if (readyEvent_ != nullptr && producerDoneEvent_ != nullptr && actionEvent_ != nullptr) {
+    if (readyEvent_ != nullptr && producerDoneEvent_ != nullptr &&
+        actionEvent_ != nullptr && actionQueueErrorEvent_ != nullptr) {
         return true;
     }
     readyEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     producerDoneEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     actionEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (readyEvent_ != nullptr && producerDoneEvent_ != nullptr && actionEvent_ != nullptr) {
+    actionQueueErrorEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (readyEvent_ != nullptr && producerDoneEvent_ != nullptr &&
+        actionEvent_ != nullptr && actionQueueErrorEvent_ != nullptr) {
         return true;
     }
     const DWORD error = GetLastError();
@@ -138,7 +149,11 @@ bool ActionScheduler::CreateEvents(std::wstring& errorMessage) noexcept {
 }
 
 void ActionScheduler::CloseEvents() noexcept {
-    HANDLE* events[] = {&readyEvent_, &producerDoneEvent_, &actionEvent_};
+    HANDLE* events[] = {
+        &readyEvent_,
+        &producerDoneEvent_,
+        &actionEvent_,
+        &actionQueueErrorEvent_};
     for (HANDLE* event : events) {
         if (*event != nullptr) {
             CloseHandle(*event);
@@ -306,7 +321,9 @@ void ActionScheduler::RememberOwnedRelease(const ActionBatch& batch) noexcept {
         ownedSyntheticReleaseCount_, std::memory_order_relaxed);
 }
 
-void ActionScheduler::ForgetOwnedRelease(DeviceKind device, DWORD code) noexcept {
+void ActionScheduler::ForgetOwnedRelease(
+    DeviceKind device,
+    ControlCode code) noexcept {
     for (std::size_t index = 0; index < ownedSyntheticReleaseCount_; ++index) {
         if (ownedSyntheticReleases_[index].device != device ||
             ownedSyntheticReleases_[index].code != code) {
@@ -365,7 +382,7 @@ void ActionScheduler::OpenCircuit() noexcept {
     remapEngine_.DisableNewCaptures();
 }
 
-DWORD ActionScheduler::TargetPid() const noexcept {
+ProcessId ActionScheduler::TargetPid() const noexcept {
     return targetContext_ == nullptr ? 0 : targetContext_->TargetPid();
 }
 

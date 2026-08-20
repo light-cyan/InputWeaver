@@ -50,6 +50,7 @@ The repository also retains `legacy/MouseHookPrototype.cpp`, an unsuccessful exp
 - 2026-08-19 | Console termination | `Ctrl+C` is consumed without stopping the process. Physical `Ctrl+Shift+F12` is the interactive stop chord.
 - 2026-08-19 | Phase 1 completion | Low-level hooks, remap decisions, action scheduling, and application lifecycle are separated into cohesive modules. The strict canonical build, automated suite, `-fanalyzer`, and real 32-bit keyboard and mouse self-tag round trip pass; Phase 1 is complete.
 - 2026-08-20 | Mapping language v1 | `grammar.v1.md` defines the current `.krm` v1 syntax and runtime semantics, and `ImplementationMethod.v1.md` defines its compiler, dispatcher, cooperative task scheduler, cancellation, and output-ownership model. The original drafts and v0 specification are retained with the v1 documents.
+- 2026-08-20 | Post-Phase 1 hardening | A full action queue remains fail-open and now signals a one-per-runtime console error while preserving every rejection in metrics and optional JSONL diagnostics. Core input and rule data use standard platform-independent types; Win32 input and point conversion occurs at the Windows adapter boundary. The strict build, automated suite, and `-fanalyzer` pass, and `development/after-phase-1-and-grammar-design/ResearchReport.md` records the current assessment and architecture research.
 
 ## Repository Practices
 

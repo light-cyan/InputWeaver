@@ -151,6 +151,26 @@ bool WaitForRetry() noexcept {
            WaitForSingleObject(gConsoleStopEvent, 1000) == WAIT_OBJECT_0;
 }
 
+DWORD WaitForRuntime(ukr::AppRuntime& runtime, DWORD& waitError) {
+    const HANDLE waitHandles[] = {
+        runtime.StoppedEvent(),
+        gConsoleStopEvent,
+        runtime.ActionQueueErrorEvent()};
+    for (;;) {
+        const DWORD waitResult = WaitForMultipleObjects(3, waitHandles, FALSE, INFINITE);
+        if (waitResult != WAIT_OBJECT_0 + 2) {
+            waitError = waitResult == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+            return waitResult;
+        }
+
+        const ukr::AppRuntimeMetrics metrics = runtime.Metrics();
+        std::wcerr
+            << L"Runtime error: the action queue reached capacity; the triggering input "
+               L"was forwarded to keep the system responsive. "
+            << L"total_action_queue_rejections=" << metrics.rejectedActionPushes << L"\n";
+    }
+}
+
 bool SelectLocatedProcess(
     const ukr::win32::LocateResult& located,
     ukr::win32::LocatedProcess& selected) noexcept {
@@ -188,9 +208,8 @@ int RunObserver(
 
     std::wcout << L"Observer mode is active; no input will be suppressed or generated.\n"
                << L"Press physical Ctrl+Shift+F12 to stop.\n";
-    const HANDLE waitHandles[] = {runtime.StoppedEvent(), gConsoleStopEvent};
-    const DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
-    const DWORD waitError = waitResult == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+    DWORD waitError = ERROR_SUCCESS;
+    const DWORD waitResult = WaitForRuntime(runtime, waitError);
     if (waitResult == WAIT_OBJECT_0 + 1 || waitResult == WAIT_FAILED) {
         runtime.RequestStop();
     }
@@ -277,9 +296,8 @@ int RunTargeted(
             return 6;
         }
 
-        const HANDLE waitHandles[] = {runtime.StoppedEvent(), gConsoleStopEvent};
-        const DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
-        const DWORD waitError = waitResult == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+        DWORD waitError = ERROR_SUCCESS;
+        const DWORD waitResult = WaitForRuntime(runtime, waitError);
         if (waitResult == WAIT_OBJECT_0 + 1 || waitResult == WAIT_FAILED) {
             runtime.RequestStop();
         }
