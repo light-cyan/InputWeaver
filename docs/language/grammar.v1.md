@@ -46,7 +46,7 @@ Mouse.Middle:down ~>
         tap(Mouse.Left) |
     end;
 
-Pause:down ~> set(PAUSE, off);
+pause Pause:down ~> off;
 ```
 
 ## 词法规则
@@ -191,14 +191,27 @@ ACTION_GAP = 10ms;
 
 ### `PAUSE`
 
-`PAUSE` 是初始值为 `on` 的内蕴 `state`。`PAUSE[on]` 时运行时查询规则；`PAUSE[off]` 时不查询用户规则，物理输入直接放行。
+`PAUSE` 是初始值为 `on` 的内蕴 `state`。`PAUSE[on]` 时可以执行普通完整映射和事件规则；`PAUSE[off]` 时绕过普通映射与规则并放行物理输入。
 
 ```weave
-Pause:down ~> set(PAUSE, off);
-F12:down when LCtrl[held] and LShift[held] ~> toggle(PAUSE);
+pause Pause:down ~> off;
+pause F12:down when LCtrl[held] and LShift[held] => toggle;
+pause F11:down => on;
 ```
 
-修改 `PAUSE` 的规则与普通规则具有相同语法，可以包含条件和任意动作流。`PAUSE` 的值真正发生切换时，运行时取消全部在途和排队任务，唤醒所有等待，释放程序拥有的合成按键和鼠标按钮，并清除活跃完整映射。触发切换的任务也被取消，切换动作之后的动作不再执行。
+PAUSE 控制使用专用顶层语句，而不是普通动作流：
+
+```ebnf
+pause-rule   = "pause", event, [ "when", boolean-expression ], pause-arrow, pause-effect, ";" ;
+pause-arrow  = "=>" | "~>" ;
+pause-effect = "on" | "off" | "toggle" ;
+```
+
+`=>` 消费物理事件，`~>` 放行物理事件；两种形式都会停止处理该事件，本语法不接受继续型箭头。PAUSE 语句不能包含普通动作、间隔、等待或控制结构。`set(PAUSE, ...)` 和 `toggle(PAUSE)` 都是非法普通动作；布尔条件仍可读取 `PAUSE[on]` 或 `PAUSE[off]`，这种读取不会形成 PAUSE 控制语句。
+
+编译器把 PAUSE 语句存入独立于映射和普通规则的 PAUSE 控制索引。运行时只对物理候选输入查询该索引；查询发生在物理状态更新、强制停止识别以及适用的目标和指针路由检查之后，但在读取当前 `PAUSE` 值之前。第一条匹配的 PAUSE 语句同步应用效果，不创建任务，然后按照箭头消费或放行事件；没有 PAUSE 语句匹配时，只有 `PAUSE[on]` 才继续普通分派。
+
+效果真正改变 `PAUSE` 值时，运行时递增取消代际、拒绝过时代际发布、唤醒调度器、丢弃旧代际的就绪和定时任务、清除活跃映射并释放程序输出所有权。已经为 `on` 时再次应用 `on`，或已经为 `off` 时再次应用 `off`，仍然按照箭头决定事件是否消费，但不会产生新的取消转换。
 
 ### 强制停止
 
@@ -378,9 +391,9 @@ duration timeout = 1min;
 
 v1 的变量声明初值只接受与声明类型一致的字面量：`state` 使用 `on` 或 `off`，`number` 使用无单位数值，`duration` 使用带单位时间值。
 
-`set` 和 `toggle` 是按动作流顺序执行的运行时动作，不属于重复声明。变量修改是原子的，之后开始的事件和之后执行的控制表达式读取新值。
+`set` 和 `toggle` 按普通动作流顺序修改用户变量。变量更新是原子的，并对之后的事件和之后执行的控制表达式可见。`PAUSE` 只能通过专用顶层 PAUSE 语句修改。
 
-`TAP_DURATION` 和 `ACTION_GAP` 是只读配置量，不能作为 `set` 或 `toggle` 的目标；用户变量和 `PAUSE` 是可写运行值。
+`TAP_DURATION`、`ACTION_GAP` 和 `PAUSE` 都不能作为普通 `set` 或 `toggle` 的目标；用户变量仍是可写的普通运行值。
 
 ## 表达式
 

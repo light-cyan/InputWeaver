@@ -233,6 +233,19 @@ void WriteControl(std::ostream& output, ControlRef control)
     return value == RuleKind::Event ? "event" : "mapping-down";
 }
 
+[[nodiscard]] std::string_view PauseEffectName(PauseEffect value) noexcept
+{
+    switch (value) {
+    case PauseEffect::On:
+        return "on";
+    case PauseEffect::Off:
+        return "off";
+    case PauseEffect::Toggle:
+        return "toggle";
+    }
+    return "unknown";
+}
+
 } // namespace
 
 std::string DumpCompiledProgram(const CompiledProgram& program)
@@ -260,6 +273,8 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
            << " numbers=" << requirements.numberSlotCount
            << " durations=" << requirements.durationSlotCount
            << " mapping-slots=" << requirements.mappingSlotCount
+           << " pause-rules/event="
+           << requirements.maximumPauseRulesPerEvent
            << " rules/event=" << requirements.maximumRulesPerEvent
            << " predicate-steps/event="
            << requirements.maximumPredicateStepsPerEvent
@@ -391,6 +406,32 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         WriteControl(output, mapping.target);
         output << " source=";
         WriteSpan(output, mapping.source);
+        output << '\n';
+    }
+
+    output << "pause-control-buckets "
+           << program.PauseControlBuckets().size() << '\n';
+    for (std::size_t index = 0;
+         index < program.PauseControlBuckets().size();
+         ++index) {
+        const PauseControlBucket& bucket = program.PauseControlBuckets()[index];
+        output << "  p" << index << " key=";
+        WriteControl(output, bucket.key.control);
+        output << ':' << TransitionName(bucket.key.transition) << " rules=";
+        WriteRange(output, bucket.rules);
+        output << '\n';
+    }
+    output << "pause-control-rules " << program.PauseControlRules().size() << '\n';
+    for (std::size_t index = 0;
+         index < program.PauseControlRules().size();
+         ++index) {
+        const PauseControlRule& rule = program.PauseControlRules()[index];
+        output << "  p" << index << " condition=";
+        WriteId(output, 'e', rule.condition);
+        output << " delivery=" << DeliveryName(rule.delivery)
+               << " effect=" << PauseEffectName(rule.effect)
+               << " ordinal=" << rule.sourceOrdinal << " source=";
+        WriteSpan(output, rule.source);
         output << '\n';
     }
 

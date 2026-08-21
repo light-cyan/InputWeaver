@@ -22,7 +22,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 - `src/core/compiled_program.hpp` and `src/core/compiled_program.cpp` define every strong ID, primitive, table record, storage field, immutable accessor, builder, canonicalizer, and finalizer in the contract.
 - `src/core/program_validator.hpp` and `src/core/program_validator.cpp` recompute requirements and reject malformed storage before an immutable handle can exist.
 - `src/core/program_dump.hpp` and `src/core/program_dump.cpp` produce a deterministic complete diagnostic dump.
-- `tests/compiled_program_fixtures.hpp` and `tests/compiled_program_fixtures.cpp` construct the tap, complete mapping, and conditional repeat programs without a compiler.
+- `tests/compiled_program_fixtures.hpp` and `tests/compiled_program_fixtures.cpp` construct the tap, complete mapping, conditional repeat, and pause-control programs without a compiler.
 - `tests/compiled_program_tests.cpp` verifies valid construction, canonicalization, immutable access, stable golden dumps, and representative corruption of every cross-table subsystem.
 - `development/phase-2/Verification.md` records the completed verification commands and evidence.
 
@@ -30,7 +30,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 
 ### P2.1: representation
 
-- Define the schema version, invalid sentinel, strong IDs, ranges, UTF-8 source spans, duration representation, resolved controls, event keys, target settings, typed values, expression instructions, action instructions, rules, mappings, requirements, and debug records.
+- Define the schema version, invalid sentinel, strong IDs, ranges, UTF-8 source spans, duration representation, resolved controls, event keys, target settings, typed values, expression instructions, action instructions, ordinary rules, pause-control rules, mappings, requirements, and debug records.
 - Define `CompiledProgramStorage` as the complete mutable construction shape.
 - Define `CompiledProgram` as an immutable owner with const references and spans only.
 
@@ -38,7 +38,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 
 - Provide `CompiledProgramBuilder`, explicit requirement derivation, and move-only finalization into `std::shared_ptr<const CompiledProgram>`.
 - Canonicalize and deduplicate strings, controls, value references, number constants, and duration constants while remapping every dependent ID.
-- Sort mapping slots and event buckets deterministically while preserving mapping references and source rule order.
+- Sort mapping slots, pause-control buckets, and ordinary event buckets deterministically while preserving mapping references and global source rule order.
 - Return validation errors and no program when finalization fails.
 
 ### P2.3: structural validation
@@ -46,7 +46,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 - Validate schema and table limits, checked IDs and ranges, UTF-8 and API-bound strings, source lines and spans, typed user values, canonical pools, and debug coverage.
 - Validate expression stack types, operator signatures, forward branches, merge states, result paths, declared stack depth, and instruction operands.
 - Validate action references, expression signatures, writable values, repeat frames, local targets, cooperative backward edges, reachable `End`, and declared ownership bounds.
-- Validate event bucket ordering and coverage, rule invariants, mapping links, source ordinals, exact merged control uses, and exact recomputed requirements.
+- Validate pause-control and ordinary event bucket ordering and coverage, rule invariants, mapping links, globally unique source ordinals, exact merged control uses, and exact recomputed requirements.
 - Bound validation output to `kMaximumProgramValidationErrors`.
 
 ### P2.4: deterministic inspection
@@ -60,6 +60,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 - Finalize the required tap fixture and prove event, action, control-use, ownership, and timing metadata.
 - Finalize the required complete mapping fixture and prove mapping slot, mapping descriptor, rule, and repeat capability metadata.
 - Finalize the required conditional repeat fixture and prove typed user state, expressions, constants, repeat frames, cooperative back edges, and action gaps.
+- Finalize the required pause-control fixture and prove the dedicated index, stop-only delivery, synchronous effects, and zero task requirements.
 - Freeze the complete dump of each fixture with a deterministic golden hash.
 - Reject corrupt IDs, ranges, stack merges, backward jumps, event buckets, mapping links, requirements, control requirements, and debug spans.
 - Prove canonicalization makes equivalent construction histories produce identical dumps.
@@ -76,7 +77,7 @@ The compiler and runtime start only after the Phase 2 completion gate. They are 
 
 - Every field and invariant in `CompiledProgramDesign.md` has an implementation path and validation path.
 - The only way to obtain a `CompiledProgram` handle is successful finalization of canonical validated storage.
-- The three required fixtures finalize and their deterministic dumps match frozen golden values.
+- The four required fixtures finalize and their deterministic dumps match frozen golden values.
 - Representative corruptions across every table family are rejected with bounded structured errors.
 - The contract implementation and tests compile without Win32 headers.
 - The strict build, all automated tests, core `-fanalyzer`, platform-dependency audit, and `git diff --check` pass.

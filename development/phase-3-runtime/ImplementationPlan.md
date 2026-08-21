@@ -68,6 +68,9 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 ## R3: physical state and dispatcher
 
 - Convert normalized physical keyboard down into `Down` or `Repeat` after updating stable physical state, and handle mouse button down and up.
+- After physical-state update, force-stop recognition, and applicable target and pointer routing checks, binary-search the dedicated pause-control buckets before consulting the current `PAUSE` value.
+- Evaluate pause-control predicates against the event snapshot in source order; the first match synchronously applies `On`, `Off`, or `Toggle`, returns its consume or observe decision, and creates no ordinary event transaction, mapping, or task.
+- When no pause-control rule matches, forward immediately while `PAUSE` is off and enter ordinary mapping and rule dispatch only while `PAUSE` is on.
 - Binary-search event buckets, evaluate every rule for one physical event against one stable logical-state snapshot, preserve source order, combine delivery and flow, and collect actions or mappings in fixed transaction scratch.
 - Process the active mapping lifecycle before ordinary event rules so a source repeat or release cannot be intercepted by a later stop rule, while still allowing ordinary rules to observe the event afterward.
 - Reserve the complete event transaction before committing mapping activation or returning suppression.
@@ -97,7 +100,7 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 - Implement cancellation generations for `PAUSE`, reload, target loss, fatal failure, force stop, and shutdown.
 - On an invalidating transition, advance the monotonic generation before accepting another transaction, reject stale publications, wake the scheduler, discard old-generation ready and timed tasks, clear mappings, and release ownership in deterministic order.
-- Ensure an off-on pause cycle cannot revive a task from the earlier generation and ensure the task that changes `PAUSE` executes no instruction after that state transition.
+- Ensure an off-on pause cycle cannot revive a task from the earlier generation. A real pause-control value change performs the invalidating transition synchronously; an idempotent `On` or `Off` still returns its delivery decision without advancing the generation.
 - Publish bounded immutable snapshots containing program identity, source spans, rule decisions, task positions, deadlines, cancellation reasons, evaluation faults, and ownership changes.
 - Keep console, file, process, waiting, allocation, and injection work outside the hook callback.
 
@@ -115,16 +118,17 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 - Activation tests cover every requirement at acceptance and rejection boundaries and prove transactional publication.
 - Expression tests cover every opcode, operator signature, stack depth, branch merge, short circuit, physical read, user value, built-in value, finite-number rule, and duration fault.
-- Dispatcher tests cover all arrows, rule overlap, stable snapshots, source order, empty action rules, mapping precedence, atomic reservation, and fail-open failure.
+- Dispatcher tests cover all ordinary arrows, pause-control `On`, `Off`, and `Toggle`, pause delivery, first-match source order, recovery while paused, injected-input bypass, idempotent effects, rule overlap, stable snapshots, empty action rules, mapping precedence, atomic reservation, and fail-open failure.
 - Scheduler tests cover every action opcode, fake time, tap phases, gap timing, task ordering, nested repeat frames, cooperative loops, process launching, and faults.
 - Ownership tests cover overlapping tasks and mappings, repeated acquisition, unowned release, cancellation during tap, target loss, partial injection, normal end, and shutdown.
-- Fixture tests execute the tap, mapping, and conditional repeat programs from Phase 2 without invoking compiler code.
+- Fixture tests execute the tap, mapping, conditional repeat, and pause-control programs from Phase 2 without invoking compiler code.
 - Windows regression tests cover normalization, self-tag loopback, target routing, queue full, partial injection, cleanup, and force stop.
 - Windows control tests cover every catalog entry's declared input, physical-state, down/up, and repeat capabilities plus normal, E0, E1, layout-sensitive, and mouse output recipes.
 
 ## Required semantic preservation
 
 - One physical event updates physical state before predicate evaluation, and every rule scanned for that event sees one stable logical-state snapshot unaffected by tasks selected by the same event.
+- Physical pause-control dispatch runs before the ordinary pause guard, never accepts injected input, applies only one synchronous effect, and creates no action task or mapping transaction.
 - Event transaction publication is all-or-nothing: selected mappings, tasks, consumption, and output state are committed together or the event is forwarded with no partial state.
 - Empty action rules apply delivery and flow without creating tasks, and active complete mappings retain their latched target through source repeat and release.
 - Ready and timed tasks execute on one cooperative task thread; explicit gaps, waits, tap duration, and yielded loop back edges are the only scheduling boundaries defined by their action semantics.
@@ -156,7 +160,7 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 ## Open design gates
 
-The runtime may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` affects pause control, stable event snapshots, backend control identity or output recipes, or executable resolution. Each resolved decision must be reflected in the language specification when user-visible, in the Phase 2 contract when representational, and in runtime tests before implementation is accepted.
+The runtime may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` affects stable event snapshots, the Weave v1 backend control identity or output recipes, or executable resolution. Each resolved decision must be reflected in the language specification when user-visible, in the Phase 2 contract when representational, and in runtime tests before implementation is accepted. `docs/language/grammar.v2.md` does not change this branch's frozen v1 contract.
 
 ## Handoff artifact
 

@@ -208,4 +208,30 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
     return storage;
 }
 
+CompiledProgramStorage MakePauseControlFixtureStorage()
+{
+    static const std::string source =
+        "TARGET = GLOBAL;\n"
+        "pause F6:down => toggle;\n";
+    CompiledProgramStorage storage{};
+    SetCommonSource(storage, "fixture.pause-control.weave", source);
+    storage.controls = {
+        {DeviceKind::Keyboard, control::kF6},
+    };
+    storage.controlRequirements = {
+        {ControlRefId{0U}, ToControlUseBits(ControlUse::EventSource)},
+    };
+    storage.pauseControlRules.push_back({
+        ExpressionId{},
+        Delivery::Consume,
+        PauseEffect::Toggle,
+        0U,
+        WholeSource(storage)});
+    storage.pauseControlBuckets.push_back({
+        {{DeviceKind::Keyboard, control::kF6}, EventTransition::Down},
+        {0U, 1U}});
+    Derive(storage);
+    return storage;
+}
+
 } // namespace inputweaver::test

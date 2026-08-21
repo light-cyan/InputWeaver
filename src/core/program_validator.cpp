@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -171,8 +172,7 @@ template <typename Id>
 {
     return value.domain == ValueDomain::UserState
         || value.domain == ValueDomain::UserNumber
-        || value.domain == ValueDomain::UserDuration
-        || value.domain == ValueDomain::BuiltinState;
+        || value.domain == ValueDomain::UserDuration;
 }
 
 [[nodiscard]] bool ValidateValueRefShape(
@@ -1229,10 +1229,118 @@ void ValidateUserValuesAndDebug(
     }
 }
 
+void ValidatePauseControls(
+    const CompiledProgramStorage& storage,
+    ValidationContext& context,
+    std::vector<std::uint8_t>& expectedControlUses,
+    std::set<std::uint32_t>& sourceOrdinals)
+{
+    std::vector<bool> coveredRules(storage.pauseControlRules.size(), false);
+    EventKey previousKey{};
+    bool havePreviousKey = false;
+    for (std::size_t bucketIndex = 0;
+         bucketIndex < storage.pauseControlBuckets.size();
+         ++bucketIndex) {
+        const PauseControlBucket& bucket = storage.pauseControlBuckets[bucketIndex];
+        const std::string bucketLocation = At("pauseControlBuckets", bucketIndex);
+        if (!ValidControl(bucket.key.control)
+            || !ValidEventTransition(bucket.key.transition)
+            || (havePreviousKey && previousKey >= bucket.key)) {
+            context.Add(
+                ProgramValidationErrorCode::Rule,
+                bucketLocation,
+                "pause-control buckets must have strictly sorted valid keys");
+        }
+        previousKey = bucket.key;
+        havePreviousKey = true;
+        AddExpectedControlUse(
+            storage,
+            expectedControlUses,
+            bucket.key.control,
+            ControlUse::EventSource,
+            context,
+            bucketLocation);
+
+        if (!ValidRange(bucket.rules, storage.pauseControlRules.size())) {
+            context.Add(
+                ProgramValidationErrorCode::Range,
+                bucketLocation + ".rules",
+                "pause-control rule range is outside its table");
+            continue;
+        }
+        std::uint32_t previousOrdinal = 0U;
+        bool havePreviousOrdinal = false;
+        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
+            + bucket.rules.count;
+        for (std::uint64_t rawIndex = bucket.rules.begin;
+             rawIndex < end;
+             ++rawIndex) {
+            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
+            if (coveredRules[ruleIndex]) {
+                context.Add(
+                    ProgramValidationErrorCode::Range,
+                    bucketLocation + ".rules",
+                    "pause-control bucket rule ranges overlap");
+            }
+            coveredRules[ruleIndex] = true;
+            const PauseControlRule& rule = storage.pauseControlRules[ruleIndex];
+            const std::string ruleLocation = At("pauseControlRules", ruleIndex);
+            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
+                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".sourceOrdinal",
+                    "rule source ordinals must be globally unique and increase in a bucket");
+            }
+            previousOrdinal = rule.sourceOrdinal;
+            havePreviousOrdinal = true;
+            if (!ValidSpan(rule.source, storage.source.byteLength)) {
+                context.Add(
+                    ProgramValidationErrorCode::Source,
+                    ruleLocation + ".source",
+                    "pause-control source span is outside the source file");
+            }
+            if (rule.condition.IsValid()
+                && (!ValidId(rule.condition, storage.expressions.size())
+                    || storage.expressions[rule.condition.value].resultType
+                        != ExpressionType::Boolean)) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".condition",
+                    "pause-control condition must be invalid or Boolean");
+            }
+            if (rule.delivery != Delivery::Observe
+                && rule.delivery != Delivery::Consume) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".delivery",
+                    "pause-control delivery value is unknown");
+            }
+            if (rule.effect != PauseEffect::On
+                && rule.effect != PauseEffect::Off
+                && rule.effect != PauseEffect::Toggle) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".effect",
+                    "pause-control effect is unknown");
+            }
+        }
+    }
+    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
+            return !value;
+        })) {
+        context.Add(
+            ProgramValidationErrorCode::Range,
+            "pauseControlBuckets",
+            "pause-control bucket ranges do not cover the complete rule table");
+    }
+}
+
 void ValidateRulesAndMappings(
     const CompiledProgramStorage& storage,
     ValidationContext& context,
-    std::vector<std::uint8_t>& expectedControlUses)
+    std::vector<std::uint8_t>& expectedControlUses,
+    std::set<std::uint32_t>& sourceOrdinals)
 {
     std::vector<std::uint32_t> mappingRuleCounts(storage.mappings.size(), 0U);
     std::vector<std::uint32_t> slotMappingCounts(storage.mappingSlots.size(), 0U);
@@ -1285,7 +1393,6 @@ void ValidateRulesAndMappings(
     std::vector<bool> coveredRules(storage.rules.size(), false);
     EventKey previousKey{};
     bool havePreviousKey = false;
-    std::set<std::uint32_t> ordinals;
     for (std::size_t bucketIndex = 0;
          bucketIndex < storage.eventBuckets.size();
          ++bucketIndex) {
@@ -1334,11 +1441,11 @@ void ValidateRulesAndMappings(
             const CompiledRule& rule = storage.rules[ruleIndex];
             const std::string ruleLocation = At("rules", ruleIndex);
             if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
-                || !ordinals.insert(rule.sourceOrdinal).second) {
+                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
                 context.Add(
                     ProgramValidationErrorCode::Rule,
                     ruleLocation + ".sourceOrdinal",
-                    "rule source ordinals must be unique and increasing in a bucket");
+                    "rule source ordinals must be globally unique and increase in a bucket");
             }
             previousOrdinal = rule.sourceOrdinal;
             havePreviousOrdinal = true;
@@ -1581,6 +1688,33 @@ ProgramRequirements ComputeProgramRequirements(
     requirements.maximumTransactionItemsPerEvent =
         requirements.maximumMappingOperationsPerEvent;
 
+    std::map<EventKey, std::uint32_t> predicateStepsByEvent;
+    for (const PauseControlBucket& bucket : storage.pauseControlBuckets) {
+        requirements.maximumPauseRulesPerEvent = (std::max)(
+            requirements.maximumPauseRulesPerEvent,
+            bucket.rules.count);
+        if (!ValidRange(bucket.rules, storage.pauseControlRules.size())) {
+            continue;
+        }
+        std::uint32_t predicateSteps = 0U;
+        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
+            + bucket.rules.count;
+        for (std::uint64_t rawIndex = bucket.rules.begin;
+             rawIndex < end;
+             ++rawIndex) {
+            const PauseControlRule& rule = storage.pauseControlRules[
+                static_cast<std::size_t>(rawIndex)];
+            if (ValidId(rule.condition, storage.expressions.size())) {
+                predicateSteps = SaturatingAdd(
+                    predicateSteps,
+                    storage.expressions[rule.condition.value].code.count);
+            }
+        }
+        predicateStepsByEvent[bucket.key] = SaturatingAdd(
+            predicateStepsByEvent[bucket.key],
+            predicateSteps);
+    }
+
     for (const EventBucket& bucket : storage.eventBuckets) {
         requirements.maximumRulesPerEvent = (std::max)(
             requirements.maximumRulesPerEvent,
@@ -1609,8 +1743,8 @@ ProgramRequirements ComputeProgramRequirements(
         const std::uint32_t mappingOperations = HasMappingSource(
             storage,
             bucket.key.control) ? 1U : 0U;
-        requirements.maximumPredicateStepsPerEvent = (std::max)(
-            requirements.maximumPredicateStepsPerEvent,
+        predicateStepsByEvent[bucket.key] = SaturatingAdd(
+            predicateStepsByEvent[bucket.key],
             predicateSteps);
         requirements.maximumTasksPerEvent = (std::max)(
             requirements.maximumTasksPerEvent,
@@ -1618,6 +1752,11 @@ ProgramRequirements ComputeProgramRequirements(
         requirements.maximumTransactionItemsPerEvent = (std::max)(
             requirements.maximumTransactionItemsPerEvent,
             SaturatingAdd(tasks, mappingOperations));
+    }
+    for (const auto& entry : predicateStepsByEvent) {
+        requirements.maximumPredicateStepsPerEvent = (std::max)(
+            requirements.maximumPredicateStepsPerEvent,
+            entry.second);
     }
     return requirements;
 }
@@ -1647,6 +1786,8 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"actionCode", storage.actionCode.size()},
         {"mappingSlots", storage.mappingSlots.size()},
         {"mappings", storage.mappings.size()},
+        {"pauseControlBuckets", storage.pauseControlBuckets.size()},
+        {"pauseControlRules", storage.pauseControlRules.size()},
         {"eventBuckets", storage.eventBuckets.size()},
         {"rules", storage.rules.size()},
     };
@@ -1710,10 +1851,17 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
                 | ToControlUseBits(ControlUse::OutputDownUp));
         }
     }
+    std::set<std::uint32_t> sourceOrdinals;
+    ValidatePauseControls(
+        storage,
+        context,
+        expectedControlUses,
+        sourceOrdinals);
     ValidateRulesAndMappings(
         storage,
         context,
-        expectedControlUses);
+        expectedControlUses,
+        sourceOrdinals);
     ValidateControlRequirements(storage, expectedControlUses, context);
     ValidateDebugSpans(storage, context);
 

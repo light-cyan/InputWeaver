@@ -367,7 +367,7 @@ The program owns a source-span table parallel to the flat action instruction tab
 
 Every repeat frame stores an unsigned 64-bit `index` and a finite double `limit`. A descriptor frame index is local to one `TaskInstance`; task instances never share repeat frames.
 
-`Set` may write a user value or `BuiltinState::Pause`; it may not write `BuiltinDuration`. `Toggle` may write a user state or `BuiltinState::Pause`. `Release` raises a task action fault when the current task does not own the referenced control.
+`Set` and `Toggle` may write user values only. `BuiltinState::Pause` remains readable by expressions but is writable only through the dedicated pause-control tables. `Release` raises a task action fault when the current task does not own the referenced control.
 
 `maximumOwnedControlCount` is the conservative number of distinct control identities that the task may own, not the sum of ownership acquisitions. One fixed ownership record per distinct control stores a checked acquisition count; counter overflow is a fatal runtime fault.
 
@@ -411,7 +411,34 @@ struct CompiledRule final {
 
 An invalid `condition` means unconditional true. For `Event`, `mapping` is invalid and `action` may be invalid. For `MappingDown`, `mapping` is valid, `action` is invalid, `delivery` is `Consume`, and `flow` is `Stop`.
 
-`sourceOrdinal` is unique and increases with top-level source order. It remains available for deterministic diagnostics even though rules are physically grouped by event.
+`sourceOrdinal` is unique across ordinary, mapping-down, and pause-control rules and increases with top-level source order. It remains available for deterministic diagnostics even though rules are physically grouped by event and channel.
+
+### Pause-control rules and index
+
+```cpp
+enum class PauseEffect : std::uint8_t {
+    On,
+    Off,
+    Toggle,
+};
+
+struct PauseControlRule final {
+    ExpressionId condition{};
+    Delivery delivery{};
+    PauseEffect effect{};
+    std::uint32_t sourceOrdinal{};
+    SourceSpan source{};
+};
+
+struct PauseControlBucket final {
+    EventKey key{};
+    TableRange rules{};
+};
+```
+
+Pause-control rules are stored separately from ordinary rules and mappings. Their source syntax has one of the effects `on`, `off`, or `toggle` and one of the stop-only deliveries consume or observe. They contain no `ActionProgramId`, mapping, flow field, or task state.
+
+Pause-control buckets are strictly sorted by `EventKey`; their ranges are disjoint, cover the complete pause-control rule table, and preserve global source ordinals. Runtime scans this index after physical-state and force-stop processing and applicable target routing but before the ordinary `PAUSE` guard. A matching rule applies its effect synchronously and creates no task or event transaction item.
 
 ### Event buckets
 
@@ -478,6 +505,7 @@ struct ProgramRequirements final {
     std::uint32_t numberSlotCount{};
     std::uint32_t durationSlotCount{};
     std::uint32_t mappingSlotCount{};
+    std::uint32_t maximumPauseRulesPerEvent{};
     std::uint32_t maximumRulesPerEvent{};
     std::uint32_t maximumTasksPerEvent{};
     std::uint32_t maximumExpressionStackDepth{};
@@ -487,7 +515,7 @@ struct ProgramRequirements final {
 };
 ```
 
-Every field is derived from the final tables and independently recomputed by validation. Runtime activation rejects a program when fixed task, queue, expression scratch, repeat-frame, ownership, mapping, or runtime-value capacities cannot satisfy these requirements.
+Every field is derived from the final tables and independently recomputed by validation. `maximumPredicateStepsPerEvent` includes the pause-control and ordinary predicate work reachable for the same event key, while pause-control rules do not contribute task, mapping-operation, or transaction-item requirements. Runtime activation rejects a program when fixed task, queue, expression scratch, repeat-frame, ownership, mapping, or runtime-value capacities cannot satisfy these requirements.
 
 `requiresProcessLaunch` is true when any action instruction is `Exec`. It allows the application and future UI to expose the executable-configuration capability before activation.
 
@@ -533,6 +561,8 @@ struct CompiledProgramStorage final {
 
     std::vector<MappingSlotDescriptor> mappingSlots;
     std::vector<MappingDescriptor> mappings;
+    std::vector<PauseControlBucket> pauseControlBuckets;
+    std::vector<PauseControlRule> pauseControlRules;
     std::vector<EventBucket> eventBuckets;
     std::vector<CompiledRule> rules;
 
@@ -577,7 +607,8 @@ Compiler diagnostics describe source errors. Program validation errors describe 
 - Every expression instruction has valid operands, valid operator signatures, forward-only targets, consistent stack types at merges, a bounded declared stack depth, and exactly one correctly typed result on every path.
 - Every action descriptor ends with a reachable `End`, every target stays inside its descriptor, every expression operand has the required result type, every repeat frame is in range, and every backward edge is an immediately yielded loop edge.
 - Action instructions reference valid controls, values, expressions, and strings; `Set` and `Toggle` targets are writable; unused operands are zero.
-- Event buckets are strictly sorted and unique; rule ranges are disjoint, complete, and source ordered within each bucket.
+- Pause-control and ordinary event buckets are independently strictly sorted and unique; each rule table has disjoint, complete, source-ordered ranges, and source ordinals are globally unique across both channels.
+- Every pause-control rule has a Boolean or absent condition, observe or consume delivery, a defined pause effect, a valid source span, and no ordinary action or mapping representation.
 - Every rule condition is invalid or Boolean, and every rule kind satisfies its action, mapping, delivery, and flow field invariants.
 - Mapping slots are strictly sorted and unique; every mapping references a valid slot and target; every `MappingDown` rule is in the matching source `Down` bucket.
 - Control requirements exactly cover and merge all source, state-query, output, and mapping uses.
@@ -602,7 +633,7 @@ Activation is transactional. Runtime state is initialized and all capacity check
 
 ## Runtime access model
 
-The dispatcher performs binary search in `eventBuckets`, evaluates conditions with a preallocated typed stack, scans the contiguous rule span, and writes selected action and mapping IDs into a preallocated event transaction. It reserves the full transaction before committing mapping state or returning `Suppress`.
+The dispatcher first searches `pauseControlBuckets` without consulting the current `PAUSE` value. A matching pause-control rule applies one synchronous effect and returns its delivery decision. When no pause-control rule matches and `PAUSE` is on, the dispatcher searches `eventBuckets`, evaluates conditions with a preallocated typed stack, scans the contiguous ordinary rule span, and writes selected action and mapping IDs into a preallocated event transaction. It reserves the full transaction before committing mapping state or returning `Suppress`.
 
 The task scheduler stores program IDs and local positions, not instruction pointers. Holding a shared immutable program handle keeps all referenced tables alive. A program reload publishes a new handle only after old-generation tasks and mapping state have been cancelled and their outputs released.
 
@@ -634,6 +665,11 @@ state enabled = on;
 F6:down when enabled[on] => repeat 2 do tap(F7) | end;
 ```
 
-The first fixture proves event indexing, consumption, task creation, `Tap`, timed wakeup, and paired release. The second proves mapping slots and down, repeat, and up lifecycle handling. The third proves value layout, Boolean expressions, repeat frames, backward-yield validation, and action gaps.
+```weave
+TARGET = GLOBAL;
+pause F6:down => toggle;
+```
+
+The first fixture proves event indexing, consumption, task creation, `Tap`, timed wakeup, and paired release. The second proves mapping slots and down, repeat, and up lifecycle handling. The third proves value layout, Boolean expressions, repeat frames, backward-yield validation, and action gaps. The fourth proves the dedicated pause-control index, stop-only delivery, synchronous effect representation, and zero task requirement.
 
 Compiler output and hand-built runtime fixtures must produce the same deterministic dump for the same semantic program. This equality is the principal convergence gate for the forked Phase 2 workstreams.

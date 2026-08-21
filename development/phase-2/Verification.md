@@ -2,7 +2,7 @@
 
 ## Result
 
-The Phase 2 implementation gate passes in the working tree on 2026-08-21. The immutable `CompiledProgram` representation, finalizer, canonicalizer, validator, deterministic dump, fixtures, and contract tests are implemented. Review and a frozen handoff commit remain application-level Git actions before the successor phases begin.
+The Phase 2 implementation gate passes on 2026-08-21. The immutable `CompiledProgram` representation, dedicated pause-control channel, finalizer, canonicalizer, validator, deterministic dump, fixtures, and contract tests are implemented as the frozen successor-phase handoff.
 
 ## Implemented files
 
@@ -10,7 +10,7 @@ The Phase 2 implementation gate passes in the working tree on 2026-08-21. The im
 - `src/core/compiled_program.cpp` implements immutable access, canonical pool remapping, mapping-slot and event-bucket ordering, builder operations, and validated finalization.
 - `src/core/program_validator.hpp` and `src/core/program_validator.cpp` implement exact requirement derivation and bounded structural validation.
 - `src/core/program_dump.hpp` and `src/core/program_dump.cpp` implement the locale-independent complete diagnostic dump.
-- `tests/compiled_program_fixtures.*` implement the three required hand-built programs.
+- `tests/compiled_program_fixtures.*` implement the four required hand-built programs.
 - `tests/compiled_program_tests.cpp` implements contract, canonicalization, coverage, golden, corruption, and validation-limit tests.
 
 ## Strict build and tests
@@ -26,11 +26,12 @@ All CompiledProgram contract tests passed.
 
 ## Contract coverage
 
-- The tap, complete mapping, and conditional repeat fixtures finalize successfully and return `std::shared_ptr<const CompiledProgram>`.
-- Their canonical dumps are frozen by FNV-1a 64-bit golden values `4885277168945355486`, `5811540947230941668`, and `7609375290192293395` respectively.
+- The tap, complete mapping, conditional repeat, and pause-control fixtures finalize successfully and return `std::shared_ptr<const CompiledProgram>`.
+- Their canonical dumps are frozen by FNV-1a 64-bit golden values `16250531285494687580`, `6279514400355555682`, `16791086043516604065`, and `16678841533137656072` respectively.
 - An additional valid coverage program constructs every `ExpressionOpcode`, every `ActionOpcode`, every unary operator, every binary operator, every value domain, typed user storage, both control-use directions, process-launch requirements, repeat frames, and cooperative backward control flow.
+- Pause-control coverage constructs `On`, `Off`, and `Toggle`, proves zero task requirements, and rejects ordinary action-program writes to `BuiltinState::Pause`.
 - Equivalent programs with duplicate and differently ordered input pools finalize to identical dumps.
-- Corrupt schema, source IDs, ranges, UTF-8, line starts, values, expression stack merges, action control IDs, backward jumps, rule kinds, event buckets, mapping links, control requirements, resource requirements, and debug spans are rejected with no immutable program.
+- Corrupt schema, source IDs, ranges, UTF-8, line starts, values, expression stack merges, action control IDs, backward jumps, pause effects, rule kinds, pause-control buckets, ordinary event buckets, mapping links, control requirements, resource requirements, and debug spans are rejected with no immutable program.
 - Validation stops at `kMaximumProgramValidationErrors`.
 
 ## Static analysis

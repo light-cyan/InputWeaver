@@ -268,7 +268,7 @@ void Check(bool condition, std::string_view name)
         storage.expressionCode.size(),
         span);
 
-    storage.actionPrograms = {{{0U, 20U}, 1U, 1U, span}};
+    storage.actionPrograms = {{{0U, 18U}, 1U, 1U, span}};
     storage.actionCode = {
         {ActionOpcode::Press, 0U, 0U},
         {ActionOpcode::Release, 0U, 0U},
@@ -278,17 +278,15 @@ void Check(bool condition, std::string_view name)
         {ActionOpcode::Set, 0U, stateValue.value},
         {ActionOpcode::Set, 1U, numberValue.value},
         {ActionOpcode::Set, 2U, durationValue.value},
-        {ActionOpcode::Set, 3U, stateValue.value},
         {ActionOpcode::Toggle, 0U, 0U},
-        {ActionOpcode::Toggle, 3U, 0U},
         {ActionOpcode::Exec, 4U, 0U},
-        {ActionOpcode::JumpIfFalse, booleanBranch.value, 14U},
-        {ActionOpcode::Jump, 14U, 0U},
+        {ActionOpcode::JumpIfFalse, booleanBranch.value, 12U},
+        {ActionOpcode::Jump, 12U, 0U},
         {ActionOpcode::RepeatInit, 0U, numberValue.value},
-        {ActionOpcode::RepeatCheck, 0U, 19U},
+        {ActionOpcode::RepeatCheck, 0U, 17U},
         {ActionOpcode::RepeatNext, 0U, 0U},
         {ActionOpcode::Yield, 0U, 0U},
-        {ActionOpcode::Jump, 15U, 0U},
+        {ActionOpcode::Jump, 13U, 0U},
         {ActionOpcode::End, 0U, 0U},
     };
     storage.debugInfo.actionInstructionSpans.assign(storage.actionCode.size(), span);
@@ -306,20 +304,23 @@ void Check(bool condition, std::string_view name)
 
 void TestRequiredFixtures()
 {
-    constexpr std::array<std::uint64_t, 3> expectedDumpHashes{
-        4885277168945355486ULL,
-        5811540947230941668ULL,
-        7609375290192293395ULL,
+    constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
+        16250531285494687580ULL,
+        6279514400355555682ULL,
+        16791086043516604065ULL,
+        16678841533137656072ULL,
     };
-    const std::array<inputweaver::CompiledProgramStorage, 3> storages{
+    const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
         inputweaver::test::MakeMappingFixtureStorage(),
         inputweaver::test::MakeConditionalRepeatFixtureStorage(),
+        inputweaver::test::MakePauseControlFixtureStorage(),
     };
-    constexpr std::array<std::string_view, 3> names{
+    constexpr std::array<std::string_view, 4> names{
         "tap fixture",
         "mapping fixture",
         "conditional repeat fixture",
+        "pause-control fixture",
     };
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto program = FinalizeFixture(storages[index], names[index]);
@@ -365,10 +366,89 @@ void TestBuilderAndImmutableAccess()
     if (result.program != nullptr) {
         Check(result.program->SchemaVersion() == 1U, "immutable program exposes schema");
         Check(result.program->Rules().size() == 1U, "immutable program exposes const rule span");
+        Check(result.program->PauseControlRules().empty(),
+            "immutable program exposes const pause-control span");
     }
 
     using RulesReturn = decltype(std::declval<const inputweaver::CompiledProgram&>().Rules());
     static_assert(std::is_same_v<RulesReturn, std::span<const inputweaver::CompiledRule>>);
+    using PauseRulesReturn = decltype(
+        std::declval<const inputweaver::CompiledProgram&>().PauseControlRules());
+    static_assert(std::is_same_v<
+        PauseRulesReturn,
+        std::span<const inputweaver::PauseControlRule>>);
+}
+
+void TestPauseControlContract()
+{
+    using namespace inputweaver;
+    for (const PauseEffect effect : {
+             PauseEffect::On,
+             PauseEffect::Off,
+             PauseEffect::Toggle}) {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.pauseControlRules[0].effect = effect;
+        const auto program = FinalizeFixture(
+            std::move(storage),
+            "pause-control effect");
+        Check(program != nullptr, "every pause-control effect validates");
+        if (program != nullptr) {
+            Check(program->Requirements().maximumPauseRulesPerEvent == 1U,
+                "pause-control rule requirement is derived");
+            Check(program->Requirements().maximumTasksPerEvent == 0U,
+                "pause-control rules create no task requirement");
+        }
+    }
+    {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.pauseControlRules[0].effect = static_cast<PauseEffect>(99U);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Rule),
+            "unknown pause-control effect is rejected");
+    }
+    {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.pauseControlBuckets[0].rules = {1U, 1U};
+        storage.requirements = ComputeProgramRequirements(storage);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Range),
+            "invalid pause-control bucket range is rejected");
+    }
+    {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.rules.push_back({
+            ExpressionId{},
+            ActionProgramId{},
+            MappingId{},
+            Delivery::Observe,
+            MatchFlow::Stop,
+            RuleKind::Event,
+            0U,
+            storage.pauseControlRules[0].source});
+        storage.eventBuckets.push_back({
+            storage.pauseControlBuckets[0].key,
+            {0U, 1U}});
+        storage.requirements = ComputeProgramRequirements(storage);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Rule),
+            "source ordinal collision across pause and ordinary channels is rejected");
+    }
+    {
+        auto storage = test::MakeTapFixtureStorage();
+        storage.valueRefs.push_back({
+            ValueDomain::BuiltinState,
+            ValueType::State,
+            static_cast<std::uint32_t>(BuiltinState::Pause)});
+        storage.actionCode[0] = {ActionOpcode::Toggle, 0U, 0U};
+        storage.actionPrograms[0].maximumOwnedControlCount = 0U;
+        storage.controlRequirements = {
+            {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
+        };
+        storage.requirements = ComputeProgramRequirements(storage);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Action),
+            "ordinary action program PAUSE write is rejected");
+    }
 }
 
 void TestCompleteOpcodeCoverage()
@@ -572,6 +652,7 @@ void TestValidationErrorLimit()
 int main()
 {
     TestRequiredFixtures();
+    TestPauseControlContract();
     TestCanonicalization();
     TestBuilderAndImmutableAccess();
     TestCompleteOpcodeCoverage();

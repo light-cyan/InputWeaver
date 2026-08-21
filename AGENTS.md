@@ -64,7 +64,7 @@ src/support          -> domain-independent primitives only
 
 ### Phase 2: CompiledProgram Contract
 
-- Status: `Implementation complete; branch-point design review pending` (2026-08-21).
+- Status: `Complete; successor branch point ready` (2026-08-21).
 - Plan: `development/phase-2/ImplementationPlan.md`.
 - Compiled program design: `development/phase-2/CompiledProgramDesign.md`.
 - Verification: `development/phase-2/Verification.md`.
@@ -85,7 +85,7 @@ src/support          -> domain-independent primitives only
 ## Active Design Issues
 
 - Register: `development/OpenDesignIssues.md`.
-- Current gates: pause resume control, stable event snapshots, shared control identities and Windows output recipes, and native executable resolution for `exec`.
+- Current gates: stable event snapshots, shared Weave v1 control identities and Windows output recipes, native executable resolution for `exec`, and the persistent compiled-program artifact boundary.
 
 ## Shared Agent Messages
 
@@ -101,11 +101,13 @@ src/support          -> domain-independent primitives only
 - 2026-08-20 | Post-Phase 1 hardening | A full action queue remains fail-open and now signals a one-per-runtime console error while preserving every rejection in metrics and optional JSONL diagnostics. Core input and rule data use standard platform-independent types; Win32 input and point conversion occurs at the Windows adapter boundary. The strict build, automated suite, and `-fanalyzer` pass, and `development/after-phase-1-and-grammar-design/ResearchReport.md` records the current assessment and architecture research.
 - 2026-08-20 | Product identity | The project name is `InputWeaver`, with the subtitle `context-aware input mapping and macro engine`. The application artifact is `InputWeaver.exe`.
 - 2026-08-20 | Language identity | The configuration language is `Weave`, and `.weave` is its sole source-file extension.
+- 2026-08-21 | Weave v2 control identity | `docs/language/grammar.v2.md` defines the v2 language increment for portable, platform-qualified, and raw discrete control references; a namespaced `ControlId`; deterministic aliases; backend capability checks; and platform-bound native recipes. The current Phase 2 and successor implementation contracts remain on Weave v1.
 - 2026-08-20 | Internal identity | C++ code uses the `inputweaver` namespace, and build-script variables use the `INPUTWEAVER_` prefix.
-- 2026-08-20 | Phase 2 CompiledProgram implementation | `src/core/compiled_program.*`, `program_validator.*`, and `program_dump.*` implement the complete immutable contract. Three required fixtures, full opcode and operator construction coverage, golden dumps, corruption rejection, strict builds, automated tests, core `-fanalyzer`, and platform isolation pass; `development/phase-2/Verification.md` records the evidence.
+- 2026-08-20 | Phase 2 CompiledProgram implementation | `src/core/compiled_program.*`, `program_validator.*`, and `program_dump.*` implement the complete immutable contract. Four required fixtures, full opcode and operator construction coverage, golden dumps, corruption rejection, strict builds, automated tests, core `-fanalyzer`, and platform isolation pass; `development/phase-2/Verification.md` records the evidence.
 - 2026-08-20 | Successor phase split | Compiler and runtime development begin only from the reviewed Phase 2 completion commit. Their independent plans are `development/phase-3-compiler/ImplementationPlan.md` and `development/phase-3-runtime/ImplementationPlan.md`; neither successor synchronizes progress or branch changes with the other, and a future integration phase combines their completed artifacts.
 - 2026-08-21 | Successor plan authority | The compiler and runtime successor plans explicitly depend on `docs/language/grammar.v1.md`, `development/phase-2/CompiledProgramDesign.md`, the frozen Phase 2 core implementation, and `development/OpenDesignIssues.md`. They are complete phase plans rather than partial implementation steps.
-- 2026-08-21 | Runtime cancellation safety | Cancellation epochs remain required because queue clearing cannot invalidate executing or timed tasks, committed mappings, racing producers, or output ownership. `development/OpenDesignIssues.md` owns the active pause-resume control-path decision.
+- 2026-08-21 | Runtime cancellation safety | Cancellation epochs remain required because queue clearing cannot invalidate executing or timed tasks, committed mappings, racing producers, or output ownership.
+- 2026-08-21 | Pause-control channel | Weave v1 uses `pause event [when condition] =>|~> on|off|toggle;`. The compiler lowers these statements into dedicated pause-control buckets and rules; runtime evaluates physical candidates through that channel before the ordinary pause guard and applies the first match synchronously without creating a task.
 - 2026-08-21 | Process launch contract | `Exec` retains only its authored command in `CompiledProgram`. The platform launcher resolves the executable and uses its containing directory as the child working directory, independently of the InputWeaver location, source-file location, and parent working directory.
 
 ## Repository Practices

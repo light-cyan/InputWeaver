@@ -201,14 +201,16 @@ void CanonicalizeMappingSlots(CompiledProgramStorage& storage)
     }
 }
 
+template <typename Bucket, typename Rule>
 [[nodiscard]] bool BucketRangesCanBeRebuilt(
-    const CompiledProgramStorage& storage) noexcept
+    const std::vector<Bucket>& buckets,
+    const std::vector<Rule>& rules) noexcept
 {
-    std::vector<bool> covered(storage.rules.size(), false);
-    for (const EventBucket& bucket : storage.eventBuckets) {
+    std::vector<bool> covered(rules.size(), false);
+    for (const Bucket& bucket : buckets) {
         const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
             + bucket.rules.count;
-        if (end > storage.rules.size()) {
+        if (end > rules.size()) {
             return false;
         }
         for (std::uint64_t index = bucket.rules.begin; index < end; ++index) {
@@ -224,30 +226,33 @@ void CanonicalizeMappingSlots(CompiledProgramStorage& storage)
     });
 }
 
-void CanonicalizeEventBuckets(CompiledProgramStorage& storage)
+template <typename Bucket, typename Rule>
+void CanonicalizeBuckets(
+    std::vector<Bucket>& buckets,
+    std::vector<Rule>& rules)
 {
-    const bool rebuildRules = BucketRangesCanBeRebuilt(storage);
+    const bool rebuildRules = BucketRangesCanBeRebuilt(buckets, rules);
     std::stable_sort(
-        storage.eventBuckets.begin(),
-        storage.eventBuckets.end(),
-        [](const EventBucket& left, const EventBucket& right) {
+        buckets.begin(),
+        buckets.end(),
+        [](const Bucket& left, const Bucket& right) {
             return left.key < right.key;
         });
     if (!rebuildRules) {
         return;
     }
 
-    std::vector<CompiledRule> sortedRules;
-    sortedRules.reserve(storage.rules.size());
-    for (EventBucket& bucket : storage.eventBuckets) {
-        const auto begin = storage.rules.begin()
+    std::vector<Rule> sortedRules;
+    sortedRules.reserve(rules.size());
+    for (Bucket& bucket : buckets) {
+        const auto begin = rules.begin()
             + static_cast<std::ptrdiff_t>(bucket.rules.begin);
         const auto end = begin + static_cast<std::ptrdiff_t>(bucket.rules.count);
-        std::vector<CompiledRule> bucketRules(begin, end);
+        std::vector<Rule> bucketRules(begin, end);
         std::stable_sort(
             bucketRules.begin(),
             bucketRules.end(),
-            [](const CompiledRule& left, const CompiledRule& right) {
+            [](const Rule& left, const Rule& right) {
                 return left.sourceOrdinal < right.sourceOrdinal;
             });
         bucket.rules.begin = static_cast<std::uint32_t>(sortedRules.size());
@@ -256,7 +261,7 @@ void CanonicalizeEventBuckets(CompiledProgramStorage& storage)
             bucketRules.begin(),
             bucketRules.end());
     }
-    storage.rules = std::move(sortedRules);
+    rules = std::move(sortedRules);
 }
 
 void CanonicalizeCompiledProgram(CompiledProgramStorage& storage)
@@ -267,7 +272,8 @@ void CanonicalizeCompiledProgram(CompiledProgramStorage& storage)
     CanonicalizeNumberConstants(storage);
     CanonicalizeDurationConstants(storage);
     CanonicalizeMappingSlots(storage);
-    CanonicalizeEventBuckets(storage);
+    CanonicalizeBuckets(storage.pauseControlBuckets, storage.pauseControlRules);
+    CanonicalizeBuckets(storage.eventBuckets, storage.rules);
 }
 
 } // namespace
@@ -374,6 +380,16 @@ std::span<const MappingSlotDescriptor> CompiledProgram::MappingSlots() const noe
 std::span<const MappingDescriptor> CompiledProgram::Mappings() const noexcept
 {
     return storage_.mappings;
+}
+
+std::span<const PauseControlBucket> CompiledProgram::PauseControlBuckets() const noexcept
+{
+    return storage_.pauseControlBuckets;
+}
+
+std::span<const PauseControlRule> CompiledProgram::PauseControlRules() const noexcept
+{
+    return storage_.pauseControlRules;
 }
 
 std::span<const EventBucket> CompiledProgram::EventBuckets() const noexcept
