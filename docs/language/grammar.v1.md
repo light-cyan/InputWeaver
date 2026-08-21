@@ -4,6 +4,8 @@
 
 本文档定义 Weave v1 的词法、类型、规则匹配、动作流和运行语义。`.weave` 源码在启动阶段完成解析、类型检查和编译；输入处理阶段只使用编译后的只读规则数据。
 
+`development/phase-2/CompiledProgramDesign.md` 定义 Weave v1 编译后只读程序的完整内部表示和验证不变量。
+
 ## 设计原则
 
 - 语言直接描述输入事件、状态条件、完整映射和动作任务。
@@ -16,7 +18,7 @@
 
 ## 示例
 
-```krm
+```weave
 TARGET = "game.exe";
 TAP_DURATION = 30ms;
 ACTION_GAP = 10ms;
@@ -61,7 +63,7 @@ Pause:down ~> set(PAUSE, off);
 
 所有顶层完整指令都以分号 `;` 结束。`if`、`repeat` 和 `while` 以 `end` 结束自身结构，但它们只是外层动作流中的一个动作项，不单独使用分号。
 
-```krm
+```weave
 F1:down => if combat[on] then tap(A) else tap(B) end;
 F2:down => repeat burstCount do tap(A) | end tap(B);
 F3:down => while F3[held] do tap(A) | end;
@@ -69,7 +71,7 @@ F3:down => while F3[held] do tap(A) | end;
 
 ### 注释
 
-```krm
+```weave
 // 中文行注释
 
 /*
@@ -87,7 +89,7 @@ F3:down => while F3[held] do tap(A) | end;
 
 ### 数值和时间
 
-```krm
+```weave
 0
 10
 -2
@@ -98,13 +100,13 @@ F3:down => while F3[held] do tap(A) | end;
 1min
 ```
 
-无单位整数或小数属于 `number`。带 `ms`、`s` 或 `min` 的值属于 `duration`。`number` 的底层表示是有限的 C++ `double`；NaN 和正负无穷不属于合法运行值。
+无单位整数或小数属于 `number`。带 `ms`、`s` 或 `min` 的值属于 `duration`。`number` 的底层表示是有限的 C++ `double`；NaN 和正负无穷不属于合法运行值。`duration` 使用非负 64 位纳秒表示；不能精确表示为整数纳秒或超出表示范围的字面量属于编译错误。
 
 ### 字符串
 
 字符串字面量使用双引号：
 
-```krm
+```weave
 TARGET = "C:\\Games\\Example\\game.exe";
 F8:down ~> exec("tool.exe --profile compact");
 ```
@@ -115,7 +117,7 @@ F8:down ~> exec("tool.exe --profile compact");
 
 ### 状态查询
 
-```krm
+```weave
 LCtrl[held]
 LShift[idle]
 combat[on]
@@ -130,7 +132,7 @@ PAUSE[off]
 
 ### 事件
 
-```krm
+```weave
 F6:down
 F6:up
 F6:repeat
@@ -144,7 +146,7 @@ Mouse.Middle:up
 
 ### 动作
 
-```krm
+```weave
 press(A)
 release(A)
 tap(Space)
@@ -163,7 +165,7 @@ gap()
 
 以下三种写法任选一种：
 
-```krm
+```weave
 TARGET = "game.exe";
 TARGET = "C:\\Games\\Example\\game.exe";
 TARGET = GLOBAL;
@@ -173,7 +175,7 @@ TARGET = GLOBAL;
 
 ### `TAP_DURATION`
 
-```krm
+```weave
 TAP_DURATION = 30ms;
 ```
 
@@ -181,7 +183,7 @@ TAP_DURATION = 30ms;
 
 ### `ACTION_GAP`
 
-```krm
+```weave
 ACTION_GAP = 10ms;
 ```
 
@@ -191,7 +193,7 @@ ACTION_GAP = 10ms;
 
 `PAUSE` 是初始值为 `on` 的内蕴 `state`。`PAUSE[on]` 时运行时查询规则；`PAUSE[off]` 时不查询用户规则，物理输入直接放行。
 
-```krm
+```weave
 Pause:down ~> set(PAUSE, off);
 F12:down when LCtrl[held] and LShift[held] ~> toggle(PAUSE);
 ```
@@ -206,7 +208,7 @@ F12:down when LCtrl[held] and LShift[held] ~> toggle(PAUSE);
 
 ### 基础映射
 
-```krm
+```weave
 A := B;
 Mouse.Middle := F10;
 F9 := Mouse.Middle;
@@ -216,7 +218,7 @@ F9 := Mouse.Middle;
 
 ### 条件映射
 
-```krm
+```weave
 A := B when combat[on];
 A := C when combat[off];
 ```
@@ -233,7 +235,7 @@ A := C when combat[off];
 
 ### 基本形式
 
-```krm
+```weave
 F1:down => tap(A);
 F2:up ~> tap(B);
 F3:repeat =>;
@@ -243,7 +245,7 @@ F3:repeat =>;
 
 ### 条件
 
-```krm
+```weave
 C:down when (LCtrl[held] or RCtrl[held]) and combat[on] => tap(Numpad8);
 ```
 
@@ -262,7 +264,7 @@ C:down when (LCtrl[held] or RCtrl[held]) and combat[on] => tap(Numpad8);
 
 如果一次事件匹配了多个继续型规则，任务按源码顺序创建。只要其中至少有一条匹配的消费规则，最终物理事件就被消费；后续观察规则不能撤销消费决定。
 
-```krm
+```weave
 A:down ~>> set(count, count + 1);
 A:down when combat[on] => tap(B);
 A:down ~> tap(C);
@@ -278,7 +280,7 @@ A:down ~> tap(C);
 
 连续动作之间只需要能够被词法分析器识别，通常使用空白分开以保持可读性：
 
-```krm
+```weave
 F1:down => press(LCtrl) tap(C) release(LCtrl);
 ```
 
@@ -288,19 +290,19 @@ F1:down => press(LCtrl) tap(C) release(LCtrl);
 
 `|` 在动作流中是 `gap()` 的简写，两者都等待一次 `ACTION_GAP` 指定的时间。开头、结尾和连续 `|` 都合法：
 
-```krm
+```weave
 F2:down => | tap(A) tap(B) ||| tap(C) |;
 ```
 
 这段动作流依次等待一次 `ACTION_GAP` 指定的时间、执行 `tap(A)` 和 `tap(B)`、等待三次 `ACTION_GAP` 指定的时间、执行 `tap(C)`，最后再等待一次 `ACTION_GAP` 指定的时间。下面的写法与它完全等价：
 
-```krm
+```weave
 F2:down => gap() tap(A) tap(B) gap() gap() gap() tap(C) gap();
 ```
 
 逗号只用于分隔函数实参，动作流的间隔统一使用 `|` 或 `gap()`：
 
-```krm
+```weave
 F3:down => set(count, count + 1) | tap(A);
 ```
 
@@ -308,7 +310,7 @@ F3:down => set(count, count + 1) | tap(A);
 
 事件箭头之后可以直接写分号：
 
-```krm
+```weave
 A:down =>;
 A:up =>;
 B:down ~>;
@@ -325,6 +327,8 @@ C:down =>>;
 
 所有权合并同时定义本版的输出冲突策略：同一控制的全局所有权从零变为非零时才发送按下，从非零变为零时才发送松开。重叠的 `press` 或 `tap` 只增加各自所有权，不重复发送按下；一个已经被其他任务持有的控制上执行 `tap` 时，临时所有权会保持 `TAP_DURATION` 指定的时间，但不会打断现有持有状态来制造新的按下和松开边缘。这样不会提前释放其他任务的控制，但重叠点击可能在目标程序看来合并成一次保持。
 
+任务正常结束、取消或失败时，运行时释放该任务仍持有的全部输出所有权。遗漏显式 `release` 不会让合成按下状态在任务结束后残留。
+
 ### 等待和任务切换
 
 `|`、`gap()` 与 `wait(duration)` 都使当前任务进入可取消等待。相邻的非等待动作连续执行，任务遇到等待、`tap` 的持续阶段或循环回跳时允许其他任务运行。
@@ -333,15 +337,17 @@ C:down =>>;
 
 ### 外部进程动作
 
-`exec(command)` 使用 Windows `CreateProcessW` 直接启动一个子进程。字符串原样作为 Windows 命令行传入，语言不启动隐含命令解释器，也不改写或拆分参数；包含空格的可执行文件路径及参数引号由作者按照 Windows 命令行规则写入字符串。需要管道、重定向、环境变量展开或命令解释器内建命令时，可以明确执行 `cmd.exe /d /s /c ...`。
+`exec(command)` asks the platform process launcher to resolve and start the command's executable without an implicit command interpreter. The launcher may inspect the executable token for resolution, but it preserves the authored command and arguments when invoking the platform process API. Native quoting and explicit shell invocation follow the selected platform's rules.
 
-子进程继承主程序启动时可见的环境，默认工作目录是当前 `.weave` 文件所在目录。创建成功后 `exec` 立即完成，任务继续执行后续动作；语言不等待进程结束，也不提供完成值。任务取消、`PAUSE`、强制停止和主程序退出都不终止已经创建成功的子进程。取消发生在 `exec` 执行前时，该进程不会启动。创建失败会记录系统错误并结束当前任务，其他规则和任务继续运行。
+The launcher sets the child working directory to the directory containing the resolved executable. This rule does not depend on the InputWeaver executable directory, the `.weave` source directory, or the parent's current working directory. Failure to resolve either the executable or its containing directory is a launch failure.
+
+The child inherits the environment visible to InputWeaver at launch. A successful launch completes the `exec` action immediately, and the task continues without waiting for process exit or retaining child-process ownership. Cancellation before launch prevents process creation; cancellation, `PAUSE`, force stop, and application shutdown do not terminate a child that was already created. A launch failure records the platform error and ends the current task while other tasks continue.
 
 ## 变量和类型
 
 ### `state`
 
-```krm
+```weave
 state combat = off;
 state autoFire = on;
 ```
@@ -350,7 +356,7 @@ state autoFire = on;
 
 ### `number`
 
-```krm
+```weave
 number count = 3.5;
 number recoil = 1.25;
 ```
@@ -359,7 +365,7 @@ number recoil = 1.25;
 
 ### `duration`
 
-```krm
+```weave
 duration fireGap = 80ms;
 duration timeout = 1min;
 ```
@@ -374,6 +380,8 @@ v1 的变量声明初值只接受与声明类型一致的字面量：`state` 使
 
 `set` 和 `toggle` 是按动作流顺序执行的运行时动作，不属于重复声明。变量修改是原子的，之后开始的事件和之后执行的控制表达式读取新值。
 
+`TAP_DURATION` 和 `ACTION_GAP` 是只读配置量，不能作为 `set` 或 `toggle` 的目标；用户变量和 `PAUSE` 是可写运行值。
+
 ## 表达式
 
 ### 运算符
@@ -387,6 +395,8 @@ and  or  not
 ```
 
 从高到低的优先级是括号、一元 `+ - not`、`* / %`、`+ -`、关系比较、相等比较、`and`、`or`。混合逻辑条件可以使用括号明确意图。
+
+`and` 和 `or` 使用从左到右的短路求值；左操作数已经决定结果时不求值右操作数。
 
 ### 类型规则
 
@@ -403,7 +413,7 @@ and  or  not
 
 ## 条件分支
 
-```krm
+```weave
 F1:down =>
     tap(A)
     if combat[on] then
@@ -420,7 +430,7 @@ F1:down =>
 
 ## 固定次数循环
 
-```krm
+```weave
 number count = 5.8;
 
 F2:down =>
@@ -436,13 +446,13 @@ F2:down =>
 
 循环进入下一次迭代时不会自动等待。需要等待 `ACTION_GAP` 指定的时间时，在循环体中写 `|` 或 `gap()`：
 
-```krm
+```weave
 F3:down => repeat count do tap(A) | end;
 ```
 
 ## 条件循环
 
-```krm
+```weave
 Mouse.Middle:down ~>
     while Mouse.Middle[held] do
         if combat[on] then
@@ -461,7 +471,7 @@ Mouse.Middle:down ~>
 
 `if`、`repeat` 和 `while` 可以互相嵌套，并且都可以作为普通动作项直接连接：
 
-```krm
+```weave
 F4:down =>
     if combat[on] then
         repeat count do

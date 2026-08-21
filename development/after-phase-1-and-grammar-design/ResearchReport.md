@@ -8,7 +8,7 @@
 
 当前项目已经形成一个经过验证的 Windows 输入闭环底座：程序能够观察和规范化低级键盘与鼠标输入、区分输入来源、按目标进程和前台状态限制规则、通过带自身标签的 `SendInput` 产生输入、阻止自身输出递归触发规则，并在队列、注入、目标进程或关闭路径发生异常时保持有界、可清理和默认放行。
 
-当前可运行映射仍由四条 Phase 1 固定规则组成。Weave v1 已经定义完整映射、逐事件规则、条件、变量、动作流、等待、分支、循环、异步任务、暂停、取消和输出所有权语义；`ImplementationMethod.v1.md` 已经定义对应的编译数据和运行模型。当前代码基线与语言设计之间的主要实施边界是编译器、规则索引、通用规则分派器、完整映射生命周期、协作式宏任务调度器和运行状态系统。
+The executable mapping path currently consists of the four Phase 1 fixed rules. `docs/language/grammar.v1.md` defines complete mappings, event rules, conditions, variables, action flows, waits, branches, loops, asynchronous tasks, pause, cancellation, and output ownership. The Phase 2 contract and the compiler and runtime successor plans define the representation and complete implementation scope required to execute those semantics.
 
 因此，Phase 1 的完成代表平台输入底座和安全隔离完成，而整个通用映射产品处于“底层实现完成、语言和运行时方案已设计、通用执行链等待实现”的阶段。
 
