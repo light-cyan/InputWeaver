@@ -96,6 +96,32 @@ const char* QueueResultName(QueueResult value) noexcept {
     return "Unknown";
 }
 
+const char* RuntimeDiagnosticName(RuntimeDiagnosticKind value) noexcept {
+    switch (value) {
+        case RuntimeDiagnosticKind::ActivationFailure:
+            return "ActivationFailure";
+        case RuntimeDiagnosticKind::TransactionCapacity:
+            return "TransactionCapacity";
+        case RuntimeDiagnosticKind::PredicateFault:
+            return "PredicateFault";
+        case RuntimeDiagnosticKind::TaskExpressionFault:
+            return "TaskExpressionFault";
+        case RuntimeDiagnosticKind::TaskActionFault:
+            return "TaskActionFault";
+        case RuntimeDiagnosticKind::LaunchFailure:
+            return "LaunchFailure";
+        case RuntimeDiagnosticKind::OutputFailure:
+            return "OutputFailure";
+        case RuntimeDiagnosticKind::OwnershipChange:
+            return "OwnershipChange";
+        case RuntimeDiagnosticKind::MappingChange:
+            return "MappingChange";
+        case RuntimeDiagnosticKind::Cancellation:
+            return "Cancellation";
+    }
+    return "Unknown";
+}
+
 bool IsExactControl(DiagnosticControl value) noexcept {
     return value != DiagnosticControl::OtherKeyboard && value != DiagnosticControl::OtherMouse &&
            value != DiagnosticControl::MouseMove && value != DiagnosticControl::MouseWheel;
@@ -193,16 +219,31 @@ std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record) {
 
 std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& record) {
     std::ostringstream stream;
-    stream << "{\"kind\":\"injection\",\"source_seq\":" << record.sourceSequence << ",\"qpc\":" << record.qpcTimestamp
-           << ",\"target_pid\":" << record.targetPid << ",\"requested\":" << record.requested << ",\"sent\":"
+    stream << "{\"kind\":\"injection\",\"source_seq\":" << record.sourceSequence
+           << ",\"generation\":" << record.outputStateGeneration << ",\"qpc\":" << record.qpcTimestamp
+           << ",\"target_pid\":" << record.targetPid << ",\"device\":\"" << DeviceName(record.outputDevice)
+           << "\",\"transition\":\"" << TransitionName(record.outputTransition) << "\",\"code\":"
+           << record.outputCode << ",\"requested\":" << record.requested << ",\"sent\":"
            << record.sent << ",\"error\":" << record.win32Error << ",\"cleanup_requested\":" << record.cleanupRequested
            << ",\"cleanup_sent\":" << record.cleanupSent << ",\"cleanup_error\":" << record.cleanupError
            << ",\"cancelled_target\":"
            << (record.cancelledForTarget ? "true" : "false") << ",\"cancelled_physical\":"
            << (record.cancelledForPhysicalState ? "true" : "false") << ",\"cancelled_circuit\":"
            << (record.cancelledForCircuitBreaker ? "true" : "false") << ",\"cancelled_shutdown\":"
-           << (record.cancelledForShutdown ? "true" : "false") << ",\"circuit_open\":"
+           << (record.cancelledForShutdown ? "true" : "false") << ",\"cancelled_generation\":"
+           << (record.cancelledForGeneration ? "true" : "false") << ",\"circuit_open\":"
            << (record.circuitBreakerOpen ? "true" : "false") << "}";
+    return stream.str();
+}
+
+std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record) {
+    std::ostringstream stream;
+    stream << "{\"kind\":\"runtime\",\"event\":\"" << RuntimeDiagnosticName(record.kind)
+           << "\",\"program_serial\":" << record.programSerial << ",\"generation\":" << record.generation
+           << ",\"sequence\":" << record.sequence << ",\"source_begin\":" << record.source.beginByte
+           << ",\"source_length\":" << record.source.byteLength << ",\"subject\":" << record.subject
+           << ",\"position\":" << record.position << ",\"deadline_ns\":" << record.deadlineNanoseconds
+           << ",\"detail\":" << record.detail << "}";
     return stream.str();
 }
 
@@ -313,6 +354,18 @@ bool DiagnosticLog::TryPushInjection(const InjectionDiagnosticRecord& record) no
     return true;
 }
 
+bool DiagnosticLog::TryPushRuntime(const RuntimeDiagnosticRecord& record) noexcept {
+    if (!enabled_.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (!runtimeRing_.TryPush(record)) {
+        droppedRuntimeRecords_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    SetEvent(wakeEvent_);
+    return true;
+}
+
 bool DiagnosticLog::Enabled() const noexcept {
     return enabled_.load(std::memory_order_acquire);
 }
@@ -323,6 +376,10 @@ std::uint64_t DiagnosticLog::DroppedHookRecords() const noexcept {
 
 std::uint64_t DiagnosticLog::DroppedInjectionRecords() const noexcept {
     return droppedInjectionRecords_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t DiagnosticLog::DroppedRuntimeRecords() const noexcept {
+    return droppedRuntimeRecords_.load(std::memory_order_relaxed);
 }
 
 std::uint64_t DiagnosticLog::JsonlBytesWritten() const noexcept {
@@ -338,7 +395,8 @@ void DiagnosticLog::WorkerMain() noexcept {
     SetEvent(readyEvent_);
     for (;;) {
         DrainRecords();
-        if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0 && hookRing_.Empty() && injectionRing_.Empty()) {
+        if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0
+            && hookRing_.Empty() && injectionRing_.Empty() && runtimeRing_.Empty()) {
             break;
         }
         WaitForMultipleObjects(2, handles, FALSE, 250);
@@ -361,6 +419,16 @@ void DiagnosticLog::DrainRecords() noexcept {
             EmitLine(FormatInjectionDiagnosticJson(injectionRecord));
         } catch (...) {
             OutputDebugStringA("InputWeaver injection diagnostic formatting failed.\n");
+        }
+    }
+
+
+    RuntimeDiagnosticRecord runtimeRecord;
+    while (runtimeRing_.TryPop(runtimeRecord)) {
+        try {
+            EmitLine(FormatRuntimeDiagnosticJson(runtimeRecord));
+        } catch (...) {
+            OutputDebugStringA("InputWeaver runtime diagnostic formatting failed.\n");
         }
     }
 }

@@ -73,6 +73,20 @@ MacOS.KeyCode(0)
 
 编号可以使用非负十进制整数或带 `0x` 前缀的十六进制整数。参数数量错误、负数、非整数、超出对应编号范围或无效的扫描码前缀都属于编译错误。
 
+The compiler and shared artifact validator use these frozen numeric domains:
+
+| Constructor field | Inclusive domain |
+|---|---|
+| `HID.Usage` page | `1..0xFFFF` |
+| `HID.Usage` usage | `0..0xFFFF` |
+| `Windows.VirtualKey` code | `0..0xFF` |
+| `Windows.ScanCode` code | `0..0xFF` |
+| `Windows.ScanCode` qualifier | none, `E0`, or `E1` |
+| `Linux.Key` code | `0..0x2FF` |
+| `MacOS.KeyCode` code | `0..0xFFFF` |
+
+These checks validate stable identity storage domains, not whether a code is currently assigned by an operating-system version or supported by the selected backend. Zero is therefore a valid compiled Windows virtual-key or scan-code identity even though the current Windows backend rejects it as unsupported during activation.
+
 原始编号写法可以出现在命名控制能够出现的任何位置：
 
 ```weave

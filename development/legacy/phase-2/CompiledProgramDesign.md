@@ -96,7 +96,7 @@ struct SourceSpan final {
 };
 ```
 
-Spans use byte offsets into the validated UTF-8 source file. The program owns a line-start table whose first entry is zero and whose remaining entries identify the first byte after each recognized line break. Line and column values are derived for diagnostics and are not stored in hot-path records.
+Spans use byte offsets into the validated UTF-8 source file. The program owns a line-start table whose first entry is zero and whose remaining entries identify the first byte after each recognized line break, including `byteLength` for the empty logical line after a terminal line break. Line and column values are derived for diagnostics and are not stored in hot-path records.
 
 ### Duration values
 
@@ -106,7 +106,7 @@ struct DurationValue final {
 };
 ```
 
-Valid compiled durations are in `[0, INT64_MAX]` nanoseconds. The compiler parses duration literals as decimal rationals and requires an exact integral nanosecond representation; a literal outside the range or below nanosecond resolution is a compile error. Runtime duration subtraction clamps negative results to zero. Runtime multiplication or division converts a finite intermediate result by truncating toward zero; division by zero, a non-finite result, or a result above `INT64_MAX` is an evaluation fault.
+Valid compiled durations are in `[0, INT64_MAX]` nanoseconds. The compiler parses duration literals as decimal rationals and requires an exact integral nanosecond representation; a literal outside the range or below nanosecond resolution is a compile error. Runtime duration subtraction clamps negative results to zero. Runtime multiplication or division clamps a finite negative intermediate result to zero and otherwise truncates toward zero; division by zero, a non-finite result, or a result above `INT64_MAX` is an evaluation fault.
 
 ### Controls and event transitions
 
@@ -146,6 +146,8 @@ The complete four-field tuple is the control identity. Equality never compares `
 
 Source raw constructors lower deterministically: `HID.Usage(page, usage)` becomes `{1, page, usage, 0}`; `Windows.VirtualKey(code)` becomes `{256, 1, code, 0}`; `Windows.ScanCode(code)`, `Windows.ScanCode(code, E0)`, and `Windows.ScanCode(code, E1)` use namespace `256`, family `2`, and qualifiers `0`, `1`, and `2`; `Linux.Key(code)` becomes `{257, 1, code, 0}`; and `MacOS.KeyCode(code)` becomes `{258, 1, code, 0}`.
 
+The frozen structural domains are HID page `1..0xFFFF`, HID usage `0..0xFFFF`, Windows virtual-key and scan-code `0..0xFF`, Linux `EV_KEY` code `0..0x2FF`, and macOS key code `0..0xFFFF`. Compilation and structural validation enforce these domains without consulting assigned-code catalogs; backend availability and required capabilities are activation checks. A zero Windows code is structurally valid and may be rejected by the selected backend during activation.
+
 The compiler control catalog contains source name, canonical name, and `ControlRef`. Aliases always lower to the same identity and never create duplicate control-pool entries. The catalog contains no platform capability or output recipe. Those properties belong exclusively to backend activation tables.
 
 Portable keyboard names use HID Keyboard/Keypad Usage Page `0x07`: `A` through `Z` use Usage IDs `0x04` through `0x1D`; `Digit1` through `Digit9` use `0x1E` through `0x26`, and `Digit0` uses `0x27`; `Enter`, `Esc`, `Backspace`, `Tab`, and `Space` use `0x28` through `0x2C`; `CapsLock` uses `0x39`; `F1` through `F12` use `0x3A` through `0x45`; `ScrollLock` and `Pause` use `0x47` and `0x48`; `Insert`, `Home`, `PageUp`, `Delete`, `End`, `PageDown`, `ArrowRight`, `ArrowLeft`, `ArrowDown`, and `ArrowUp` use `0x49` through `0x52`; `NumLock`, `NumpadDivide`, `NumpadMultiply`, `NumpadSubtract`, `NumpadAdd`, `Numpad1` through `Numpad9`, `Numpad0`, and `NumpadDecimal` use `0x53` through `0x57`, `0x59` through `0x61`, `0x62`, and `0x63`; `F13` through `F24` use `0x68` through `0x73`; and `LCtrl`, `LShift`, `LAlt`, `RCtrl`, `RShift`, and `RAlt` use `0xE0`, `0xE1`, `0xE2`, `0xE4`, `0xE5`, and `0xE6`. A v1 short name and its `Keyboard.` form lower to the same identity.
@@ -166,9 +168,9 @@ During activation, the selected backend resolves every required `ControlRef` int
 
 The program owns a `std::vector<std::string>` UTF-8 string pool. Target selectors, the source path, `exec` command lines, and diagnostic symbol names use `StringId`. Platform adapters convert strings to their native process API representation.
 
-The compiler rejects an embedded NUL in a target selector, path, or `exec` command because supported native process and path APIs use terminated strings.
+Weave string literals enter the pool after cooking the source escape set `\\`, `\"`, `\n`, `\r`, and `\t`. The compiler rejects an embedded NUL in a target selector, path, or `exec` command because supported native process and path APIs use terminated strings, and it rejects an empty decoded target selector or `exec` command. Non-empty values are not trimmed.
 
-An `Exec` instruction retains exactly one authored command string. `CompiledProgram` does not store a compiler-parsed executable token, resolved executable path, child working directory, or native argument vector. These values depend on the execution environment and belong to the platform launcher. The exact Windows resolution policy remains governed by open issue `ODI-004`.
+An `Exec` instruction retains exactly one decoded command string. `CompiledProgram` does not store a compiler-parsed executable token, resolved executable path, child working directory, or native argument vector. These values depend on the execution environment and belong to the platform launcher. `development/phase-3-runtime/WindowsExecutableResolution.md` defines the Windows resolution and process-creation policy.
 
 ### Program source
 
@@ -198,7 +200,7 @@ struct TargetSelector final {
 };
 ```
 
-`text` is invalid for `Unspecified` and `Global` and valid for `Executable`. It preserves the authored selector without classifying it under the compiler host's path rules. The selected platform adapter determines whether it is a supported executable name or path during activation. A command-line target override is an application activation option and does not mutate this record.
+`text` is invalid for `Unspecified` and `Global` and identifies a non-empty NUL-free decoded string for `Executable`. It preserves the selector without classifying it under the compiler host's path rules. The selected platform adapter determines whether it is a supported executable name or path during activation. A command-line target override is an application activation option and does not mutate this record.
 
 ### Program settings
 
@@ -361,7 +363,7 @@ enum class BinaryOperator : std::uint8_t {
 
 ### Evaluation faults
 
-Number division or modulo by zero, a non-finite number result, invalid duration arithmetic, and a runtime type or stack violation are evaluation faults. Constant expressions that would fault are compile errors. A fault while evaluating a hook predicate causes the current event to be forwarded and requests controlled fatal shutdown. A fault on the task thread terminates the task, releases its owned outputs, and requests controlled fatal shutdown. This policy prevents an invalid runtime value from silently changing consumption or control-flow decisions.
+Number division or modulo by zero, a non-finite number result, invalid duration arithmetic, and a runtime type or stack violation are evaluation faults. A constant expression that would fault is a compile error when it is definitely or possibly evaluated. A faulting right operand of `and` or `or` is accepted only when a compile-time constant left operand proves that the right operand is unreachable. A fault while evaluating a hook predicate causes the current event to be forwarded and requests controlled fatal shutdown. A fault on the task thread terminates the task, releases its owned outputs, and requests controlled fatal shutdown. This policy prevents an invalid runtime value from silently changing consumption or control-flow decisions.
 
 ## Action programs
 
@@ -415,7 +417,7 @@ The program owns a source-span table parallel to the flat action instruction tab
 | `Gap` | zero | zero | Enter cancellable timed wait for `actionGap`. |
 | `Set` | `ValueRefId` | `ExpressionId` of the same value type | Evaluate and atomically publish the new value. |
 | `Toggle` | `ValueRefId` of `State` | zero | Atomically invert the state value. |
-| `Exec` | `StringId` | zero | Resolve and launch the stored command on the task thread with the resolved executable's containing directory as the child working directory. |
+| `Exec` | non-empty NUL-free command `StringId` | zero | Resolve and launch the stored command on the task thread with the resolved executable's containing directory as the child working directory. |
 | `Jump` | local target position | zero | Set the local program position. |
 | `JumpIfFalse` | `ExpressionId` returning `Boolean` | local target position | Evaluate and jump when false. |
 | `RepeatInit` | repeat frame index | `ExpressionId` returning `Number` | Evaluate the limit once and initialize the frame index to zero. |
@@ -593,6 +595,10 @@ struct ProgramDebugInfo final {
 
 Rule, mapping, expression, and action descriptors retain their enclosing source spans. Parallel instruction-span tables have exactly the same length as their instruction tables. Debug names do not participate in runtime lookup or semantics.
 
+Retained spans use the smallest complete authored construct represented by each record. Target selectors retain the selector value, variable debug records retain the declaration, rules and mappings retain the complete top-level statement, expression descriptors retain the complete expression, and action descriptors retain the complete authored action flow.
+
+An expression instruction emitted from an authored operand retains that operand's span. Synthetic expression branches, constants, and `Return` instructions retain the enclosing expression span. An authored action instruction retains that action item's span; synthetic branches, repeat instructions, `Yield`, and loop jumps retain the enclosing control-action span; the final `End` instruction retains the complete action-flow span.
+
 A deterministic `DumpCompiledProgram` utility prints settings, value slots, controls, requirements, event buckets, rules, mappings, expressions, actions, and source spans using stable IDs. Compiler golden tests and runtime fixture tests use this human-readable diagnostic format to compare semantics. It is distinct from the binary `.weavec` encoding.
 
 ## Top-level definition
@@ -716,9 +722,9 @@ Compiler diagnostics describe source errors. An invalid compiler-built program i
 - Every table length is below `kInvalidProgramIndex`.
 - Every ID is valid for its table or is invalid only in an explicitly optional field.
 - Every range uses checked arithmetic, lies inside its owning table, and obeys the required disjointness and coverage rules.
-- All strings are valid UTF-8, API-bound strings contain no embedded NUL, source offsets are within `byteLength`, and line starts are strictly increasing.
+- All strings are valid UTF-8, executable target and `Exec` strings are non-empty and contain no embedded NUL, other API-bound strings contain no embedded NUL, source offsets are within `byteLength`, and line starts are strictly increasing.
 - Settings and all initial or constant values satisfy finite-number and duration invariants.
-- The control pool is strictly sorted and unique; every `ControlRef` has a published nonzero namespace, a defined family, a valid qualifier for that family, and no reserved field value.
+- The control pool is strictly sorted and unique; every `ControlRef` has a published nonzero namespace, a defined family, a code inside its frozen numeric domain, a valid qualifier for that family, and no reserved field value.
 - Every `ControlRefId` in event keys, expression and action operands, mappings, and requirements addresses the canonical control pool.
 - Every `ValueRef` domain, type, and index combination is valid.
 - Every expression instruction has valid operands, valid operator signatures, forward-only targets, consistent stack types at merges, a bounded declared stack depth, and exactly one correctly typed result on every path.

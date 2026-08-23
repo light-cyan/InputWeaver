@@ -31,6 +31,22 @@ struct RuntimeArtifactLoadResult final {
     RuntimeActivationError activationError{};
 };
 
+struct RuntimeArtifactReadResult final {
+    std::shared_ptr<const CompiledProgram> program;
+    RuntimeArtifactLoadErrorCode error{RuntimeArtifactLoadErrorCode::None};
+    std::optional<WeavecDecodeError> decodeError;
+    std::vector<ProgramValidationError> validationErrors;
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return program != nullptr
+            && error == RuntimeArtifactLoadErrorCode::None;
+    }
+};
+
+[[nodiscard]] RuntimeArtifactReadResult ReadWeavec(
+    const std::filesystem::path& path,
+    const WeavecDecodeLimits& limits = {});
+
 [[nodiscard]] RuntimeArtifactLoadResult LoadAndActivateWeavec(
     ProgramRuntime& runtime,
     const std::filesystem::path& path,

@@ -2,8 +2,10 @@
 
 #include "program/program_validator.hpp"
 
+#include <cassert>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace inputweaver::test {
 namespace {
@@ -21,6 +23,17 @@ constexpr ControlRef kF7{
     0x40U,
     kControlQualifierNone};
 
+[[nodiscard]] SourceSpan SpanOf(
+    const std::string& source,
+    std::string_view text) noexcept
+{
+    const std::size_t begin = source.find(text);
+    assert(begin != std::string::npos);
+    return {
+        static_cast<std::uint32_t>(begin),
+        static_cast<std::uint32_t>(text.size())};
+}
+
 void SetCommonSource(
     CompiledProgramStorage& storage,
     std::string displayPath,
@@ -31,7 +44,7 @@ void SetCommonSource(
     storage.source.byteLength = static_cast<std::uint32_t>(source.size());
     storage.lineStarts.push_back(0U);
     for (std::size_t index = 0; index < source.size(); ++index) {
-        if (source[index] == '\n' && index + 1U < source.size()) {
+        if (source[index] == '\n') {
             storage.lineStarts.push_back(static_cast<std::uint32_t>(index + 1U));
         }
     }
@@ -41,15 +54,9 @@ void SetCommonSource(
     storage.settings.target = {
         TargetSelectorKind::Global,
         StringId{},
-        {0U, storage.source.byteLength}};
+        SpanOf(source, "GLOBAL")};
     storage.settings.tapDuration = kDefaultTapDuration;
     storage.settings.actionGap = kDefaultActionGap;
-}
-
-[[nodiscard]] SourceSpan WholeSource(
-    const CompiledProgramStorage& storage) noexcept
-{
-    return {0U, storage.source.byteLength};
 }
 
 void AddCommonControls(CompiledProgramStorage& storage)
@@ -60,15 +67,15 @@ void AddCommonControls(CompiledProgramStorage& storage)
     };
 }
 
-void AddTapAction(CompiledProgramStorage& storage)
+void AddTapAction(CompiledProgramStorage& storage, const std::string& source)
 {
-    const SourceSpan source = WholeSource(storage);
-    storage.actionPrograms.push_back({{0U, 2U}, 0U, 1U, source});
+    const SourceSpan action = SpanOf(source, "tap(F7)");
+    storage.actionPrograms.push_back({{0U, 2U}, 0U, 1U, action});
     storage.actionCode = {
         {ActionOpcode::Tap, 0U, 0U},
         {ActionOpcode::End, 0U, 0U},
     };
-    storage.debugInfo.actionInstructionSpans = {source, source};
+    storage.debugInfo.actionInstructionSpans = {action, action};
 }
 
 void Derive(CompiledProgramStorage& storage)
@@ -86,7 +93,7 @@ CompiledProgramStorage MakeTapFixtureStorage()
     CompiledProgramStorage storage{};
     SetCommonSource(storage, "fixture.tap.weave", source);
     AddCommonControls(storage);
-    AddTapAction(storage);
+    AddTapAction(storage, source);
     storage.controlRequirements = {
         {ControlRefId{0U}, ToControlUseBits(ControlUse::OutputDownUp)},
         {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
@@ -99,7 +106,7 @@ CompiledProgramStorage MakeTapFixtureStorage()
         MatchFlow::Stop,
         RuleKind::Event,
         0U,
-        WholeSource(storage)});
+        SpanOf(source, "F6:down => tap(F7);")});
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
@@ -126,7 +133,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
     storage.mappings.push_back({
         MappingSlotId{0U},
         ControlRefId{0U},
-        WholeSource(storage)});
+        SpanOf(source, "F6 := F7;")});
     storage.rules.push_back({
         ExpressionId{},
         ActionProgramId{},
@@ -135,7 +142,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
         MatchFlow::Stop,
         RuleKind::MappingDown,
         0U,
-        WholeSource(storage)});
+        SpanOf(source, "F6 := F7;")});
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
@@ -163,12 +170,15 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
     storage.debugInfo.variables.push_back({
         StringId{1U},
         ValueRefId{0U},
-        WholeSource(storage)});
+        SpanOf(source, "state enabled = on;")});
 
     storage.numberConstants.push_back(2.0);
+    const SourceSpan condition = SpanOf(source, "enabled[on]");
+    const SourceSpan conditionValue{condition.beginByte, 7U};
+    const SourceSpan repeatLimit = SpanOf(source, "2");
     storage.expressions = {
-        {{0U, 4U}, ExpressionType::Boolean, 2U, WholeSource(storage)},
-        {{4U, 2U}, ExpressionType::Number, 1U, WholeSource(storage)},
+        {{0U, 4U}, ExpressionType::Boolean, 2U, condition},
+        {{4U, 2U}, ExpressionType::Number, 1U, repeatLimit},
     };
     storage.expressionCode = {
         {ExpressionOpcode::LoadValue, ExpressionType::State, 0U, 0U},
@@ -179,15 +189,23 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
     };
-    storage.debugInfo.expressionInstructionSpans.assign(
-        storage.expressionCode.size(),
-        WholeSource(storage));
+    storage.debugInfo.expressionInstructionSpans = {
+        conditionValue,
+        condition,
+        condition,
+        condition,
+        repeatLimit,
+        repeatLimit,
+    };
 
+    const SourceSpan repeatAction = SpanOf(source, "repeat 2 do tap(F7) | end");
+    const SourceSpan tapAction = SpanOf(source, "tap(F7)");
+    const SourceSpan gapAction = SpanOf(source, "|");
     storage.actionPrograms.push_back({
         {0U, 8U},
         1U,
         1U,
-        WholeSource(storage)});
+        repeatAction});
     storage.actionCode = {
         {ActionOpcode::RepeatInit, 0U, 1U},
         {ActionOpcode::RepeatCheck, 0U, 7U},
@@ -198,9 +216,16 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         {ActionOpcode::Jump, 1U, 0U},
         {ActionOpcode::End, 0U, 0U},
     };
-    storage.debugInfo.actionInstructionSpans.assign(
-        storage.actionCode.size(),
-        WholeSource(storage));
+    storage.debugInfo.actionInstructionSpans = {
+        repeatAction,
+        repeatAction,
+        tapAction,
+        gapAction,
+        repeatAction,
+        repeatAction,
+        repeatAction,
+        repeatAction,
+    };
 
     storage.rules.push_back({
         ExpressionId{0U},
@@ -210,7 +235,8 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         MatchFlow::Stop,
         RuleKind::Event,
         0U,
-        WholeSource(storage)});
+        SpanOf(source,
+            "F6:down when enabled[on] => repeat 2 do tap(F7) | end;")});
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
@@ -236,7 +262,7 @@ CompiledProgramStorage MakePauseControlFixtureStorage()
         Delivery::Consume,
         PauseEffect::Toggle,
         0U,
-        WholeSource(storage)});
+        SpanOf(source, "pause F6:down => toggle;")});
     storage.pauseControlBuckets.push_back({
         {ControlRefId{0U}, EventTransition::Down},
         {0U, 1U}});

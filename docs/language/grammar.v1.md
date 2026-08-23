@@ -85,7 +85,7 @@ F3:down => while F3[held] do tap(A) | end;
 
 关键字和标识符区分大小写。用户标识符由 ASCII 字母、数字和下划线组成，首字符不能是数字。用户标识符不能与关键字、按键名、内蕴配置量或内蕴状态重名。
 
-内蕴配置量使用全大写名称，关键字和动作名使用小写名称，按键名使用规范名称。字符串内容保持原样。
+内蕴配置量使用全大写名称，关键字和动作名使用小写名称，按键名使用规范名称。
 
 ### 数值和时间
 
@@ -112,6 +112,10 @@ F8:down ~> exec("tool.exe --profile compact");
 ```
 
 语言没有用户可声明的字符串变量。字符串字面量只出现在明确接受字符串的内蕴配置量和动作参数中。
+
+String literals are cooked ASCII byte strings. The complete escape set is `\\`, `\"`, `\n`, `\r`, and `\t`; each escape decodes to one backslash, double quote, line feed, carriage return, or horizontal tab. An unknown escape, a non-ASCII source character, an embedded NUL, or a line break before the closing quote is a compile error.
+
+The decoded value of a `TARGET` executable selector or an `exec` command must contain at least one byte. The compiler does not trim a non-empty decoded value; platform-specific target and executable resolution owns any further usability checks.
 
 ## 状态、事件和动作
 
@@ -172,6 +176,8 @@ TARGET = GLOBAL;
 ```
 
 `TARGET` 指定唯一目标程序。字符串可以是可执行文件名或绝对路径，`GLOBAL` 明确请求全局规则。命令行显式目标可以覆盖文件中的 `TARGET`；如果两处都没有目标，程序拒绝启动映射。
+
+An executable `TARGET` string must be non-empty after escape decoding. Its non-empty decoded bytes are preserved without compiler-host path classification and are resolved by the selected platform during activation.
 
 ### `TAP_DURATION`
 
@@ -350,6 +356,8 @@ C:down =>>;
 
 ### 外部进程动作
 
+The decoded command passed to `exec` must be non-empty. The compiler preserves every byte of a non-empty command, including whitespace, and leaves executable-token and path resolution to the platform launcher.
+
 `exec(command)` asks the platform process launcher to resolve and start the command's executable without an implicit command interpreter. The launcher may inspect the executable token for resolution, but it preserves the authored command and arguments when invoking the platform process API. Native quoting and explicit shell invocation follow the selected platform's rules.
 
 The launcher sets the child working directory to the directory containing the resolved executable. The final child working directory is therefore selected from the resolved executable path rather than from the InputWeaver executable directory, the `.weave` source directory, or the InputWeaver process working directory. Resolving a relative executable token can still use the InputWeaver process working directory as described below. Failure to resolve either the executable or its containing directory is a launch failure.
@@ -422,6 +430,8 @@ and  or  not
 从高到低的优先级是括号、一元 `+ - not`、`* / %`、`+ -`、关系比较、相等比较、`and`、`or`。混合逻辑条件可以使用括号明确意图。
 
 `and` 和 `or` 使用从左到右的短路求值；左操作数已经决定结果时不求值右操作数。
+
+Compile-time constant-fault diagnostics follow the same reachability rule. A constant fault in the right operand is accepted only when a compile-time constant left operand proves that the right operand is unreachable (known false for `and` or known true for `or`); a right operand that is definitely or possibly evaluated must remain fault-free.
 
 ### 类型规则
 

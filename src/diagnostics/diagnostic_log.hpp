@@ -1,6 +1,7 @@
 #pragma once
 
 #include "input/input_types.hpp"
+#include "runtime/runtime_types.hpp"
 
 #include <array>
 #include <atomic>
@@ -15,6 +16,7 @@ namespace inputweaver {
 
 inline constexpr std::size_t kHookDiagnosticCapacity = 4096;
 inline constexpr std::size_t kInjectionDiagnosticCapacity = 512;
+inline constexpr std::size_t kRuntimeDiagnosticCapacity = 512;
 inline constexpr std::uint64_t kMaximumJsonlBytes = 8ULL * 1024ULL * 1024ULL;
 
 enum class DiagnosticControl : std::uint8_t {
@@ -69,8 +71,12 @@ struct HookDiagnosticRecord {
 
 struct InjectionDiagnosticRecord {
     std::uint64_t sourceSequence{};
+    std::uint64_t outputStateGeneration{};
     std::int64_t qpcTimestamp{};
     ProcessId targetPid{};
+    ControlCode outputCode{};
+    DeviceKind outputDevice{DeviceKind::Keyboard};
+    Transition outputTransition{Transition::Down};
     DWORD win32Error{};
     DWORD cleanupError{};
     std::uint32_t requested{};
@@ -81,6 +87,7 @@ struct InjectionDiagnosticRecord {
     bool cancelledForPhysicalState{};
     bool cancelledForCircuitBreaker{};
     bool cancelledForShutdown{};
+    bool cancelledForGeneration{};
     bool circuitBreakerOpen{};
 };
 
@@ -95,6 +102,7 @@ void ApplyPrivacyRedaction(HookDiagnosticRecord& record) noexcept;
     bool traceInput) noexcept;
 std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record);
 std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& record);
+std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record);
 
 [[nodiscard]] constexpr bool JsonlAppendFits(
     std::uint64_t currentBytes,
@@ -156,10 +164,12 @@ public:
     void Stop() noexcept;
     bool TryPushHook(HookDiagnosticRecord record) noexcept;
     bool TryPushInjection(const InjectionDiagnosticRecord& record) noexcept;
+    bool TryPushRuntime(const RuntimeDiagnosticRecord& record) noexcept;
 
     bool Enabled() const noexcept;
     std::uint64_t DroppedHookRecords() const noexcept;
     std::uint64_t DroppedInjectionRecords() const noexcept;
+    std::uint64_t DroppedRuntimeRecords() const noexcept;
     std::uint64_t JsonlBytesWritten() const noexcept;
     bool JsonlTruncated() const noexcept;
 
@@ -170,8 +180,10 @@ private:
 
     SpscDiagnosticRing<HookDiagnosticRecord, kHookDiagnosticCapacity> hookRing_;
     SpscDiagnosticRing<InjectionDiagnosticRecord, kInjectionDiagnosticCapacity> injectionRing_;
+    SpscDiagnosticRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> runtimeRing_;
     std::atomic<std::uint64_t> droppedHookRecords_{0};
     std::atomic<std::uint64_t> droppedInjectionRecords_{0};
+    std::atomic<std::uint64_t> droppedRuntimeRecords_{0};
     std::atomic<std::uint64_t> jsonlBytesWritten_{0};
     std::atomic<bool> jsonlTruncated_{false};
     std::atomic<bool> enabled_{false};

@@ -2,7 +2,7 @@
 
 ## Result
 
-The Phase 3 runtime implementation gate passes on 2026-08-23 from reviewed base commit `dad2f4bb4fe0f7d7b78b777b1ab4f2087d1334ba`. The implementation loads validated `.weavec` artifacts, activates immutable programs transactionally, executes the frozen runtime semantics with bounded state and cooperative scheduling, and supplies the required Windows control, routing, output, and process-launch adapters.
+The Phase 3 runtime implementation gate passes on 2026-08-24. The implementation loads validated `.weavec` artifacts, activates immutable programs transactionally, executes the frozen runtime semantics with bounded state and cooperative scheduling, and supplies the required Windows control, routing, output, and process-launch adapters.
 
 ## Implemented files
 
@@ -46,14 +46,14 @@ All Windows runtime adapter tests passed.
 ## Windows coverage
 
 - Every published portable keyboard, mouse-button, and consumer usage in the current language contract binds with its required capabilities, normalizes native input to its activated strong ID, and converts output down and up to native input records.
-- Windows virtual-key, layout-sensitive, normal scan-code, E0, and E1 identities have direct recipe and ambiguity tests.
+- Windows virtual-key, layout-sensitive, normal scan-code, E0, and E1 identities have direct recipe and ambiguity tests; structurally valid zero virtual-key and scan-code identities have direct activation-rejection tests.
 - Physical Ctrl-Shift-F12 force stop remains available independently of active program bindings, and self-injected or external injected events bypass user rules.
 - Quoted paths with spaces, absolute paths, bare-name search, explicit command-interpreter invocation, missing executables, native creation failure, exact `CreateProcessW` parameters, child working directory, immediate return, and cancellation immediately before native creation have direct tests.
 - The frozen Phase 1 runtime and injection tests remain passing after the Windows adapter changes.
 
 ## Static analysis and dependency audit
 
-The following translation units passed GCC `-fanalyzer` independently under the strict warning policy:
+`cmd /c script\analyze_runtime.bat` completed successfully. The following translation units passed GCC `-fanalyzer` independently under the strict warning policy:
 
 ```text
 src/runtime/artifact_loader.cpp
@@ -65,13 +65,13 @@ src/platform/windows/runtime_route_adapter.cpp
 src/platform/windows/input_injector.cpp
 ```
 
-Compiler-generated dependency output for all six new Phase 3 runtime translation units contains no dependency on `src/compiler/`, `src/app/`, or `src/tui/`. Runtime-owned files contain no Windows platform include, and Windows runtime adapters contain no compiler, app, or TUI include.
+`cmd /c script\audit_phase3_dependencies.bat` completed successfully. Compiler-generated dependency output for the Phase 3 runtime translation units contains no dependency on `src/compiler/`, `src/app/`, or `src/tui/`. Runtime-owned files contain no Windows platform include, and Windows runtime adapters contain no compiler, app, or TUI include.
 
 `git diff --check` passes.
 
 ## Shared contract
 
-`src/program/` and `tests/program/` remain byte-for-byte at the reviewed base commit. Runtime consumes that immutable `CompiledProgram` and `.weavec` contract directly. `docs/language/grammar.v1.md` records the user-facing Windows executable lookup and child-working-directory clarification without changing the compiled-program contract.
+`src/program/` retains the immutable `CompiledProgram` and `.weavec` contract consumed directly by runtime. Shared validation enforces non-empty executable target and `Exec` strings plus the frozen raw-control numeric domains before activation; backend identity and capability support remains an activation decision. The shared fixture builders and hashes use the precise source-span and terminal line-start policy in `development/phase-2/CompiledProgramDesign.md`. `docs/language/grammar.v1.md` records the user-facing Windows executable lookup and child-working-directory behavior without changing the compiled-program representation.
 
 ## Executable-resolution decision
 

@@ -129,6 +129,15 @@ template <typename Id>
         && storage.strings[id.value].find('\0') != std::string::npos;
 }
 
+[[nodiscard]] bool InvalidRequiredString(
+    const CompiledProgramStorage& storage,
+    StringId id) noexcept
+{
+    return !ValidId(id, storage.strings.size())
+        || storage.strings[id.value].empty()
+        || storage.strings[id.value].find('\0') != std::string::npos;
+}
+
 [[nodiscard]] bool ValidControl(ControlRef control) noexcept
 {
     if (control.namespaceId == 0U
@@ -142,22 +151,28 @@ template <typename Id>
 
     switch (control.namespaceId) {
     case kControlNamespaceUsbHid:
-        return control.qualifier == kControlQualifierNone;
+        return control.familyId <= kMaximumHidUsagePage
+            && control.code <= kMaximumHidUsageId
+            && control.qualifier == kControlQualifierNone;
     case kControlNamespaceWeave:
         return false;
     case kControlNamespaceWindows:
         if (control.familyId == kWindowsVirtualKeyFamily) {
-            return control.qualifier == kControlQualifierNone;
+            return control.code <= kMaximumWindowsNativeCode
+                && control.qualifier == kControlQualifierNone;
         }
         if (control.familyId == kWindowsScanCodeFamily) {
-            return control.qualifier <= kWindowsScanCodeQualifierE1;
+            return control.code <= kMaximumWindowsNativeCode
+                && control.qualifier <= kWindowsScanCodeQualifierE1;
         }
         return false;
     case kControlNamespaceLinux:
         return control.familyId == kLinuxEvKeyFamily
+            && control.code <= kMaximumLinuxEvKeyCode
             && control.qualifier == kControlQualifierNone;
     case kControlNamespaceMacOs:
         return control.familyId == kMacOsKeyCodeFamily
+            && control.code <= kMaximumMacOsKeyCode
             && control.qualifier == kControlQualifierNone;
     default:
         return false;
@@ -774,15 +789,14 @@ void ValidateActionDescriptor(
             }
             break;
         case ActionOpcode::Exec:
-            if (instruction.operand0 >= storage.strings.size()
-                || instruction.operand1 != 0U
-                || (instruction.operand0 < storage.strings.size()
-                    && storage.strings[instruction.operand0].find('\0')
-                        != std::string::npos)) {
+            if (InvalidRequiredString(
+                    storage,
+                    StringId{instruction.operand0})
+                || instruction.operand1 != 0U) {
                 context.Add(
                     ProgramValidationErrorCode::Action,
                     location,
-                    "Exec requires a valid NUL-free command string");
+                    "Exec requires a valid non-empty NUL-free command string");
             }
             break;
         case ActionOpcode::Jump:
@@ -1138,12 +1152,11 @@ void ValidateSourceAndSettings(
         }
         break;
     case TargetSelectorKind::Executable:
-        if (!ValidId(target.text, storage.strings.size())
-            || HasEmbeddedNul(storage, target.text)) {
+        if (InvalidRequiredString(storage, target.text)) {
             context.Add(
                 ProgramValidationErrorCode::Identifier,
                 "settings.target.text",
-                "text target requires a valid NUL-free StringId");
+                "text target requires a valid non-empty NUL-free StringId");
         }
         break;
     default:

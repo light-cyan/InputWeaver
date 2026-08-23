@@ -1,6 +1,7 @@
 #include "frontend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -824,12 +825,59 @@ private:
         return Is(TokenKind::EndOfFile);
     }
 
+    [[nodiscard]] bool IsActionStart() const noexcept
+    {
+        if (Is(TokenKind::Pipe)) {
+            return true;
+        }
+        if (!Is(TokenKind::Word)) {
+            return false;
+        }
+        constexpr std::array<std::string_view, 11U> names{{
+            "press", "release", "tap", "wait", "gap", "set", "toggle",
+            "exec", "if", "repeat", "while",
+        }};
+        return std::find(names.begin(), names.end(), Current().text) != names.end();
+    }
+
+    [[nodiscard]] bool SynchronizeActionFlow(
+        const std::vector<std::string_view>& terminators) noexcept
+    {
+        std::uint32_t delimiterDepth = 0U;
+        while (!Is(TokenKind::EndOfFile)) {
+            if (delimiterDepth == 0U) {
+                if (AtActionTerminator(terminators) || IsActionStart()) {
+                    return true;
+                }
+                if (Is(TokenKind::Semicolon)
+                    || IsWord("else")
+                    || IsWord("end")) {
+                    return false;
+                }
+            }
+            if (Is(TokenKind::LeftParen) || Is(TokenKind::LeftBracket)) {
+                ++delimiterDepth;
+            } else if ((Is(TokenKind::RightParen) || Is(TokenKind::RightBracket))
+                && delimiterDepth > 0U) {
+                --delimiterDepth;
+            }
+            Advance();
+        }
+        return false;
+    }
+
     [[nodiscard]] std::vector<ActionSyntax> ParseActionFlow(
         const std::vector<std::string_view>& terminators)
     {
         std::vector<ActionSyntax> actions;
         while (!AtActionTerminator(terminators)) {
-            actions.push_back(ParseAction());
+            try {
+                actions.push_back(ParseAction());
+            } catch (const ParseFailure&) {
+                if (!SynchronizeActionFlow(terminators)) {
+                    throw;
+                }
+            }
         }
         return actions;
     }

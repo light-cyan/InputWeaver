@@ -1,10 +1,14 @@
 #include "diagnostics/diagnostic_log.hpp"
+#include "program_runtime_session.hpp"
+#include "runtime/artifact_loader.hpp"
 #include "runtime_session.hpp"
 #include "platform/windows/process_locator.hpp"
 #include "platform/windows/process_context.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <windows.h>
@@ -17,6 +21,7 @@ struct CommandLineOptions {
     bool traceInput{};
     std::wstring targetSelector;
     std::wstring jsonlPath;
+    std::filesystem::path programPath;
 };
 
 HANDLE gConsoleStopEvent = nullptr;
@@ -47,6 +52,9 @@ void PrintUsage() {
         << L"Phase 1 fixed-rule mode:\n"
         << L"  InputWeaver.exe --test-rules --target <exe-name-or-absolute-path>"
            L" [--log <jsonl-path>] [--trace-input]\n\n"
+        << L"Compiled-program mode:\n"
+        << L"  InputWeaver.exe --program <file.weavec> [--target <override>]"
+           L" [--log <jsonl-path>] [--trace-input]\n\n"
         << L"Fixed rules: F6 -> F7, F7 -> F8, F9 -> middle click,"
            L" middle button -> F10.\n"
         << L"Rules are active only while the selected process owns the foreground window.\n"
@@ -66,6 +74,12 @@ bool ParseCommandLine(
             options.testRules = true;
         } else if (argument == L"--trace-input") {
             options.traceInput = true;
+        } else if (argument == L"--program") {
+            if (++index >= argumentCount || arguments[index][0] == L'\0') {
+                errorMessage = L"--program requires a .weavec file path.";
+                return false;
+            }
+            options.programPath = arguments[index];
         } else if (argument == L"--target") {
             if (++index >= argumentCount || arguments[index][0] == L'\0') {
                 errorMessage = L"--target requires an executable name or absolute path.";
@@ -91,8 +105,13 @@ bool ParseCommandLine(
         errorMessage = L"--test-rules requires --target.";
         return false;
     }
-    if (!options.testRules && !options.targetSelector.empty()) {
-        errorMessage = L"--target is valid only with --test-rules.";
+    if (options.testRules && !options.programPath.empty()) {
+        errorMessage = L"--test-rules and --program are mutually exclusive.";
+        return false;
+    }
+    if (!options.testRules && options.programPath.empty()
+        && !options.targetSelector.empty()) {
+        errorMessage = L"--target is valid only with --test-rules or --program.";
         return false;
     }
     if (options.traceInput && options.jsonlPath.empty()) {
@@ -137,6 +156,30 @@ void PrintMetrics(
                << L" unresolved_synthetic_releases=" << metrics.unresolvedSyntheticReleases
                << L" hook_log_drops=" << diagnosticLog.DroppedHookRecords()
                << L" injection_log_drops=" << diagnosticLog.DroppedInjectionRecords()
+               << L" runtime_log_drops=" << diagnosticLog.DroppedRuntimeRecords()
+               << L" jsonl_bytes=" << diagnosticLog.JsonlBytesWritten()
+               << L" jsonl_truncated=" << (diagnosticLog.JsonlTruncated() ? L"true" : L"false")
+               << L"\n";
+}
+
+void PrintProgramMetrics(
+    const inputweaver::WindowsProgramRuntimeSessionMetrics& metrics,
+    const inputweaver::DiagnosticLog& diagnosticLog) {
+    std::wcout << L"Compiled-program session stopped. dispatched="
+               << metrics.runtime.dispatchedEvents
+               << L" suppressed=" << metrics.runtime.suppressedEvents
+               << L" tasks_started=" << metrics.runtime.startedTasks
+               << L" tasks_completed=" << metrics.runtime.completedTasks
+               << L" tasks_cancelled=" << metrics.runtime.cancelledTasks
+               << L" output_transitions=" << metrics.runtime.outputTransitions
+               << L" queued=" << metrics.queuedBatches
+               << L" cancelled_batches=" << metrics.cancelledBatches
+               << L" injection_failures=" << metrics.injectionFailures
+               << L" outside_target_forwarded=" << metrics.forwardedOutsideTarget
+               << L" max_hook_us=" << metrics.maximumHookMicroseconds
+               << L" hook_log_drops=" << diagnosticLog.DroppedHookRecords()
+               << L" injection_log_drops=" << diagnosticLog.DroppedInjectionRecords()
+               << L" runtime_log_drops=" << diagnosticLog.DroppedRuntimeRecords()
                << L" jsonl_bytes=" << diagnosticLog.JsonlBytesWritten()
                << L" jsonl_truncated=" << (diagnosticLog.JsonlTruncated() ? L"true" : L"false")
                << L"\n";
@@ -169,6 +212,60 @@ DWORD WaitForRuntime(inputweaver::WindowsRuntimeSession& runtime, DWORD& waitErr
             << L"Runtime error: the action queue reached capacity; the triggering input "
                L"was forwarded to keep the system responsive. "
             << L"total_action_queue_rejections=" << metrics.rejectedActionPushes << L"\n";
+    }
+}
+
+DWORD WaitForProgramRuntime(
+    inputweaver::WindowsProgramRuntimeSession& runtime,
+    DWORD& waitError) {
+    const HANDLE waitHandles[] = {runtime.StoppedEvent(), gConsoleStopEvent};
+    const DWORD result = WaitForMultipleObjects(2U, waitHandles, FALSE, INFINITE);
+    waitError = result == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+    return result;
+}
+
+bool ResolveCompiledTarget(
+    const inputweaver::CompiledProgram& program,
+    const std::wstring& commandLineOverride,
+    inputweaver::TargetSelectorKind& kind,
+    std::wstring& selector,
+    std::wstring& errorMessage) {
+    if (!commandLineOverride.empty()) {
+        kind = inputweaver::TargetSelectorKind::Executable;
+        selector = commandLineOverride;
+        return true;
+    }
+    const inputweaver::TargetSelector& target = program.Settings().target;
+    kind = target.kind;
+    if (kind == inputweaver::TargetSelectorKind::Global) {
+        selector.clear();
+        return true;
+    }
+    if (kind != inputweaver::TargetSelectorKind::Executable
+        || !target.text.IsValid()
+        || target.text.value >= program.Strings().size()) {
+        errorMessage = L"The compiled program does not contain a usable target selector.";
+        return false;
+    }
+    const std::string& authored = program.Strings()[target.text.value];
+    selector.assign(authored.begin(), authored.end());
+    if (selector.empty()) {
+        errorMessage = L"The compiled executable target is empty.";
+        return false;
+    }
+    return true;
+}
+
+void PrintArtifactReadError(
+    const inputweaver::RuntimeArtifactReadResult& result) {
+    std::cerr << "Cannot read the compiled program. code="
+              << static_cast<unsigned int>(result.error) << ".\n";
+    if (result.decodeError.has_value()) {
+        std::cerr << "Decode error at byte " << result.decodeError->byteOffset
+                  << ": " << result.decodeError->message << "\n";
+    }
+    for (const inputweaver::ProgramValidationError& error : result.validationErrors) {
+        std::cerr << error.location << ": " << error.message << "\n";
     }
 }
 
@@ -331,6 +428,125 @@ int RunTargeted(
     return 0;
 }
 
+int RunCompiledInstance(
+    const CommandLineOptions& options,
+    inputweaver::SelfTag selfTag,
+    inputweaver::DiagnosticLog& diagnosticLog,
+    const std::shared_ptr<const inputweaver::CompiledProgram>& program,
+    inputweaver::TargetProcessContext* targetContext) {
+    inputweaver::WindowsProgramRuntimeSession runtime(
+        {options.traceInput, selfTag}, targetContext, diagnosticLog);
+    std::wstring errorMessage;
+    if (!runtime.Start(program, errorMessage)) {
+        std::wcerr << L"Error: " << errorMessage << L"\n";
+        return 6;
+    }
+
+    std::wcout << L"Compiled program is active"
+               << (targetContext == nullptr
+                    ? L" globally.\n"
+                    : L" only while the selected process is foreground.\n")
+               << L"Press physical Ctrl+Shift+F12 to stop.\n";
+    DWORD waitError = ERROR_SUCCESS;
+    const DWORD waitResult = WaitForProgramRuntime(runtime, waitError);
+    if (waitResult == WAIT_OBJECT_0 + 1U || waitResult == WAIT_FAILED) {
+        runtime.RequestStop();
+    }
+    runtime.Wait();
+    const inputweaver::WindowsProgramRuntimeSessionMetrics metrics = runtime.Metrics();
+    PrintProgramMetrics(metrics, diagnosticLog);
+    if (waitResult == WAIT_FAILED) {
+        std::wcerr << L"WaitForMultipleObjects failed with Win32 error "
+                   << waitError << L".\n";
+        return 7;
+    }
+    return metrics.circuitBreakerOpen || metrics.injectionFailures != 0U
+        ? 8
+        : 0;
+}
+
+int RunCompiledProgram(
+    const CommandLineOptions& options,
+    inputweaver::SelfTag selfTag,
+    inputweaver::DiagnosticLog& diagnosticLog,
+    const std::shared_ptr<const inputweaver::CompiledProgram>& program,
+    inputweaver::TargetSelectorKind targetKind,
+    const std::wstring& targetSelector) {
+    if (targetKind == inputweaver::TargetSelectorKind::Global) {
+        return RunCompiledInstance(
+            options, selfTag, diagnosticLog, program, nullptr);
+    }
+
+    bool waitingMessagePrinted = false;
+    bool ambiguousMessagePrinted = false;
+    while (!StopWasRequested()) {
+        const inputweaver::win32::LocateResult located =
+            inputweaver::win32::LocateExecutable(targetSelector);
+        if (located.status == inputweaver::win32::LocateStatus::Error) {
+            std::wcerr << L"Error: target search failed with Win32 error "
+                       << located.win32Error << L".\n";
+            return 3;
+        }
+        if (located.status == inputweaver::win32::LocateStatus::None) {
+            if (!waitingMessagePrinted) {
+                std::wcout << L"Waiting for target " << targetSelector << L"...\n";
+                waitingMessagePrinted = true;
+            }
+            if (WaitForRetry()) {
+                break;
+            }
+            continue;
+        }
+
+        inputweaver::win32::LocatedProcess selected{};
+        if (!SelectLocatedProcess(located, selected)) {
+            if (!ambiguousMessagePrinted) {
+                std::wcout << L"Multiple target processes match; focus the intended instance:\n";
+                for (const auto& candidate : located.matches) {
+                    std::wcout << L"  PID " << candidate.processId << L"  "
+                               << candidate.imagePath << L"\n";
+                }
+                ambiguousMessagePrinted = true;
+            }
+            if (WaitForRetry()) {
+                break;
+            }
+            continue;
+        }
+
+        inputweaver::TargetProcessContext targetContext;
+        const inputweaver::ProcessContextResult targetResult =
+            targetContext.Initialize(selected.processId, selected.imagePath);
+        if (targetResult.error == inputweaver::ProcessContextError::TargetExited
+            || targetResult.error == inputweaver::ProcessContextError::TargetImageMismatch) {
+            continue;
+        }
+        if (!targetResult.Succeeded()) {
+            std::cerr << "Target validation failed: "
+                      << inputweaver::ProcessContextErrorName(targetResult.error)
+                      << " (Win32 error " << targetResult.win32Error << ").\n";
+            return 3;
+        }
+
+        std::wcout << L"Loaded " << options.programPath.wstring() << L"\n"
+                   << L"Attached to PID " << selected.processId << L": "
+                   << selected.imagePath << L"\n";
+        const int sessionResult = RunCompiledInstance(
+            options, selfTag, diagnosticLog, program, &targetContext);
+        if (sessionResult != 0 || StopWasRequested()) {
+            return sessionResult;
+        }
+        DWORD livenessError = ERROR_SUCCESS;
+        if (targetContext.IsTargetAlive(&livenessError)) {
+            return 0;
+        }
+        std::wcout << L"Target exited; waiting for it to restart.\n";
+        waitingMessagePrinted = false;
+        ambiguousMessagePrinted = false;
+    }
+    return 0;
+}
+
 }  // namespace
 
 int wmain(int argumentCount, wchar_t** arguments) {
@@ -344,6 +560,29 @@ int wmain(int argumentCount, wchar_t** arguments) {
     if (options.showHelp) {
         PrintUsage();
         return 0;
+    }
+
+    std::shared_ptr<const inputweaver::CompiledProgram> compiledProgram;
+    inputweaver::TargetSelectorKind compiledTargetKind =
+        inputweaver::TargetSelectorKind::Unspecified;
+    std::wstring compiledTargetSelector;
+    if (!options.programPath.empty()) {
+        inputweaver::RuntimeArtifactReadResult artifact =
+            inputweaver::ReadWeavec(options.programPath);
+        if (!artifact.Succeeded()) {
+            PrintArtifactReadError(artifact);
+            return 10;
+        }
+        compiledProgram = std::move(artifact.program);
+        if (!ResolveCompiledTarget(
+                *compiledProgram,
+                options.targetSelector,
+                compiledTargetKind,
+                compiledTargetSelector,
+                errorMessage)) {
+            std::wcerr << L"Error: " << errorMessage << L"\n";
+            return 10;
+        }
     }
 
     inputweaver::DiagnosticLog diagnosticLog;
@@ -370,9 +609,20 @@ int wmain(int argumentCount, wchar_t** arguments) {
     }
 
     const inputweaver::SelfTag selfTag = GenerateSelfTag();
-    const int result = options.testRules
-        ? RunTargeted(options, selfTag, diagnosticLog)
-        : RunObserver(options, selfTag, diagnosticLog);
+    int result = 0;
+    if (options.testRules) {
+        result = RunTargeted(options, selfTag, diagnosticLog);
+    } else if (compiledProgram != nullptr) {
+        result = RunCompiledProgram(
+            options,
+            selfTag,
+            diagnosticLog,
+            compiledProgram,
+            compiledTargetKind,
+            compiledTargetSelector);
+    } else {
+        result = RunObserver(options, selfTag, diagnosticLog);
+    }
 
     diagnosticLog.Stop();
     SetConsoleCtrlHandler(&ConsoleControlHandler, FALSE);

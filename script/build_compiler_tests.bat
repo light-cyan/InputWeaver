@@ -20,6 +20,7 @@ echo [1/2] Building InputWeaverCompiler.exe...
     "src\program\program_validator.cpp" ^
     "src\program\program_dump.cpp" ^
     "src\program\weavec_codec.cpp" ^
+    -municode ^
     -o "bin\InputWeaverCompiler.exe"
 if errorlevel 1 exit /b %errorlevel%
 

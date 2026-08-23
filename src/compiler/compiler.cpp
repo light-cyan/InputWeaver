@@ -275,6 +275,7 @@ std::string_view CompileDiagnosticCodeName(CompileDiagnosticCode code) noexcept
     case CompileDiagnosticCode::ReadOnlyValue: return "IW1310";
     case CompileDiagnosticCode::ConstantEvaluation: return "IW1311";
     case CompileDiagnosticCode::EmbeddedNul: return "IW1312";
+    case CompileDiagnosticCode::EmptyString: return "IW1313";
     case CompileDiagnosticCode::InternalCompiler: return "IW1401";
     case CompileDiagnosticCode::ArtifactWriteFailed: return "IW1501";
     case CompileDiagnosticCode::ArtifactReplaceFailed: return "IW1502";

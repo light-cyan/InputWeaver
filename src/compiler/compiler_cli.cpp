@@ -6,11 +6,6 @@
 
 namespace {
 
-[[nodiscard]] std::filesystem::path Utf8Path(const char* value)
-{
-    return std::filesystem::path{reinterpret_cast<const char8_t*>(value)};
-}
-
 void PrintDiagnostics(
     const std::vector<inputweaver::compiler::CompileDiagnostic>& diagnostics)
 {
@@ -30,23 +25,23 @@ void PrintUsage()
 
 } // namespace
 
-int main(int argc, char* argv[])
+int wmain(int argc, wchar_t* argv[])
 {
     using namespace inputweaver::compiler;
     if (argc < 3) {
         PrintUsage();
         return 2;
     }
-    const std::string_view command = argv[1];
-    const std::filesystem::path source = Utf8Path(argv[2]);
-    if (command == "compile") {
+    const std::wstring_view command = argv[1];
+    const std::filesystem::path source{argv[2]};
+    if (command == L"compile") {
         if (argc > 4) {
             PrintUsage();
             return 2;
         }
         std::filesystem::path destination;
         if (argc == 4) {
-            destination = Utf8Path(argv[3]);
+            destination = std::filesystem::path{argv[3]};
         } else {
             destination = source;
             destination.replace_extension(".weavec");
@@ -56,11 +51,11 @@ int main(int argc, char* argv[])
         if (!result.succeeded) {
             return 1;
         }
-        std::cout << "Wrote " << result.artifactByteLength << " bytes to "
-                  << destination.string() << '\n';
+        std::wcout << L"Wrote " << result.artifactByteLength << L" bytes to "
+                   << destination.wstring() << L'\n';
         return 0;
     }
-    if (command == "validate") {
+    if (command == L"validate") {
         if (argc != 3) {
             PrintUsage();
             return 2;
@@ -73,7 +68,7 @@ int main(int argc, char* argv[])
         std::cout << "Source is valid.\n";
         return 0;
     }
-    if (command == "dump") {
+    if (command == L"dump") {
         if (argc != 3) {
             PrintUsage();
             return 2;

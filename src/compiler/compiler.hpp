@@ -55,6 +55,7 @@ enum class CompileDiagnosticCode : std::uint16_t {
     ReadOnlyValue,
     ConstantEvaluation,
     EmbeddedNul,
+    EmptyString,
     InternalCompiler,
     ArtifactWriteFailed,
     ArtifactReplaceFailed,

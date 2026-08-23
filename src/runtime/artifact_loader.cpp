@@ -8,12 +8,11 @@
 
 namespace inputweaver {
 
-RuntimeArtifactLoadResult LoadAndActivateWeavec(
-    ProgramRuntime& runtime,
+RuntimeArtifactReadResult ReadWeavec(
     const std::filesystem::path& path,
     const WeavecDecodeLimits& limits)
 {
-    RuntimeArtifactLoadResult result{};
+    RuntimeArtifactReadResult result{};
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) {
         result.error = RuntimeArtifactLoadErrorCode::OpenFailed;
@@ -64,8 +63,25 @@ RuntimeArtifactLoadResult LoadAndActivateWeavec(
         result.validationErrors.swap(decoded.validationErrors);
         return result;
     }
+    result.program = std::move(decoded.program);
+    return result;
+}
+
+RuntimeArtifactLoadResult LoadAndActivateWeavec(
+    ProgramRuntime& runtime,
+    const std::filesystem::path& path,
+    const WeavecDecodeLimits& limits)
+{
+    RuntimeArtifactLoadResult result{};
+    RuntimeArtifactReadResult read = ReadWeavec(path, limits);
+    if (!read.Succeeded()) {
+        result.error = read.error;
+        result.decodeError = std::move(read.decodeError);
+        result.validationErrors = std::move(read.validationErrors);
+        return result;
+    }
     const RuntimeActivationResult activation = runtime.Activate(
-        std::move(decoded.program));
+        std::move(read.program));
     if (!activation.activated) {
         result.error = RuntimeArtifactLoadErrorCode::ActivationFailed;
         result.activationError = activation.error;

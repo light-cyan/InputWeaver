@@ -339,6 +339,23 @@ void TestWindowsControlCatalogCoverage()
         allUses,
         "E1 exceptional Windows scan code binds");
 
+    win32::WindowsControlCatalog unsupportedCatalog;
+    unsupportedCatalog.BeginActivation();
+    ActivatedControl unsupported{};
+    Check(unsupportedCatalog.BindControl(
+            ControlRefId{0U},
+            {kControlNamespaceWindows, kWindowsVirtualKeyFamily, 0U, 0U},
+            allUses,
+            unsupported) == RuntimeControlBindResult::UnsupportedIdentity,
+        "Windows activation rejects virtual-key zero after structural validation");
+    Check(unsupportedCatalog.BindControl(
+            ControlRefId{1U},
+            {kControlNamespaceWindows, kWindowsScanCodeFamily, 0U, 0U},
+            allUses,
+            unsupported) == RuntimeControlBindResult::UnsupportedIdentity,
+        "Windows activation rejects scan-code zero after structural validation");
+    unsupportedCatalog.AbortActivation();
+
     win32::WindowsControlCatalog recipeCatalog;
     recipeCatalog.BeginActivation();
     ActivatedControl normal{};

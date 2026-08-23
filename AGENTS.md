@@ -4,9 +4,9 @@ context-aware input mapping and macro engine
 
 ## Project Overview
 
-InputWeaver is a C++ context-aware input mapping and macro engine. Weave source files use the `.weave` extension, compiled programs use the `.weavec` extension, and the Windows application artifact is `InputWeaver.exe`.
+InputWeaver is a C++ context-aware input mapping and macro engine. Weave source files use the `.weave` extension, compiled programs use the `.weavec` extension, the compiler artifact is `InputWeaverCompiler.exe`, and the Windows executor artifact is `InputWeaver.exe`.
 
-The compiler and runtime are independent subsystems. The compiler transforms `.weave` source into a `.weavec` file, the runtime loads that file and executes it, and the application coordinates those operations without passing an in-memory compiled program between the two subsystems.
+The compiler and executor are independent command-line programs. `InputWeaverCompiler.exe` transforms `.weave` source into a persistent `.weavec` file, and `InputWeaver.exe` loads and executes that file without reparsing source or receiving an in-memory compiled program from the compiler.
 
 ## Environment
 
@@ -18,29 +18,32 @@ The compiler and runtime are independent subsystems. The compiler transforms `.w
 
 ## Build and Verification
 
-- Keep the canonical build and run commands in batch files under `script/` when the application source is added.
+- Keep canonical build, test, analysis, and run commands in batch files under `script/`.
 - Place generated executables and other build output under `bin/` and keep them out of version control.
 - Compile with `g++` and verify a successful build after changing C++ source code.
 - Use the specifications under `docs/language/` for current Weave behavior.
+- Use `script/build_compiler_tests.bat` to build `InputWeaverCompiler.exe` and compiler tests, `script/build.bat` to build `InputWeaver.exe` and runtime tests, and `script/verify_phase3.bat` for the combined strict verification gate.
 
 ## Agent Coordination
 
 - `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise pointers to current development work.
 - `docs/language/` owns Weave source-language definitions.
-- `development/` outside `development/legacy/` owns current designs, phase plans, verification evidence, research, and open design issues.
+- `development/` outside `development/legacy/` owns current designs, handoff material, research, and open design issues.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
-- Read the relevant language specification, compiled-program design, phase plan, and open-issue register before changing an owned subsystem.
+- Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
+- `development/Handoff.md` is the current implementation and command-line handoff.
+- Read the relevant language specification, current handoff, shared program contract in `src/program/`, and open-issue register before changing an owned subsystem.
 - Record a new decision in its owning document instead of duplicating phase history or handoff logs in `AGENTS.md`.
 
 ## Dependency Model
 
-The application is the control plane. It tells the compiler which `.weave` source to compile and tells the runtime which `.weavec` file to load, start, reload, or stop. The compiler and runtime never call each other and never exchange an in-memory `CompiledProgram`.
+The command line is the current control plane. The compiler command selects a `.weave` source and `.weavec` destination, while the executor command selects a `.weavec` artifact and optional target override. The compiler and runtime never call each other and never exchange an in-memory `CompiledProgram`.
 
 ```text
 Control flow:
 
-tui -> app -> compiler
-           -> runtime
+InputWeaverCompiler.exe -> compiler
+InputWeaver.exe         -> runtime -> Windows hooks and injection
 
 Program data:
 
@@ -51,37 +54,34 @@ Code dependencies:
 compiler -> program
 runtime  -> program + input
 program  -> input control types
-platform/windows -> app and runtime interfaces + input contracts
-app, compiler, runtime, platform/windows, and tui -> diagnostics as needed
+platform/windows -> runtime + program + input + diagnostics
+diagnostics -> input + runtime diagnostic types
 all modules -> support only for domain-independent primitives
 ```
 
-`program` is the shared definition of the compiled artifact, not a call path between compiler and runtime. `app` passes file paths and user commands, while `runtime` owns artifact loading and executable state.
+`program` is the shared definition of the compiled artifact, not a call path between compiler and runtime. The Windows entry point owns command-line mode selection and target discovery, while `runtime` owns artifact activation and executable state.
 
 ## File Layout
 
-- `src/app/` owns application use cases, compile/run/reload/stop coordination, configuration selection, and status exposed to user interfaces. It contains no parser, virtual machine, hook, injector, or platform handle.
 - `src/compiler/` owns Weave source loading, lexical analysis, parsing, semantic binding, type checking, lowering, compile diagnostics, and `.weavec` emission.
 - `src/program/` owns `CompiledProgram`, canonicalization, structural validation, deterministic dumps, and the shared `.weavec` encoding contract.
 - `src/input/` owns platform-independent live input and output control types, normalized events, transitions, origins, decisions, and bounded output batch records.
 - `src/runtime/` owns platform-independent program activation, physical state, variable and `PAUSE` state, dispatch, expression evaluation, mappings, action execution, task scheduling, cancellation, output ownership, and runtime port interfaces.
-- `src/platform/windows/` owns the Windows executable entry point, current Windows runtime-session assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and implementations of application and runtime platform interfaces.
-- `src/tui/` owns terminal rendering and user interaction and communicates with compiler and runtime only through `app`.
+- `src/platform/windows/` owns the Windows executor entry point, command-line mode selection, runtime-session assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces.
 - `src/diagnostics/` owns bounded diagnostic transport, formatting, and reporting sinks; domain decisions remain in the producing subsystem.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
-- `tests/program/`, `tests/compiler/`, `tests/runtime/`, and `tests/app/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
+- `tests/program/`, `tests/compiler/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
 - `docs/language/` contains user-visible Weave language definitions; `development/` contains current engineering documents; `development/legacy/` contains archived material that is outside current development.
 - `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Current Development
 
-- The Phase 3 compiler implementation is present under `src/compiler/`, with compiler tests under `tests/compiler/` and canonical build, test, and analysis commands under `script/`.
-- The current compiler-owned verification passes; use `development/phase-3-compiler/Verification.md` as the handoff record and `development/phase-3-compiler/OpenQuestions.md` as the active decision and implementation-concern register.
-- Phase 3 compiler completion remains open until the affected gates in `development/phase-3-compiler/OpenQuestions.md` are resolved, including exact Phase 2 fixture-dump convergence and nested control-structure parser recovery.
-- Continue remaining compiler work from `development/phase-3-compiler/ImplementationPlan.md`, `development/phase-3-compiler/Verification.md`, and `development/phase-3-compiler/OpenQuestions.md`.
-- The Phase 3 runtime implementation is present under `src/runtime/` and `src/platform/windows/`, with runtime tests under `tests/runtime/` and canonical build and test commands under `script/`.
-- Use `development/phase-3-runtime/ImplementationPlan.md` for the runtime boundary and `development/phase-3-runtime/Verification.md` for its implementation handoff and verification evidence.
-- Keep `development/OpenDesignIssues.md` open for decisions that block affected implementation gates.
+- The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
+- `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` provides compiled-program execution, observer mode, and the retained Phase 1 fixed-rule regression mode.
+- `example/notepad-showcase.weave`, its compiled artifact, helper scripts, Chinese acceptance guide, and acceptance JSONL demonstrate and verify the current end-to-end Windows path.
+- `development/Handoff.md` records the current implementation boundary, commands, modes, verification evidence, and operational constraints.
+- Completed Phase 2 and Phase 3 plans and verification records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, and `development/legacy/phase-3-runtime/`.
+- Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_phase3.bat` for the combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices
 

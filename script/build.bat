@@ -15,6 +15,7 @@ if errorlevel 1 exit /b %errorlevel%
 echo [2/6] Building InputWeaver.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
     "src\platform\windows\main.cpp" ^
+    "src\platform\windows\program_runtime_session.cpp" ^
     "src\platform\windows\runtime_session.cpp" ^
     "src\platform\windows\remap_engine.cpp" ^
     "src\platform\windows\action_scheduler.cpp" ^
@@ -23,7 +24,16 @@ echo [2/6] Building InputWeaver.exe...
     "src\platform\windows\input_injector.cpp" ^
     "src\platform\windows\process_context.cpp" ^
     "src\platform\windows\process_locator.cpp" ^
+    "src\platform\windows\runtime_control_catalog.cpp" ^
+    "src\platform\windows\runtime_process_launcher.cpp" ^
+    "src\platform\windows\runtime_route_adapter.cpp" ^
     "src\diagnostics\diagnostic_log.cpp" ^
+    "src\runtime\artifact_loader.cpp" ^
+    "src\runtime\expression_vm.cpp" ^
+    "src\runtime\program_runtime.cpp" ^
+    "src\program\compiled_program.cpp" ^
+    "src\program\program_validator.cpp" ^
+    "src\program\weavec_codec.cpp" ^
     "bin\InputWeaver.res.o" ^
     -o "bin\InputWeaver.exe" ^
     -luser32 -ladvapi32

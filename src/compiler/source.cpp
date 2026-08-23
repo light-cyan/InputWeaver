@@ -33,7 +33,7 @@ void DeriveLineStarts(SourceFile& source)
         } else if (source.bytes[index] == '\n') {
             lineBreak = true;
         }
-        if (lineBreak && next < source.bytes.size()) {
+        if (lineBreak) {
             source.lineStarts.push_back(static_cast<std::uint32_t>(next));
         }
         index = next;

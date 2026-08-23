@@ -339,10 +339,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        10389705910507639397ULL,
-        17776357415295911139ULL,
-        14182767377470171226ULL,
-        3121414655632945442ULL,
+        13995634791663768003ULL,
+        13743080210461105494ULL,
+        8092455474302200342ULL,
+        3303624570601117283ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -403,12 +403,25 @@ void TestControlIdentityContract()
             && mapping->Mappings()[0].target == ControlRefId{1U},
         "mapping sources and targets use the shared control pool");
 
-    constexpr std::array<ControlRef, 4U> supportedIdentityShapes{
-        ControlRef{kControlNamespaceUsbHid, 0x07U, 0x04U, 0U},
+    constexpr std::array supportedIdentityShapes{
+        ControlRef{kControlNamespaceUsbHid, 1U, 0U, 0U},
+        ControlRef{kControlNamespaceUsbHid, kMaximumHidUsagePage,
+            kMaximumHidUsageId, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsVirtualKeyFamily, 0U, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsVirtualKeyFamily,
+            kMaximumWindowsNativeCode, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily, 0U,
+            kControlQualifierNone},
         ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily, 0x1dU,
             kWindowsScanCodeQualifierE0},
-        ControlRef{kControlNamespaceLinux, kLinuxEvKeyFamily, 127U, 0U},
-        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily, 0x3fU, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily,
+            kMaximumWindowsNativeCode, kWindowsScanCodeQualifierE1},
+        ControlRef{kControlNamespaceLinux, kLinuxEvKeyFamily, 0U, 0U},
+        ControlRef{kControlNamespaceLinux, kLinuxEvKeyFamily,
+            kMaximumLinuxEvKeyCode, 0U},
+        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily, 0U, 0U},
+        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily,
+            kMaximumMacOsKeyCode, 0U},
     };
     for (const ControlRef control : supportedIdentityShapes) {
         auto storage = test::MakePauseControlFixtureStorage();
@@ -418,14 +431,25 @@ void TestControlIdentityContract()
             "published control namespace shape validates structurally");
     }
 
-    constexpr std::array<ControlRef, 8U> invalidIdentityShapes{
+    constexpr std::array invalidIdentityShapes{
         ControlRef{0U, 1U, 1U, 0U},
         ControlRef{3U, 1U, 1U, 0U},
         ControlRef{kControlNamespaceWeave, 1U, 1U, 0U},
+        ControlRef{kControlNamespaceUsbHid, 0U, 0U, 0U},
+        ControlRef{kControlNamespaceUsbHid, kMaximumHidUsagePage + 1U, 0U, 0U},
+        ControlRef{kControlNamespaceUsbHid, 1U, kMaximumHidUsageId + 1U, 0U},
         ControlRef{kControlNamespaceWindows, 3U, 1U, 0U},
         ControlRef{kControlNamespaceWindows, kWindowsVirtualKeyFamily, 1U, 1U},
+        ControlRef{kControlNamespaceWindows, kWindowsVirtualKeyFamily,
+            kMaximumWindowsNativeCode + 1U, 0U},
         ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily, 1U, 3U},
+        ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily,
+            kMaximumWindowsNativeCode + 1U, 0U},
         ControlRef{kControlNamespaceLinux, 2U, 1U, 0U},
+        ControlRef{kControlNamespaceLinux, kLinuxEvKeyFamily,
+            kMaximumLinuxEvKeyCode + 1U, 0U},
+        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily,
+            kMaximumMacOsKeyCode + 1U, 0U},
         ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily,
             kInvalidProgramIndex, 0U},
     };
@@ -434,7 +458,7 @@ void TestControlIdentityContract()
         storage.controls[0] = control;
         const auto result = FinalizeCompiledProgram(std::move(storage));
         Check(HasError(result.errors, ProgramValidationErrorCode::Value),
-            "invalid control namespace, family, qualifier, or field is rejected");
+            "invalid control namespace, family, numeric domain, qualifier, or field is rejected");
     }
 }
 
@@ -876,6 +900,16 @@ void TestRemainingValidationFamilies()
                     result.errors,
                     inputweaver::ProgramValidationErrorCode::Identifier),
             "embedded NUL in executable text is diagnosed");
+    }
+    {
+        auto storage = MakeOpcodeCoverageStorage();
+        storage.strings[4].clear();
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Action)
+                && HasError(
+                    result.errors,
+                    inputweaver::ProgramValidationErrorCode::Identifier),
+            "empty executable target and Exec command are diagnosed");
     }
     {
         auto storage = inputweaver::test::MakeTapFixtureStorage();

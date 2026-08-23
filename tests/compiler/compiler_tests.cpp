@@ -16,7 +16,6 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
-#include <regex>
 #include <set>
 #include <span>
 #include <string>
@@ -88,16 +87,9 @@ void Check(bool condition, std::string_view name)
     return result.program;
 }
 
-[[nodiscard]] std::string NormalizeSourceSpans(std::string dump)
-{
-    return std::regex_replace(
-        dump,
-        std::regex{"source=[0-9]+\\+[0-9]+"},
-        "source=<span>");
-}
-
 void TestSourceAndLexer()
 {
+    using namespace inputweaver;
     using namespace inputweaver::compiler;
     const std::string sourceBytes =
         "// \xe4\xb8\xad\xe6\x96\x87\r\n"
@@ -168,6 +160,29 @@ void TestSourceAndLexer()
         unterminatedString.diagnostics,
         CompileDiagnosticCode::UnterminatedString),
         "unterminated strings are rejected");
+
+    DiagnosticSink escapedDiagnostics;
+    const std::optional<SourceFile> escapedSource = MakeSourceFile(
+        "escaped.weave",
+        R"weave(TARGET = "a\\b\"c\nd\re\tf";)weave",
+        {},
+        escapedDiagnostics);
+    Check(escapedSource.has_value(), "escaped string source loads");
+    if (escapedSource.has_value()) {
+        escapedDiagnostics.SetSource(&*escapedSource);
+        const std::vector<Token> escapedTokens = LexSource(
+            *escapedSource,
+            {},
+            escapedDiagnostics);
+        const auto token = std::find_if(
+            escapedTokens.begin(),
+            escapedTokens.end(),
+            [](const Token& candidate) { return candidate.kind == TokenKind::String; });
+        Check(!escapedDiagnostics.HasErrors()
+                && token != escapedTokens.end()
+                && token->text == "a\\b\"c\nd\re\tf",
+            "the complete cooked string escape set decodes exactly");
+    }
     const CompileOutput invalidEscape = CompileSource(
         "escape.weave",
         "TARGET = \"bad\\q\";");
@@ -175,6 +190,30 @@ void TestSourceAndLexer()
         invalidEscape.diagnostics,
         CompileDiagnosticCode::InvalidEscape),
         "unknown string escapes are rejected");
+
+    const CompileOutput cooked = CompileGood(
+        "cooked.weave",
+        R"weave(TARGET = "C:\\Tools\\game.exe";
+F1:down => exec("tool.exe\t--x\nnext\r\"q\"");
+)weave",
+        "cooked string artifact");
+    const auto cookedProgram = DecodeGood(cooked, "cooked string artifact");
+    if (cookedProgram != nullptr) {
+        const StringId target = cookedProgram->Settings().target.text;
+        Check(target.IsValid()
+                && cookedProgram->Strings()[target.value] == "C:\\Tools\\game.exe",
+            "cooked target bytes are preserved in the artifact");
+        const auto exec = std::find_if(
+            cookedProgram->ActionCode().begin(),
+            cookedProgram->ActionCode().end(),
+            [](const ActionInstruction& instruction) {
+                return instruction.opcode == ActionOpcode::Exec;
+            });
+        Check(exec != cookedProgram->ActionCode().end()
+                && cookedProgram->Strings()[exec->operand0]
+                    == "tool.exe\t--x\nnext\r\"q\"",
+            "cooked exec bytes are preserved in the artifact");
+    }
 
     CompilerLimits tokenLimits;
     tokenLimits.maximumTokens = 4U;
@@ -195,6 +234,23 @@ void TestSourceAndLexer()
         nested.diagnostics,
         CompileDiagnosticCode::SyntaxNestingLimit),
         "expression tree depth is bounded");
+
+    DiagnosticSink terminalDiagnostics;
+    const std::optional<SourceFile> terminalBreak = MakeSourceFile(
+        "terminal-break.weave",
+        "TARGET = GLOBAL;\n",
+        {},
+        terminalDiagnostics);
+    Check(terminalBreak.has_value(), "source ending in a line break loads");
+    if (terminalBreak.has_value()) {
+        Check(terminalBreak->lineStarts.size() == 2U
+                && terminalBreak->lineStarts.back() == terminalBreak->bytes.size(),
+            "terminal line break records the empty final line");
+        const auto [line, column] = terminalBreak->LineColumn({
+            static_cast<std::uint32_t>(terminalBreak->bytes.size()), 0U});
+        Check(line == 2U && column == 1U,
+            "end of file after a terminal line break uses the final line");
+    }
 }
 
 void TestParserAndRecovery()
@@ -230,6 +286,14 @@ void TestParserAndRecovery()
         "TARGET GLOBAL; F1 down =>; state value on;");
     Check(recovered.diagnostics.size() >= 3U,
         "parser recovers at top-level semicolons");
+
+    const CompileOutput nestedRecovery = CompileSource(
+        "nested-recovery.weave",
+        "F1:down => if on then tap() "
+        "repeat 2 do wait() end "
+        "while on do bogus() end end; F2:down =>;");
+    Check(nestedRecovery.diagnostics.size() == 3U,
+        "parser recovers three independent nested action errors");
 }
 
 void TestBindingDiagnostics()
@@ -265,6 +329,17 @@ void TestBindingDiagnostics()
             CompileDiagnosticCode::SettingOutOfRange},
         {"constant divide", "F1:down => wait(1s / 0);",
             CompileDiagnosticCode::ConstantEvaluation},
+        {"reachable and fault", "F1:down when (1 == 1) and (1 / 0 > 0) =>;",
+            CompileDiagnosticCode::ConstantEvaluation},
+        {"reachable or fault", "F1:down when (1 == 2) or (1 / 0 > 0) =>;",
+            CompileDiagnosticCode::ConstantEvaluation},
+        {"dynamic short-circuit fault",
+            "state enabled=on; F1:down when enabled[on] and (1 / 0 > 0) =>;",
+            CompileDiagnosticCode::ConstantEvaluation},
+        {"empty target", "TARGET=\"\";",
+            CompileDiagnosticCode::EmptyString},
+        {"empty exec", "F1:down => exec(\"\");",
+            CompileDiagnosticCode::EmptyString},
         {"raw arity", "HID.Usage(7):down =>;",
             CompileDiagnosticCode::InvalidRawControl},
         {"raw negative", "Linux.Key(-1):down =>;",
@@ -289,6 +364,23 @@ void TestBindingDiagnostics()
     const CompileOutput nul = CompileSource("nul.weave", embedded);
     Check(HasDiagnostic(nul.diagnostics, CompileDiagnosticCode::EmbeddedNul),
         "embedded NUL is rejected");
+
+    const CompileOutput unreachableFaults = CompileGood(
+        "unreachable-faults.weave",
+        "F1:down when (1 == 2) and (1 / 0 > 0) =>;\n"
+        "F2:down when (1 == 1) or (1 / 0 > 0) =>;",
+        "unreachable short-circuit constant faults");
+    Check(!HasDiagnostic(
+            unreachableFaults.diagnostics,
+            CompileDiagnosticCode::ConstantEvaluation),
+        "constant faults on proven unreachable logical operands are accepted");
+
+    const CompileOutput whitespaceStrings = CompileGood(
+        "whitespace-strings.weave",
+        "TARGET=\" \"; F1:down => exec(\" \" );",
+        "non-empty whitespace strings");
+    Check(whitespaceStrings.Succeeded(),
+        "non-empty strings remain subject to downstream resolution");
 
     std::string manyErrors;
     for (std::size_t index = 0U; index < 100U; ++index) {
@@ -386,6 +478,43 @@ void TestControlCatalogAndV2()
         "raw Linux key lowers");
     Check(contains({kControlNamespaceMacOs, kMacOsKeyCodeFamily, 0U, 0U}),
         "raw macOS key lowers");
+
+    const CompileOutput boundaries = CompileGood(
+        "raw-boundaries.weave",
+        "HID.Usage(1,0):down =>;\n"
+        "HID.Usage(0xFFFF,0xFFFF):down =>;\n"
+        "Windows.VirtualKey(0):down =>;\n"
+        "Windows.VirtualKey(0xFF):down =>;\n"
+        "Windows.ScanCode(0):down =>;\n"
+        "Windows.ScanCode(0xFF,E0):down =>;\n"
+        "Windows.ScanCode(0xFF,E1):down =>;\n"
+        "Linux.Key(0):down =>;\n"
+        "Linux.Key(0x2FF):down =>;\n"
+        "MacOS.KeyCode(0):down =>;\n"
+        "MacOS.KeyCode(0xFFFF):down =>;",
+        "raw control storage boundaries");
+    Check(DecodeGood(boundaries, "raw control storage boundaries") != nullptr,
+        "all frozen raw control boundary values compile and validate");
+
+    constexpr std::array<std::string_view, 7U> invalidRawControls{
+        "HID.Usage(0,0):down =>;",
+        "HID.Usage(0x10000,0):down =>;",
+        "HID.Usage(1,0x10000):down =>;",
+        "Windows.VirtualKey(0x100):down =>;",
+        "Windows.ScanCode(0x100):down =>;",
+        "Linux.Key(0x300):down =>;",
+        "MacOS.KeyCode(0x10000):down =>;",
+    };
+    for (const std::string_view invalidRawControl : invalidRawControls) {
+        const CompileOutput invalidRaw = CompileSource(
+            "invalid-raw-boundary.weave",
+            std::string(invalidRawControl));
+        Check(HasDiagnostic(
+                invalidRaw.diagnostics,
+                CompileDiagnosticCode::InvalidRawControl)
+                && invalidRaw.artifact.empty(),
+            "out-of-domain raw controls are rejected before artifact emission");
+    }
 }
 
 void TestLoweringCoverage()
@@ -400,7 +529,7 @@ void TestLoweringCoverage()
         "press(C) release(C) tap(D) wait(d) wait(1ms) | gap()\n"
         "set(n, +n + -n - n * n / n % n)\n"
         "set(d, d + d - d) set(d, d * n) set(d, n * d) set(d, d / n)\n"
-        "set(s, on) toggle(t) exec(\"\")\n"
+        "set(s, on) toggle(t) exec(\"tool.exe\")\n"
         "if n > 0 and n >= 0 and n != 1 and d == d then tap(E) else tap(F) end\n"
         "repeat n do tap(G) end while A[idle] do tap(H) end;\n"
         "F1:repeat ~>>; F1:up ~>; F2:down =>;\n";
@@ -556,10 +685,13 @@ void TestGoldenFixtureSemantics()
             continue;
         }
         Check(
-            NormalizeSourceSpans(compiled.dump)
-                == NormalizeSourceSpans(DumpCompiledProgram(*expected)),
+            compiled.dump == DumpCompiledProgram(*expected),
             std::string(fixture.name)
-                + " matches the frozen Phase 2 semantic tables");
+                + " exactly matches the Phase 2 fixture dump");
+        Check(
+            compiled.artifact == EncodeWeavec(*expected),
+            std::string(fixture.name)
+                + " exactly matches the Phase 2 fixture artifact");
     }
 }
 
@@ -617,6 +749,12 @@ void TestArtifactAndFileCommands()
         std::ofstream file(sourcePath, std::ios::binary);
         file << source;
     }
+    const CompilerCommandResult validateResult = ValidateFile(sourcePath);
+    Check(validateResult.succeeded && validateResult.dump.empty(),
+        "ValidateFile accepts valid source without producing a dump");
+    const CompilerCommandResult dumpResult = DumpFile(sourcePath);
+    Check(dumpResult.succeeded && !dumpResult.dump.empty(),
+        "DumpFile returns the deterministic dump for valid source");
     const CompilerCommandResult compileResult = CompileFile(
         sourcePath,
         artifactPath);

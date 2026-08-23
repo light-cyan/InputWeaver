@@ -232,7 +232,13 @@ private:
             : TargetSelectorKind::Executable;
         program_.targetText = item.literal;
         program_.targetSource = item.valueSpan;
-        if (!item.targetGlobal && item.literal.find('\0') != std::string::npos) {
+        if (!item.targetGlobal && item.literal.empty()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::EmptyString,
+                item.valueSpan,
+                "target selector must not be empty");
+        } else if (!item.targetGlobal
+                   && item.literal.find('\0') != std::string::npos) {
             diagnostics_.Add(
                 CompileDiagnosticCode::EmbeddedNul,
                 item.valueSpan,
@@ -396,7 +402,8 @@ private:
             const auto page = ParseUnsigned(syntax.arguments[0].text);
             const auto usage = ParseUnsigned(syntax.arguments[1].text);
             if (!page.has_value() || !usage.has_value()
-                || *page == 0U || *page > 0xffffU || *usage > 0xffffU) {
+                || *page == 0U || *page > kMaximumHidUsagePage
+                || *usage > kMaximumHidUsageId) {
                 return reject("HID usage page must be 1..0xFFFF and usage must be 0..0xFFFF");
             }
             return ControlRef{
@@ -410,7 +417,7 @@ private:
                 return reject("Windows.VirtualKey requires exactly one numeric argument");
             }
             const auto code = ParseUnsigned(syntax.arguments[0].text);
-            if (!code.has_value() || *code > 0xffU) {
+            if (!code.has_value() || *code > kMaximumWindowsNativeCode) {
                 return reject("Windows virtual-key code must be in 0..0xFF");
             }
             return ControlRef{
@@ -424,7 +431,7 @@ private:
                 return reject("Windows.ScanCode requires a code and optional E0 or E1 prefix");
             }
             const auto code = ParseUnsigned(syntax.arguments[0].text);
-            if (!code.has_value() || *code > 0xffU) {
+            if (!code.has_value() || *code > kMaximumWindowsNativeCode) {
                 return reject("Windows scan code must be in 0..0xFF");
             }
             std::uint32_t qualifier = kControlQualifierNone;
@@ -448,7 +455,7 @@ private:
                 return reject("Linux.Key requires exactly one numeric argument");
             }
             const auto code = ParseUnsigned(syntax.arguments[0].text);
-            if (!code.has_value() || *code > 0x2ffU) {
+            if (!code.has_value() || *code > kMaximumLinuxEvKeyCode) {
                 return reject("Linux key code must be in 0..0x2FF");
             }
             return ControlRef{
@@ -462,7 +469,7 @@ private:
                 return reject("MacOS.KeyCode requires exactly one numeric argument");
             }
             const auto code = ParseUnsigned(syntax.arguments[0].text);
-            if (!code.has_value() || *code > 0xffffU) {
+            if (!code.has_value() || *code > kMaximumMacOsKeyCode) {
                 return reject("macOS key code must be in 0..0xFFFF");
             }
             return ControlRef{
@@ -661,7 +668,21 @@ private:
         const ExpressionSyntax& syntax)
     {
         auto left = BindExpression(*syntax.left);
-        auto right = BindExpression(*syntax.right);
+        const bool logical = syntax.text == "and" || syntax.text == "or";
+        const bool* leftValue = logical
+            ? std::get_if<bool>(&left->constant)
+            : nullptr;
+        const bool rightUnreachable = leftValue != nullptr
+            && ((syntax.text == "and" && !*leftValue)
+                || (syntax.text == "or" && *leftValue));
+        std::unique_ptr<BoundExpression> right;
+        if (rightUnreachable) {
+            ++suppressedConstantFaultDepth_;
+            right = BindExpression(*syntax.right);
+            --suppressedConstantFaultDepth_;
+        } else {
+            right = BindExpression(*syntax.right);
+        }
         auto expression = std::make_unique<BoundExpression>();
         expression->span = syntax.span;
         expression->left = std::move(left);
@@ -684,9 +705,11 @@ private:
                 return expression;
             }
             expression->type = ExpressionType::Boolean;
-            const bool* leftValue = std::get_if<bool>(&expression->left->constant);
+            leftValue = std::get_if<bool>(&expression->left->constant);
             const bool* rightValue = std::get_if<bool>(&expression->right->constant);
-            if (leftValue != nullptr && rightValue != nullptr) {
+            if (rightUnreachable) {
+                expression->constant = *leftValue;
+            } else if (leftValue != nullptr && rightValue != nullptr) {
                 expression->constant = syntax.text == "and"
                     ? (*leftValue && *rightValue)
                     : (*leftValue || *rightValue);
@@ -957,6 +980,9 @@ private:
 
     void ReportConstantFault(SourceSpan span)
     {
+        if (suppressedConstantFaultDepth_ != 0U) {
+            return;
+        }
         diagnostics_.Add(
             CompileDiagnosticCode::ConstantEvaluation,
             span,
@@ -1046,7 +1072,12 @@ private:
             case ActionSyntax::Kind::Exec:
                 action.kind = BoundAction::Kind::Exec;
                 action.command = item.stringValue;
-                if (action.command.find('\0') != std::string::npos) {
+                if (action.command.empty()) {
+                    diagnostics_.Add(
+                        CompileDiagnosticCode::EmptyString,
+                        item.span,
+                        "exec command must not be empty");
+                } else if (action.command.find('\0') != std::string::npos) {
                     diagnostics_.Add(
                         CompileDiagnosticCode::EmbeddedNul,
                         item.span,
@@ -1152,6 +1183,7 @@ private:
     std::optional<SourceSpan> tapDurationSetting_;
     std::optional<SourceSpan> actionGapSetting_;
     std::uint32_t nextSourceOrdinal_{};
+    std::uint32_t suppressedConstantFaultDepth_{};
 };
 
 } // namespace

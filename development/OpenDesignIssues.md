@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This register contains unresolved design decisions that can change current compiler, runtime, platform, or user-visible behavior. The language specification, compiled-program contract, and successor-phase plans remain authoritative for settled behavior. A phase may implement unaffected work while an issue is open, but it may not satisfy an affected completion gate until the issue is resolved and its decision is incorporated into the owning documents and tests.
+This register contains unresolved design decisions that can change current compiler, runtime, platform, or user-visible behavior. The language specifications, the shared program implementation under `src/program/`, and `development/Handoff.md` describe settled current behavior. Work may proceed outside an issue's affected boundary, but an affected verification gate cannot pass until the decision is incorporated into its owning specification, implementation, and tests.
 
 ## Resolution procedure
 
