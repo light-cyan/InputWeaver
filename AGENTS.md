@@ -75,7 +75,10 @@ all modules -> support only for domain-independent primitives
 
 ## Current Development
 
-- Implement the compiler independently according to `development/phase-3-compiler/ImplementationPlan.md`.
+- The Phase 3 compiler implementation is present under `src/compiler/`, with compiler tests under `tests/compiler/` and canonical build, test, and analysis commands under `script/`.
+- The current compiler-owned verification passes; use `development/phase-3-compiler/Verification.md` as the handoff record and `development/phase-3-compiler/OpenQuestions.md` as the active decision and implementation-concern register.
+- Phase 3 compiler completion remains open until the affected gates in `development/phase-3-compiler/OpenQuestions.md` are resolved, including exact Phase 2 fixture-dump convergence and nested control-structure parser recovery.
+- Continue remaining compiler work from `development/phase-3-compiler/ImplementationPlan.md`, `development/phase-3-compiler/Verification.md`, and `development/phase-3-compiler/OpenQuestions.md`.
 - Implement the runtime independently according to `development/phase-3-runtime/ImplementationPlan.md`.
 - Keep `development/OpenDesignIssues.md` open for decisions that block affected implementation gates; `ODI-004` is resolved only when native `exec` execution is implemented and verified.
 
