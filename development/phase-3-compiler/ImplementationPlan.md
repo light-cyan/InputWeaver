@@ -2,7 +2,7 @@
 
 ## Objective
 
-This successor phase implements the complete Weave v1 source-to-`CompiledProgram` compiler against the frozen Phase 2 contract. It owns compilation and compiled-artifact emission and is complete when valid `.weave` source deterministically produces a validated immutable program and a persistent `.weavec` intermediate file, while invalid source produces bounded source diagnostics with no program or artifact.
+This successor phase implements the complete Weave v2 source-to-`CompiledProgram` compiler against the frozen Phase 2 contract. Weave v2 includes all v1 syntax and semantics plus the v2 control-reference extension. The phase owns compilation and compiled-artifact emission and is complete when valid `.weave` source deterministically produces a validated immutable program and a persistent `.weavec` intermediate file, while invalid source produces bounded source diagnostics with no program or artifact.
 
 ## Plan coverage
 
@@ -12,10 +12,13 @@ The work packages may be refined into implementation checklists inside this dire
 
 ## Normative inputs
 
-- `docs/language/grammar.v1.md` is the authoritative source for Weave v1 lexical rules, grammar, type rules, source-order behavior, and user-visible runtime semantics that affect compilation.
+- `docs/language/grammar.v1.md` is the authoritative source for the base lexical rules, type rules, source-order behavior, and user-visible runtime semantics that affect compilation.
+- `docs/language/grammar.v2.md` is the authoritative source for the v2 control-reference extension.
+- `docs/language/grammar.v2.ebnf` is the parser-oriented concrete grammar for the complete v2 syntax.
 - `development/phase-2/CompiledProgramDesign.md` is the authoritative design for every emitted table, ID, range, instruction, descriptor, requirement, debug record, and validation invariant.
 - `src/program/compiled_program.*`, `src/program/program_validator.*`, and `src/program/program_dump.*` are the executable shared contract used by compiler code and tests.
 - `development/OpenDesignIssues.md` records active decisions that must be resolved before affected compiler behavior can pass its completion gate.
+- `development/phase-3-compiler/OpenQuestions.md` records compiler-discovered ambiguities, shared decisions, and implementation concerns without overriding the normative inputs or authorizing shared contract changes.
 
 A contradiction between the language specification and the compiled-program contract is a phase blocker. The compiler does not silently choose one interpretation, introduce a compiler-private semantic side table, or encode behavior that the runtime cannot derive from the frozen contract.
 
@@ -60,8 +63,8 @@ A compile failure returns bounded diagnostics and no program. A lowering or fina
 
 ## C2: lexer
 
-- Implement the complete Weave v1 token set with longest matching for arrows, assignment, comparison operators, and the dedicated `pause` production.
-- Implement identifiers, canonical control names, number literals, exact duration literals, strings, comments, punctuation, keywords, and end of file.
+- Implement the complete Weave v2 token set with longest matching for arrows, assignment, comparison operators, raw control constructors, and the dedicated `pause` production.
+- Implement identifiers, canonical and category-qualified control names, raw control arguments, number literals, exact duration literals, strings, comments, punctuation, keywords, and end of file.
 - Enforce ASCII for syntax-bearing tokens and string contents while allowing valid non-ASCII UTF-8 only inside comment text; terminate line comments at a line break or end of file and reject nested block comments.
 - Preserve byte spans and recover deterministically from invalid bytes, invalid UTF-8, unterminated strings, and unterminated comments.
 - Bound token and diagnostic growth according to explicit compiler limits.
@@ -131,11 +134,11 @@ A compile failure returns bounded diagnostics and no program. A lowering or fina
 
 ## Open design gates
 
-The compiler may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` can change compiler-owned behavior. `docs/language/grammar.v2.md` is successor-language design input and must not be backported by this branch without a separately reviewed contract revision.
+The compiler may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` or `development/phase-3-compiler/OpenQuestions.md` can change compiler-owned behavior or an affected completion gate. The v2 control-reference syntax lowers into the existing Phase 2 `ControlRef` identity and does not add a private representation.
 
 ## Completion gate
 
-- Every valid Weave v1 syntax and semantic form compiles to a structurally valid immutable `CompiledProgram`.
+- Every valid Weave v2 syntax and semantic form compiles to a structurally valid immutable `CompiledProgram`.
 - Every specified invalid lexical, syntax, naming, typing, duration, control, target, and configuration form produces bounded diagnostics and no program.
 - The four canonical source files match the frozen Phase 2 fixture dumps exactly.
 - Compiler tests use no hooks, `SendInput`, real time, target process, scheduler, or runtime branch code.

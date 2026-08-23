@@ -1,0 +1,656 @@
+#include "lowering.hpp"
+
+#include "program/program_validator.hpp"
+
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace inputweaver::compiler {
+namespace {
+
+template <typename Value>
+[[nodiscard]] std::uint32_t AppendIndex(std::vector<Value>& values, Value value)
+{
+    const std::uint32_t index = static_cast<std::uint32_t>(values.size());
+    values.push_back(std::move(value));
+    return index;
+}
+
+class Lowerer final {
+public:
+    explicit Lowerer(BoundProgram program) : program_(std::move(program)) {}
+
+    [[nodiscard]] FinalizeResult Run()
+    {
+        InitializeStorage();
+        LowerRules();
+        BuildControlRequirements();
+        builder_.DeriveRequirements();
+        return std::move(builder_).Finalize();
+    }
+
+private:
+    struct LocalExpressionCode final {
+        std::vector<ExpressionInstruction> instructions;
+        std::vector<SourceSpan> spans;
+    };
+
+    struct LocalActionCode final {
+        std::vector<ActionInstruction> instructions;
+        std::vector<SourceSpan> spans;
+        std::set<std::uint32_t> acquiredControls;
+        std::uint32_t repeatFrameCount{};
+    };
+
+    void InitializeStorage()
+    {
+        CompiledProgramStorage& storage = builder_.Storage();
+        storage.source.displayPath = InternString(program_.displayPath);
+        storage.source.byteLength = program_.sourceByteLength;
+        storage.lineStarts = program_.lineStarts;
+        storage.source.lineStarts = {
+            0U,
+            static_cast<std::uint32_t>(storage.lineStarts.size())};
+        storage.settings.target.kind = program_.targetKind;
+        storage.settings.target.source = program_.targetSource;
+        if (program_.targetKind == TargetSelectorKind::Executable) {
+            storage.settings.target.text = InternString(program_.targetText);
+        }
+        storage.settings.tapDuration = program_.tapDuration;
+        storage.settings.actionGap = program_.actionGap;
+        storage.userValues = std::move(program_.userValues);
+        for (const BoundVariableDebug& variable : program_.variables) {
+            storage.debugInfo.variables.push_back({
+                InternString(variable.name),
+                InternValue(variable.value),
+                variable.declaration});
+        }
+    }
+
+    [[nodiscard]] StringId InternString(const std::string& value)
+    {
+        const auto found = strings_.find(value);
+        if (found != strings_.end()) {
+            return StringId{found->second};
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(storage.strings, value);
+        strings_.emplace(value, index);
+        return StringId{index};
+    }
+
+    [[nodiscard]] ControlRefId InternControl(ControlRef value)
+    {
+        const auto found = controls_.find(value);
+        if (found != controls_.end()) {
+            return ControlRefId{found->second};
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(storage.controls, value);
+        controls_.emplace(value, index);
+        return ControlRefId{index};
+    }
+
+    [[nodiscard]] ValueRefId InternValue(ValueRef value)
+    {
+        const auto found = values_.find(value);
+        if (found != values_.end()) {
+            return ValueRefId{found->second};
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(storage.valueRefs, value);
+        values_.emplace(value, index);
+        return ValueRefId{index};
+    }
+
+    [[nodiscard]] std::uint32_t InternNumber(double value)
+    {
+        if (value == 0.0) {
+            value = 0.0;
+        }
+        const std::uint64_t bits = std::bit_cast<std::uint64_t>(value);
+        const auto found = numbers_.find(bits);
+        if (found != numbers_.end()) {
+            return found->second;
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(storage.numberConstants, value);
+        numbers_.emplace(bits, index);
+        return index;
+    }
+
+    [[nodiscard]] std::uint32_t InternDuration(DurationValue value)
+    {
+        const auto found = durations_.find(value.nanoseconds);
+        if (found != durations_.end()) {
+            return found->second;
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(storage.durationConstants, value);
+        durations_.emplace(value.nanoseconds, index);
+        return index;
+    }
+
+    void EmitExpression(
+        const BoundExpression& expression,
+        LocalExpressionCode& code)
+    {
+        const auto emit = [&code, &expression](ExpressionInstruction instruction) {
+            code.instructions.push_back(instruction);
+            code.spans.push_back(expression.span);
+        };
+        switch (expression.kind) {
+        case BoundExpression::Kind::BooleanConstant:
+            emit({
+                ExpressionOpcode::PushBoolean,
+                ExpressionType::Boolean,
+                expression.booleanValue ? 1U : 0U,
+                0U});
+            break;
+        case BoundExpression::Kind::StateConstant:
+            emit({
+                ExpressionOpcode::PushState,
+                ExpressionType::State,
+                expression.stateValue,
+                0U});
+            break;
+        case BoundExpression::Kind::NumberConstant:
+            emit({
+                ExpressionOpcode::PushNumber,
+                ExpressionType::Number,
+                InternNumber(expression.numberValue),
+                0U});
+            break;
+        case BoundExpression::Kind::DurationConstant:
+            emit({
+                ExpressionOpcode::PushDuration,
+                ExpressionType::Duration,
+                InternDuration(expression.durationValue),
+                0U});
+            break;
+        case BoundExpression::Kind::LoadValue:
+            emit({
+                ExpressionOpcode::LoadValue,
+                expression.type,
+                InternValue(expression.value).value,
+                0U});
+            break;
+        case BoundExpression::Kind::ReadControlHeld:
+            emit({
+                ExpressionOpcode::ReadControlHeld,
+                ExpressionType::Boolean,
+                InternControl(expression.control).value,
+                0U});
+            break;
+        case BoundExpression::Kind::Unary:
+            EmitExpression(*expression.left, code);
+            emit({
+                ExpressionOpcode::Unary,
+                expression.type,
+                static_cast<std::uint32_t>(expression.unary),
+                0U});
+            break;
+        case BoundExpression::Kind::Binary:
+            EmitExpression(*expression.left, code);
+            EmitExpression(*expression.right, code);
+            emit({
+                ExpressionOpcode::Binary,
+                expression.type,
+                static_cast<std::uint32_t>(expression.binary),
+                0U});
+            break;
+        case BoundExpression::Kind::LogicalAnd:
+        case BoundExpression::Kind::LogicalOr: {
+            EmitExpression(*expression.left, code);
+            const std::size_t conditional = code.instructions.size();
+            emit({
+                expression.kind == BoundExpression::Kind::LogicalAnd
+                    ? ExpressionOpcode::JumpIfFalse
+                    : ExpressionOpcode::JumpIfTrue,
+                ExpressionType::None,
+                0U,
+                0U});
+            EmitExpression(*expression.right, code);
+            const std::size_t jump = code.instructions.size();
+            emit({ExpressionOpcode::Jump, ExpressionType::None, 0U, 0U});
+            const std::uint32_t constantPosition = static_cast<std::uint32_t>(
+                code.instructions.size());
+            emit({
+                ExpressionOpcode::PushBoolean,
+                ExpressionType::Boolean,
+                expression.kind == BoundExpression::Kind::LogicalAnd ? 0U : 1U,
+                0U});
+            const std::uint32_t end = static_cast<std::uint32_t>(
+                code.instructions.size());
+            code.instructions[conditional].operand0 = constantPosition;
+            code.instructions[jump].operand0 = end;
+            break;
+        }
+        }
+    }
+
+    [[nodiscard]] std::uint32_t ComputeMaximumExpressionStack(
+        const std::vector<ExpressionInstruction>& code) const
+    {
+        std::vector<std::optional<std::uint32_t>> depths(code.size());
+        depths[0] = 0U;
+        std::uint32_t maximum = 0U;
+        for (std::size_t index = 0U; index < code.size(); ++index) {
+            if (!depths[index].has_value()) {
+                continue;
+            }
+            std::uint32_t depth = *depths[index];
+            const ExpressionInstruction& instruction = code[index];
+            bool fallthrough = true;
+            switch (instruction.opcode) {
+            case ExpressionOpcode::PushBoolean:
+            case ExpressionOpcode::PushState:
+            case ExpressionOpcode::PushNumber:
+            case ExpressionOpcode::PushDuration:
+            case ExpressionOpcode::LoadValue:
+            case ExpressionOpcode::ReadControlHeld:
+                ++depth;
+                break;
+            case ExpressionOpcode::Unary:
+                break;
+            case ExpressionOpcode::Binary:
+                --depth;
+                break;
+            case ExpressionOpcode::Jump:
+                fallthrough = false;
+                MergeDepth(depths, instruction.operand0, depth);
+                break;
+            case ExpressionOpcode::JumpIfFalse:
+            case ExpressionOpcode::JumpIfTrue:
+                --depth;
+                MergeDepth(depths, instruction.operand0, depth);
+                break;
+            case ExpressionOpcode::Return:
+                --depth;
+                fallthrough = false;
+                break;
+            }
+            maximum = (std::max)(maximum, depth);
+            if (fallthrough && index + 1U < code.size()) {
+                MergeDepth(
+                    depths,
+                    static_cast<std::uint32_t>(index + 1U),
+                    depth);
+            }
+        }
+        return maximum;
+    }
+
+    static void MergeDepth(
+        std::vector<std::optional<std::uint32_t>>& depths,
+        std::uint32_t target,
+        std::uint32_t depth)
+    {
+        if (target < depths.size() && !depths[target].has_value()) {
+            depths[target] = depth;
+        }
+    }
+
+    [[nodiscard]] ExpressionId LowerExpression(const BoundExpression& expression)
+    {
+        LocalExpressionCode local;
+        EmitExpression(expression, local);
+        local.instructions.push_back({
+            ExpressionOpcode::Return,
+            expression.type,
+            0U,
+            0U});
+        local.spans.push_back(expression.span);
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t begin = static_cast<std::uint32_t>(
+            storage.expressionCode.size());
+        const std::uint32_t count = static_cast<std::uint32_t>(
+            local.instructions.size());
+        const std::uint32_t maximumStack = ComputeMaximumExpressionStack(
+            local.instructions);
+        storage.expressionCode.insert(
+            storage.expressionCode.end(),
+            local.instructions.begin(),
+            local.instructions.end());
+        storage.debugInfo.expressionInstructionSpans.insert(
+            storage.debugInfo.expressionInstructionSpans.end(),
+            local.spans.begin(),
+            local.spans.end());
+        const std::uint32_t descriptor = AppendIndex(storage.expressions, {
+            {begin, count},
+            expression.type,
+            maximumStack,
+            expression.span});
+        return ExpressionId{descriptor};
+    }
+
+    void EmitAction(
+        LocalActionCode& code,
+        ActionOpcode opcode,
+        std::uint32_t operand0,
+        std::uint32_t operand1,
+        SourceSpan span)
+    {
+        code.instructions.push_back({opcode, operand0, operand1});
+        code.spans.push_back(span);
+    }
+
+    void LowerActionFlow(
+        const std::vector<BoundAction>& actions,
+        LocalActionCode& code)
+    {
+        for (const BoundAction& action : actions) {
+            switch (action.kind) {
+            case BoundAction::Kind::Press:
+            case BoundAction::Kind::Release:
+            case BoundAction::Kind::Tap: {
+                const ControlRefId control = InternControl(action.control);
+                ActionOpcode opcode = ActionOpcode::Press;
+                if (action.kind == BoundAction::Kind::Release) {
+                    opcode = ActionOpcode::Release;
+                } else if (action.kind == BoundAction::Kind::Tap) {
+                    opcode = ActionOpcode::Tap;
+                }
+                EmitAction(code, opcode, control.value, 0U, action.span);
+                if (opcode != ActionOpcode::Release) {
+                    code.acquiredControls.insert(control.value);
+                }
+                break;
+            }
+            case BoundAction::Kind::Wait:
+                EmitAction(
+                    code,
+                    ActionOpcode::Wait,
+                    LowerExpression(*action.expression).value,
+                    0U,
+                    action.span);
+                break;
+            case BoundAction::Kind::Gap:
+                EmitAction(code, ActionOpcode::Gap, 0U, 0U, action.span);
+                break;
+            case BoundAction::Kind::Set:
+                EmitAction(
+                    code,
+                    ActionOpcode::Set,
+                    InternValue(action.value).value,
+                    LowerExpression(*action.expression).value,
+                    action.span);
+                break;
+            case BoundAction::Kind::Toggle:
+                EmitAction(
+                    code,
+                    ActionOpcode::Toggle,
+                    InternValue(action.value).value,
+                    0U,
+                    action.span);
+                break;
+            case BoundAction::Kind::Exec:
+                EmitAction(
+                    code,
+                    ActionOpcode::Exec,
+                    InternString(action.command).value,
+                    0U,
+                    action.span);
+                break;
+            case BoundAction::Kind::If: {
+                const ExpressionId condition = LowerExpression(*action.expression);
+                const std::size_t conditional = code.instructions.size();
+                EmitAction(
+                    code,
+                    ActionOpcode::JumpIfFalse,
+                    condition.value,
+                    0U,
+                    action.span);
+                LowerActionFlow(action.body, code);
+                if (action.alternative.empty()) {
+                    code.instructions[conditional].operand1 = static_cast<std::uint32_t>(
+                        code.instructions.size());
+                } else {
+                    const std::size_t jump = code.instructions.size();
+                    EmitAction(code, ActionOpcode::Jump, 0U, 0U, action.span);
+                    code.instructions[conditional].operand1 = static_cast<std::uint32_t>(
+                        code.instructions.size());
+                    LowerActionFlow(action.alternative, code);
+                    code.instructions[jump].operand0 = static_cast<std::uint32_t>(
+                        code.instructions.size());
+                }
+                break;
+            }
+            case BoundAction::Kind::Repeat: {
+                const std::uint32_t frame = code.repeatFrameCount++;
+                const ExpressionId limit = LowerExpression(*action.expression);
+                EmitAction(
+                    code,
+                    ActionOpcode::RepeatInit,
+                    frame,
+                    limit.value,
+                    action.span);
+                const std::uint32_t check = static_cast<std::uint32_t>(
+                    code.instructions.size());
+                EmitAction(
+                    code,
+                    ActionOpcode::RepeatCheck,
+                    frame,
+                    0U,
+                    action.span);
+                LowerActionFlow(action.body, code);
+                EmitAction(
+                    code,
+                    ActionOpcode::RepeatNext,
+                    frame,
+                    0U,
+                    action.span);
+                EmitAction(code, ActionOpcode::Yield, 0U, 0U, action.span);
+                EmitAction(code, ActionOpcode::Jump, check, 0U, action.span);
+                code.instructions[check].operand1 = static_cast<std::uint32_t>(
+                    code.instructions.size());
+                break;
+            }
+            case BoundAction::Kind::While: {
+                const std::uint32_t header = static_cast<std::uint32_t>(
+                    code.instructions.size());
+                const ExpressionId condition = LowerExpression(*action.expression);
+                const std::size_t conditional = code.instructions.size();
+                EmitAction(
+                    code,
+                    ActionOpcode::JumpIfFalse,
+                    condition.value,
+                    0U,
+                    action.span);
+                LowerActionFlow(action.body, code);
+                EmitAction(code, ActionOpcode::Yield, 0U, 0U, action.span);
+                EmitAction(code, ActionOpcode::Jump, header, 0U, action.span);
+                code.instructions[conditional].operand1 = static_cast<std::uint32_t>(
+                    code.instructions.size());
+                break;
+            }
+            }
+        }
+    }
+
+    [[nodiscard]] ActionProgramId LowerActionProgram(
+        const std::vector<BoundAction>& actions,
+        SourceSpan source)
+    {
+        LocalActionCode local;
+        LowerActionFlow(actions, local);
+        EmitAction(local, ActionOpcode::End, 0U, 0U, source);
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t begin = static_cast<std::uint32_t>(
+            storage.actionCode.size());
+        const std::uint32_t count = static_cast<std::uint32_t>(
+            local.instructions.size());
+        storage.actionCode.insert(
+            storage.actionCode.end(),
+            local.instructions.begin(),
+            local.instructions.end());
+        storage.debugInfo.actionInstructionSpans.insert(
+            storage.debugInfo.actionInstructionSpans.end(),
+            local.spans.begin(),
+            local.spans.end());
+        const std::uint32_t descriptor = AppendIndex(storage.actionPrograms, {
+            {begin, count},
+            local.repeatFrameCount,
+            static_cast<std::uint32_t>(local.acquiredControls.size()),
+            source});
+        return ActionProgramId{descriptor};
+    }
+
+    [[nodiscard]] MappingSlotId InternMappingSlot(ControlRefId source)
+    {
+        const auto found = mappingSlots_.find(source.value);
+        if (found != mappingSlots_.end()) {
+            return MappingSlotId{found->second};
+        }
+        CompiledProgramStorage& storage = builder_.Storage();
+        const std::uint32_t index = AppendIndex(
+            storage.mappingSlots,
+            MappingSlotDescriptor{source});
+        mappingSlots_.emplace(source.value, index);
+        return MappingSlotId{index};
+    }
+
+    void LowerRules()
+    {
+        for (const BoundRule& rule : program_.rules) {
+            ExpressionId condition{};
+            if (rule.condition != nullptr) {
+                condition = LowerExpression(*rule.condition);
+            }
+            const ControlRefId source = InternControl(rule.source);
+            const EventKey key{source, rule.transition};
+            if (rule.kind == BoundRule::Kind::Pause) {
+                pauseRules_[key].push_back({
+                    condition,
+                    rule.delivery,
+                    rule.pauseEffect,
+                    rule.sourceOrdinal,
+                    rule.sourceSpan});
+                continue;
+            }
+            if (rule.kind == BoundRule::Kind::Mapping) {
+                CompiledProgramStorage& storage = builder_.Storage();
+                const MappingSlotId slot = InternMappingSlot(source);
+                const MappingId mapping{AppendIndex(storage.mappings, {
+                    slot,
+                    InternControl(rule.target),
+                    rule.sourceSpan})};
+                eventRules_[key].push_back({
+                    condition,
+                    ActionProgramId{},
+                    mapping,
+                    Delivery::Consume,
+                    MatchFlow::Stop,
+                    RuleKind::MappingDown,
+                    rule.sourceOrdinal,
+                    rule.sourceSpan});
+                continue;
+            }
+            ActionProgramId action{};
+            if (!rule.actions.empty()) {
+                action = LowerActionProgram(rule.actions, rule.actionFlowSpan);
+            }
+            eventRules_[key].push_back({
+                condition,
+                action,
+                MappingId{},
+                rule.delivery,
+                rule.flow,
+                RuleKind::Event,
+                rule.sourceOrdinal,
+                rule.sourceSpan});
+        }
+
+        CompiledProgramStorage& storage = builder_.Storage();
+        for (auto& [key, rules] : pauseRules_) {
+            const std::uint32_t begin = static_cast<std::uint32_t>(
+                storage.pauseControlRules.size());
+            storage.pauseControlRules.insert(
+                storage.pauseControlRules.end(),
+                rules.begin(),
+                rules.end());
+            storage.pauseControlBuckets.push_back({
+                key,
+                {begin, static_cast<std::uint32_t>(rules.size())}});
+        }
+        for (auto& [key, rules] : eventRules_) {
+            const std::uint32_t begin = static_cast<std::uint32_t>(
+                storage.rules.size());
+            storage.rules.insert(storage.rules.end(), rules.begin(), rules.end());
+            storage.eventBuckets.push_back({
+                key,
+                {begin, static_cast<std::uint32_t>(rules.size())}});
+        }
+    }
+
+    void BuildControlRequirements()
+    {
+        CompiledProgramStorage& storage = builder_.Storage();
+        std::vector<std::uint8_t> uses(storage.controls.size(), 0U);
+        const auto add = [&uses](ControlRefId control, ControlUse use) {
+            uses[control.value] = static_cast<std::uint8_t>(
+                uses[control.value] | ToControlUseBits(use));
+        };
+        for (const ExpressionInstruction instruction : storage.expressionCode) {
+            if (instruction.opcode == ExpressionOpcode::ReadControlHeld) {
+                add(ControlRefId{instruction.operand0}, ControlUse::PhysicalState);
+            }
+        }
+        for (const ActionInstruction instruction : storage.actionCode) {
+            if (instruction.opcode == ActionOpcode::Press
+                || instruction.opcode == ActionOpcode::Release
+                || instruction.opcode == ActionOpcode::Tap) {
+                add(ControlRefId{instruction.operand0}, ControlUse::OutputDownUp);
+            }
+        }
+        for (const PauseControlBucket& bucket : storage.pauseControlBuckets) {
+            add(bucket.key.control, ControlUse::EventSource);
+        }
+        for (const EventBucket& bucket : storage.eventBuckets) {
+            add(bucket.key.control, ControlUse::EventSource);
+        }
+        for (const MappingSlotDescriptor slot : storage.mappingSlots) {
+            add(slot.source, ControlUse::EventSource);
+        }
+        for (const MappingDescriptor mapping : storage.mappings) {
+            add(mapping.target, ControlUse::OutputDownUp);
+            add(mapping.target, ControlUse::OutputRepeat);
+        }
+        for (std::size_t index = 0U; index < uses.size(); ++index) {
+            if (uses[index] != 0U) {
+                storage.controlRequirements.push_back({
+                    ControlRefId{static_cast<std::uint32_t>(index)},
+                    uses[index]});
+            }
+        }
+    }
+
+    BoundProgram program_;
+    CompiledProgramBuilder builder_;
+    std::map<std::string, std::uint32_t, std::less<>> strings_;
+    std::map<ControlRef, std::uint32_t> controls_;
+    std::map<ValueRef, std::uint32_t> values_;
+    std::map<std::uint64_t, std::uint32_t> numbers_;
+    std::map<std::int64_t, std::uint32_t> durations_;
+    std::map<std::uint32_t, std::uint32_t> mappingSlots_;
+    std::map<EventKey, std::vector<PauseControlRule>> pauseRules_;
+    std::map<EventKey, std::vector<CompiledRule>> eventRules_;
+};
+
+} // namespace
+
+FinalizeResult LowerProgram(BoundProgram program)
+{
+    return Lowerer(std::move(program)).Run();
+}
+
+} // namespace inputweaver::compiler

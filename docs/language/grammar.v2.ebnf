@@ -1,0 +1,168 @@
+(*
+ * Parser-oriented concrete grammar for Weave v2.
+ *
+ * grammar.v1.md defines the base language and grammar.v2.md defines the v2
+ * control-reference extension. Their lexical, binding, type, and runtime rules
+ * remain authoritative. This grammar describes the syntax accepted before
+ * binding and type checking.
+ *
+ * The notation is ISO-style EBNF: comma denotes concatenation, a vertical bar
+ * denotes alternatives, square brackets denote an optional sequence, and
+ * braces denote zero or more repetitions. The lexer discards whitespace and
+ * comments between tokens. Duration suffixes and the components of lexical
+ * names remain contiguous.
+ *)
+
+compilation-unit = { top-level-item } ;
+
+top-level-item =
+      target-setting
+    | tap-duration-setting
+    | action-gap-setting
+    | state-declaration
+    | number-declaration
+    | duration-declaration
+    | mapping
+    | pause-rule
+    | event-rule
+    ;
+
+target-setting       = "TARGET", "=", target-selector, ";" ;
+target-selector      = string-literal | "GLOBAL" ;
+tap-duration-setting = "TAP_DURATION", "=", duration-literal, ";" ;
+action-gap-setting   = "ACTION_GAP", "=", duration-literal, ";" ;
+
+state-declaration    = "state", identifier, "=", state-literal, ";" ;
+number-declaration   = "number", identifier, "=", signed-number-literal, ";" ;
+duration-declaration = "duration", identifier, "=", duration-literal, ";" ;
+
+mapping = control-reference, ":=", control-reference, [ condition ], ";" ;
+
+pause-rule   = "pause", event, [ condition ], pause-arrow, pause-effect, ";" ;
+pause-arrow  = "=>" | "~>" ;
+pause-effect = "on" | "off" | "toggle" ;
+
+event-rule = event, [ condition ], rule-arrow, action-flow, ";" ;
+event      = control-reference, ":", event-transition ;
+event-transition = "down" | "repeat" | "up" ;
+condition  = "when", expression ;
+rule-arrow = "=>" | "=>>" | "~>" | "~>>" ;
+
+action-flow = { action-item } ;
+
+action-item =
+      input-action
+    | wait-action
+    | gap-action
+    | set-action
+    | toggle-action
+    | exec-action
+    | gap-marker
+    | if-action
+    | repeat-action
+    | while-action
+    ;
+
+input-action = input-action-name, "(", control-reference, ")" ;
+input-action-name = "press" | "release" | "tap" ;
+wait-action   = "wait", "(", expression, ")" ;
+gap-action    = "gap", "(", ")" ;
+set-action    = "set", "(", value-reference, ",", expression, ")" ;
+toggle-action = "toggle", "(", value-reference, ")" ;
+exec-action   = "exec", "(", string-literal, ")" ;
+gap-marker    = "|" ;
+
+if-action =
+    "if", expression, "then", action-flow,
+    [ "else", action-flow ],
+    "end" ;
+
+repeat-action = "repeat", expression, "do", action-flow, "end" ;
+while-action  = "while", expression, "do", action-flow, "end" ;
+
+expression                = or-expression ;
+or-expression             = and-expression, { "or", and-expression } ;
+and-expression            = equality-expression, { "and", equality-expression } ;
+equality-expression       = relational-expression, { equality-operator, relational-expression } ;
+relational-expression     = additive-expression, { relational-operator, additive-expression } ;
+additive-expression       = multiplicative-expression, { additive-operator, multiplicative-expression } ;
+multiplicative-expression = unary-expression, { multiplicative-operator, unary-expression } ;
+unary-expression          = primary-expression | unary-operator, unary-expression ;
+
+equality-operator       = "==" | "!=" ;
+relational-operator     = "<" | "<=" | ">" | ">=" ;
+additive-operator       = "+" | "-" ;
+multiplicative-operator = "*" | "/" | "%" ;
+unary-operator          = "+" | "-" | "not" ;
+
+primary-expression =
+      state-literal
+    | number-literal
+    | duration-literal
+    | value-reference
+    | control-state-query
+    | value-state-query
+    | "(", expression, ")"
+    ;
+
+control-state-query = control-reference, "[", physical-state-test, "]" ;
+value-state-query   = value-reference, "[", logical-state-test, "]" ;
+physical-state-test = "held" | "idle" ;
+logical-state-test  = "on" | "off" ;
+
+value-reference = identifier | builtin-value ;
+builtin-value   = "TAP_DURATION" | "ACTION_GAP" | "PAUSE" ;
+state-literal   = "on" | "off" ;
+
+control-reference = raw-control | named-control ;
+
+named-control   = control-segment, { ".", control-segment } ;
+control-segment = ASCII-letter, { ASCII-letter | digit | "_" } ;
+
+raw-control =
+      hid-usage
+    | windows-virtual-key
+    | windows-scan-code
+    | linux-key
+    | macos-key-code
+    ;
+
+hid-usage           = "HID.Usage", "(", unsigned-code, ",", unsigned-code, ")" ;
+windows-virtual-key = "Windows.VirtualKey", "(", unsigned-code, ")" ;
+windows-scan-code   = "Windows.ScanCode", "(", unsigned-code, [ ",", scan-prefix ], ")" ;
+linux-key           = "Linux.Key", "(", unsigned-code, ")" ;
+macos-key-code      = "MacOS.KeyCode", "(", unsigned-code, ")" ;
+scan-prefix         = "E0" | "E1" ;
+unsigned-code       = decimal-integer | hexadecimal-integer ;
+hexadecimal-integer = "0x", hex-digit, { hex-digit } ;
+
+signed-number-literal = [ "-" ], number-literal ;
+number-literal        = decimal-integer, [ ".", decimal-integer ] ;
+duration-literal      = number-literal, duration-unit ;
+duration-unit         = "ms" | "s" | "min" ;
+
+identifier      = ASCII-letter, { ASCII-letter | digit | "_" } ;
+decimal-integer = digit, { digit } ;
+digit           = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+hex-digit       = digit | "A" | "B" | "C" | "D" | "E" | "F" | "a" | "b" | "c" | "d" | "e" | "f" ;
+ASCII-letter    = ASCII-upper | ASCII-lower ;
+ASCII-upper     = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
+                | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+ASCII-lower     = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
+                | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+
+string-literal = ? STRING_LITERAL token defined by the Weave v1 lexical rules ? ;
+
+(*
+ * Binding and type checking enforce the following constraints after parsing:
+ *
+ * - named controls must resolve through the case-sensitive control catalog;
+ * - raw control arguments, arity, prefixes, and numeric ranges must be valid;
+ * - identifiers must not be reserved and value references must resolve;
+ * - declarations require a same-type literal initializer;
+ * - conditions and while expressions must be Boolean;
+ * - repeat expressions must be Number;
+ * - action arguments and expression operators must satisfy their signatures;
+ * - state-query predicates must match the resolved subject category; and
+ * - only writable user values may be targets of set and toggle.
+ *)
