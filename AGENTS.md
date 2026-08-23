@@ -76,8 +76,8 @@ all modules -> support only for domain-independent primitives
 ## Current Development
 
 - Implement the compiler independently according to `development/phase-3-compiler/ImplementationPlan.md`.
-- Implement the runtime independently according to `development/phase-3-runtime/ImplementationPlan.md`.
-- Keep `development/OpenDesignIssues.md` open for decisions that block affected implementation gates; `ODI-004` is resolved only when native `exec` execution is implemented and verified.
+- Use `development/phase-3-runtime/ImplementationPlan.md` for the runtime boundary and `development/phase-3-runtime/Verification.md` for its implementation handoff and verification evidence.
+- Keep `development/OpenDesignIssues.md` open for decisions that block affected implementation gates.
 
 ## Repository Practices
 

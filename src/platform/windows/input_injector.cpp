@@ -21,12 +21,16 @@ namespace {
     const UINT virtualKey = static_cast<UINT>(action.code);
     const UINT mappedScanCode =
         MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC_EX);
-    if (mappedScanCode == 0) {
-        return false;
-    }
-
     input.type = INPUT_KEYBOARD;
     input.ki.dwExtraInfo = static_cast<ULONG_PTR>(selfTag);
+    if (mappedScanCode == 0) {
+        input.ki.wVk = static_cast<WORD>(virtualKey);
+        input.ki.wScan = 0;
+        input.ki.dwFlags = action.transition == Transition::Up
+            ? KEYEVENTF_KEYUP
+            : 0U;
+        return true;
+    }
 
     const auto isExtendedVirtualKey = [](DWORD code) noexcept {
         switch (code) {
