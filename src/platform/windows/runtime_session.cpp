@@ -1,8 +1,8 @@
-#include "runtime.hpp"
+#include "runtime_session.hpp"
 
 #include "action_scheduler.hpp"
 #include "remap_engine.hpp"
-#include "core/stop_request.hpp"
+#include "support/stop_request.hpp"
 #include "diagnostics/diagnostic_log.hpp"
 #include "platform/windows/low_level_hooks.hpp"
 #include "platform/windows/process_context.hpp"
@@ -11,15 +11,15 @@
 
 namespace inputweaver {
 
-AppRuntime::AppRuntime(
-    AppRuntimeOptions options,
+WindowsRuntimeSession::WindowsRuntimeSession(
+    WindowsRuntimeSessionOptions options,
     TargetProcessContext* targetContext,
     DiagnosticLog& diagnosticLog) noexcept
     : options_(options),
       targetContext_(targetContext),
       diagnosticLog_(diagnosticLog) {}
 
-AppRuntime::~AppRuntime() {
+WindowsRuntimeSession::~WindowsRuntimeSession() {
     RequestStop();
     Wait();
     lowLevelHooks_.reset();
@@ -31,7 +31,7 @@ AppRuntime::~AppRuntime() {
     }
 }
 
-bool AppRuntime::Start(std::wstring& errorMessage) {
+bool WindowsRuntimeSession::Start(std::wstring& errorMessage) {
     if (started_.exchange(true, std::memory_order_acq_rel)) {
         errorMessage = L"The application runtime has already been started.";
         return false;
@@ -63,7 +63,7 @@ bool AppRuntime::Start(std::wstring& errorMessage) {
     return true;
 }
 
-void AppRuntime::RequestStop() noexcept {
+void WindowsRuntimeSession::RequestStop() noexcept {
     shutdownRequested_.store(true, std::memory_order_release);
     if (remapEngine_ != nullptr) {
         remapEngine_->DisableNewCaptures();
@@ -76,7 +76,7 @@ void AppRuntime::RequestStop() noexcept {
     }
 }
 
-void AppRuntime::Wait() noexcept {
+void WindowsRuntimeSession::Wait() noexcept {
     if (lowLevelHooks_ != nullptr) {
         lowLevelHooks_->Wait();
     } else if (actionScheduler_ != nullptr) {
@@ -87,17 +87,17 @@ void AppRuntime::Wait() noexcept {
     }
 }
 
-HANDLE AppRuntime::StoppedEvent() const noexcept {
+HANDLE WindowsRuntimeSession::StoppedEvent() const noexcept {
     return lowLevelHooks_ == nullptr ? nullptr : lowLevelHooks_->StoppedEvent();
 }
 
-HANDLE AppRuntime::ActionQueueErrorEvent() const noexcept {
+HANDLE WindowsRuntimeSession::ActionQueueErrorEvent() const noexcept {
     return actionScheduler_ == nullptr
         ? nullptr
         : actionScheduler_->ActionQueueErrorEvent();
 }
 
-AppRuntimeMetrics AppRuntime::Metrics() const noexcept {
+WindowsRuntimeSessionMetrics WindowsRuntimeSession::Metrics() const noexcept {
     const RemapEngineMetrics remap = remapEngine_ == nullptr
         ? RemapEngineMetrics{}
         : remapEngine_->Metrics();
@@ -116,13 +116,13 @@ AppRuntimeMetrics AppRuntime::Metrics() const noexcept {
         actions.circuitBreakerOpen};
 }
 
-void AppRuntime::RequestStopThunk(void* context) noexcept {
+void WindowsRuntimeSession::RequestStopThunk(void* context) noexcept {
     if (context != nullptr) {
-        static_cast<AppRuntime*>(context)->RequestStop();
+        static_cast<WindowsRuntimeSession*>(context)->RequestStop();
     }
 }
 
-bool AppRuntime::CreateShutdownEvent(std::wstring& errorMessage) noexcept {
+bool WindowsRuntimeSession::CreateShutdownEvent(std::wstring& errorMessage) noexcept {
     if (shutdownEvent_ != nullptr) {
         return true;
     }
@@ -135,7 +135,7 @@ bool AppRuntime::CreateShutdownEvent(std::wstring& errorMessage) noexcept {
     return false;
 }
 
-bool AppRuntime::CreateComponents(std::wstring& errorMessage) {
+bool WindowsRuntimeSession::CreateComponents(std::wstring& errorMessage) {
     if (remapEngine_ != nullptr && actionScheduler_ != nullptr &&
         lowLevelHooks_ != nullptr) {
         return true;
@@ -144,7 +144,7 @@ bool AppRuntime::CreateComponents(std::wstring& errorMessage) {
         return false;
     }
 
-    const StopRequest stopRequest{this, &AppRuntime::RequestStopThunk};
+    const StopRequest stopRequest{this, &WindowsRuntimeSession::RequestStopThunk};
     try {
         remapEngine_ = std::make_unique<RemapEngine>(
             RemapEngineOptions{

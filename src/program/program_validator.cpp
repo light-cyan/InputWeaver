@@ -129,14 +129,39 @@ template <typename Id>
         && storage.strings[id.value].find('\0') != std::string::npos;
 }
 
-[[nodiscard]] bool ValidDevice(DeviceKind device) noexcept
-{
-    return device == DeviceKind::Keyboard || device == DeviceKind::Mouse;
-}
-
 [[nodiscard]] bool ValidControl(ControlRef control) noexcept
 {
-    return ValidDevice(control.device) && control.code != control::kNone;
+    if (control.namespaceId == 0U
+        || control.namespaceId == kInvalidProgramIndex
+        || control.familyId == 0U
+        || control.familyId == kInvalidProgramIndex
+        || control.code == kInvalidProgramIndex
+        || control.qualifier == kInvalidProgramIndex) {
+        return false;
+    }
+
+    switch (control.namespaceId) {
+    case kControlNamespaceUsbHid:
+        return control.qualifier == kControlQualifierNone;
+    case kControlNamespaceWeave:
+        return false;
+    case kControlNamespaceWindows:
+        if (control.familyId == kWindowsVirtualKeyFamily) {
+            return control.qualifier == kControlQualifierNone;
+        }
+        if (control.familyId == kWindowsScanCodeFamily) {
+            return control.qualifier <= kWindowsScanCodeQualifierE1;
+        }
+        return false;
+    case kControlNamespaceLinux:
+        return control.familyId == kLinuxEvKeyFamily
+            && control.qualifier == kControlQualifierNone;
+    case kControlNamespaceMacOs:
+        return control.familyId == kMacOsKeyCodeFamily
+            && control.qualifier == kControlQualifierNone;
+    default:
+        return false;
+    }
 }
 
 [[nodiscard]] bool ValidEventTransition(EventTransition transition) noexcept
@@ -950,26 +975,20 @@ void ValidateRangeCoverage(
 void AddExpectedControlUse(
     const CompiledProgramStorage& storage,
     std::vector<std::uint8_t>& expected,
-    ControlRef control,
+    ControlRefId control,
     ControlUse use,
     ValidationContext& context,
     const std::string& location)
 {
-    const auto found = std::lower_bound(
-        storage.controls.begin(),
-        storage.controls.end(),
-        control);
-    if (found == storage.controls.end() || *found != control) {
+    if (!ValidId(control, storage.controls.size())) {
         context.Add(
             ProgramValidationErrorCode::ControlRequirement,
             location,
-            "referenced control is absent from the canonical control pool");
+            "referenced ControlRefId is outside the canonical control pool");
         return;
     }
-    const std::size_t index = static_cast<std::size_t>(
-        std::distance(storage.controls.begin(), found));
-    expected[index] = static_cast<std::uint8_t>(
-        expected[index] | ToControlUseBits(use));
+    expected[control.value] = static_cast<std::uint8_t>(
+        expected[control.value] | ToControlUseBits(use));
 }
 
 void ValidateCanonicalPools(
@@ -977,6 +996,13 @@ void ValidateCanonicalPools(
     ValidationContext& context)
 {
     for (std::size_t index = 0; index < storage.strings.size(); ++index) {
+        if (storage.strings[index].size()
+            > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+            context.Add(
+                ProgramValidationErrorCode::TableSize,
+                At("strings", index),
+                "string byte length exceeds its 32-bit encoding");
+        }
         if (!IsValidUtf8(storage.strings[index])) {
             context.Add(
                 ProgramValidationErrorCode::String,
@@ -1111,8 +1137,7 @@ void ValidateSourceAndSettings(
                 "non-text target kind must use an invalid StringId");
         }
         break;
-    case TargetSelectorKind::ExecutableName:
-    case TargetSelectorKind::AbsolutePath:
+    case TargetSelectorKind::Executable:
         if (!ValidId(target.text, storage.strings.size())
             || HasEmbeddedNul(storage, target.text)) {
             context.Add(
@@ -1243,7 +1268,7 @@ void ValidatePauseControls(
          ++bucketIndex) {
         const PauseControlBucket& bucket = storage.pauseControlBuckets[bucketIndex];
         const std::string bucketLocation = At("pauseControlBuckets", bucketIndex);
-        if (!ValidControl(bucket.key.control)
+        if (!ValidId(bucket.key.control, storage.controls.size())
             || !ValidEventTransition(bucket.key.transition)
             || (havePreviousKey && previousKey >= bucket.key)) {
             context.Add(
@@ -1346,7 +1371,7 @@ void ValidateRulesAndMappings(
     std::vector<std::uint32_t> slotMappingCounts(storage.mappingSlots.size(), 0U);
     for (std::size_t index = 0; index < storage.mappingSlots.size(); ++index) {
         const MappingSlotDescriptor& slot = storage.mappingSlots[index];
-        if (!ValidControl(slot.source)
+        if (!ValidId(slot.source, storage.controls.size())
             || (index > 0U
                 && storage.mappingSlots[index - 1U].source >= slot.source)) {
             context.Add(
@@ -1365,7 +1390,7 @@ void ValidateRulesAndMappings(
     for (std::size_t index = 0; index < storage.mappings.size(); ++index) {
         const MappingDescriptor& mapping = storage.mappings[index];
         if (!ValidId(mapping.slot, storage.mappingSlots.size())
-            || !ValidControl(mapping.target)
+            || !ValidId(mapping.target, storage.controls.size())
             || !ValidSpan(mapping.source, storage.source.byteLength)) {
             context.Add(
                 ProgramValidationErrorCode::Mapping,
@@ -1398,7 +1423,7 @@ void ValidateRulesAndMappings(
          ++bucketIndex) {
         const EventBucket& bucket = storage.eventBuckets[bucketIndex];
         const std::string bucketLocation = At("eventBuckets", bucketIndex);
-        if (!ValidControl(bucket.key.control)
+        if (!ValidId(bucket.key.control, storage.controls.size())
             || !ValidEventTransition(bucket.key.transition)
             || (havePreviousKey && previousKey >= bucket.key)) {
             context.Add(
@@ -1642,7 +1667,7 @@ void ValidateDebugSpans(
 
 [[nodiscard]] bool HasMappingSource(
     const CompiledProgramStorage& storage,
-    ControlRef control) noexcept
+    ControlRefId control) noexcept
 {
     return std::any_of(
         storage.mappingSlots.begin(),
@@ -1655,7 +1680,7 @@ void ValidateDebugSpans(
 } // namespace
 
 ProgramRequirements ComputeProgramRequirements(
-    const CompiledProgramStorage& storage) noexcept
+    const CompiledProgramStorage& storage)
 {
     ProgramRequirements requirements{};
     requirements.stateSlotCount = ToCount(storage.userValues.initialStates.size());
@@ -1765,19 +1790,15 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
     const CompiledProgramStorage& storage)
 {
     ValidationContext context;
-    if (storage.schemaVersion != kCompiledProgramSchemaVersion) {
-        context.Add(
-            ProgramValidationErrorCode::Schema,
-            "schemaVersion",
-            "compiled program schema version is unsupported");
-    }
-
     const std::vector<std::pair<std::string_view, std::size_t>> tableSizes{
         {"strings", storage.strings.size()},
         {"lineStarts", storage.lineStarts.size()},
         {"controls", storage.controls.size()},
         {"controlRequirements", storage.controlRequirements.size()},
         {"valueRefs", storage.valueRefs.size()},
+        {"userValues.initialStates", storage.userValues.initialStates.size()},
+        {"userValues.initialNumbers", storage.userValues.initialNumbers.size()},
+        {"userValues.initialDurations", storage.userValues.initialDurations.size()},
         {"numberConstants", storage.numberConstants.size()},
         {"durationConstants", storage.durationConstants.size()},
         {"expressions", storage.expressions.size()},
@@ -1790,6 +1811,11 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"pauseControlRules", storage.pauseControlRules.size()},
         {"eventBuckets", storage.eventBuckets.size()},
         {"rules", storage.rules.size()},
+        {"debugInfo.variables", storage.debugInfo.variables.size()},
+        {"debugInfo.expressionInstructionSpans",
+            storage.debugInfo.expressionInstructionSpans.size()},
+        {"debugInfo.actionInstructionSpans",
+            storage.debugInfo.actionInstructionSpans.size()},
     };
     for (const auto& [name, size] : tableSizes) {
         if (size >= kInvalidProgramIndex) {

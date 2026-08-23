@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "core/input_event.hpp"
+#include "input/input_types.hpp"
 
 #include <string_view>
 

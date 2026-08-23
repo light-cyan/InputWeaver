@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/fixed_rules.hpp"
-#include "core/stop_request.hpp"
+#include "runtime/fixed_rules.hpp"
+#include "support/stop_request.hpp"
 #include "diagnostics/diagnostic_log.hpp"
 #include "platform/windows/low_level_hooks.hpp"
 

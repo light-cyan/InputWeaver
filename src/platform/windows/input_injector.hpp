@@ -10,7 +10,7 @@
 
 #include <array>
 
-#include "core/input_event.hpp"
+#include "input/input_types.hpp"
 
 namespace inputweaver {
 

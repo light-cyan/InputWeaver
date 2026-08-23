@@ -1,7 +1,8 @@
 #include "compiled_program_fixtures.hpp"
 
-#include "core/program_dump.hpp"
-#include "core/program_validator.hpp"
+#include "program/program_dump.hpp"
+#include "program/program_validator.hpp"
+#include "program/weavec_codec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37,6 +38,37 @@ void Check(bool condition, std::string_view name)
         }
     }
     return false;
+}
+
+[[nodiscard]] bool HasDecodeError(
+    const inputweaver::DecodeWeavecResult& result,
+    inputweaver::WeavecDecodeErrorCode code) noexcept
+{
+    return result.decodeError.has_value() && result.decodeError->code == code;
+}
+
+[[nodiscard]] std::uint64_t ReadLittleEndianU64(
+    std::span<const std::uint8_t> bytes,
+    std::size_t offset) noexcept
+{
+    std::uint64_t value = 0U;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const unsigned int shift = static_cast<unsigned int>(index * 8U);
+        value |= static_cast<std::uint64_t>(bytes[offset + index]) << shift;
+    }
+    return value;
+}
+
+void WriteLittleEndianU64(
+    std::vector<std::uint8_t>& bytes,
+    std::size_t offset,
+    std::uint64_t value) noexcept
+{
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const unsigned int shift = static_cast<unsigned int>(index * 8U);
+        bytes[offset + index] = static_cast<std::uint8_t>(
+            (value >> shift) & 0xffU);
+    }
 }
 
 [[nodiscard]] std::uint64_t Fnv1a64(std::string_view text) noexcept
@@ -76,6 +108,8 @@ void Check(bool condition, std::string_view name)
     storage.strings.push_back("number-value");
     storage.strings.push_back("duration-value");
     storage.strings.push_back("fixture-command");
+    storage.settings.target.kind = TargetSelectorKind::Executable;
+    storage.settings.target.text = StringId{4U};
     storage.userValues.initialStates = {1U};
     storage.userValues.initialNumbers = {3.0};
     storage.userValues.initialDurations = {{5'000'000}};
@@ -305,10 +339,10 @@ void Check(bool condition, std::string_view name)
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        16250531285494687580ULL,
-        6279514400355555682ULL,
-        16791086043516604065ULL,
-        16678841533137656072ULL,
+        10389705910507639397ULL,
+        17776357415295911139ULL,
+        14182767377470171226ULL,
+        3121414655632945442ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -336,6 +370,232 @@ void TestRequiredFixtures()
     }
 }
 
+void TestControlIdentityContract()
+{
+    using namespace inputweaver;
+    const ControlRef f6{
+        kControlNamespaceUsbHid,
+        0x07U,
+        0x3fU,
+        kControlQualifierNone};
+    const ControlRef f7{
+        kControlNamespaceUsbHid,
+        0x07U,
+        0x40U,
+        kControlQualifierNone};
+
+    const auto tap = FinalizeFixture(test::MakeTapFixtureStorage(), "control identity tap");
+    Check(
+        tap != nullptr && tap->Controls().size() == 2U
+            && tap->Controls()[0] == f6 && tap->Controls()[1] == f7,
+        "control pool is canonicalized by the complete four-field identity");
+    Check(
+        tap != nullptr && tap->EventBuckets()[0].key.control == ControlRefId{0U}
+            && tap->ActionCode()[0].operand0 == 1U,
+        "event and output operands share dense canonical ControlRefIds");
+
+    const auto mapping = FinalizeFixture(
+        test::MakeMappingFixtureStorage(),
+        "control identity mapping");
+    Check(
+        mapping != nullptr
+            && mapping->MappingSlots()[0].source == ControlRefId{0U}
+            && mapping->Mappings()[0].target == ControlRefId{1U},
+        "mapping sources and targets use the shared control pool");
+
+    constexpr std::array<ControlRef, 4U> supportedIdentityShapes{
+        ControlRef{kControlNamespaceUsbHid, 0x07U, 0x04U, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily, 0x1dU,
+            kWindowsScanCodeQualifierE0},
+        ControlRef{kControlNamespaceLinux, kLinuxEvKeyFamily, 127U, 0U},
+        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily, 0x3fU, 0U},
+    };
+    for (const ControlRef control : supportedIdentityShapes) {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.controls[0] = control;
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(result.program != nullptr && result.errors.empty(),
+            "published control namespace shape validates structurally");
+    }
+
+    constexpr std::array<ControlRef, 8U> invalidIdentityShapes{
+        ControlRef{0U, 1U, 1U, 0U},
+        ControlRef{3U, 1U, 1U, 0U},
+        ControlRef{kControlNamespaceWeave, 1U, 1U, 0U},
+        ControlRef{kControlNamespaceWindows, 3U, 1U, 0U},
+        ControlRef{kControlNamespaceWindows, kWindowsVirtualKeyFamily, 1U, 1U},
+        ControlRef{kControlNamespaceWindows, kWindowsScanCodeFamily, 1U, 3U},
+        ControlRef{kControlNamespaceLinux, 2U, 1U, 0U},
+        ControlRef{kControlNamespaceMacOs, kMacOsKeyCodeFamily,
+            kInvalidProgramIndex, 0U},
+    };
+    for (const ControlRef control : invalidIdentityShapes) {
+        auto storage = test::MakePauseControlFixtureStorage();
+        storage.controls[0] = control;
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Value),
+            "invalid control namespace, family, qualifier, or field is rejected");
+    }
+}
+
+void TestWeavecRoundTrips()
+{
+    using namespace inputweaver;
+    const std::array<CompiledProgramStorage, 5U> storages{
+        test::MakeTapFixtureStorage(),
+        test::MakeMappingFixtureStorage(),
+        test::MakeConditionalRepeatFixtureStorage(),
+        test::MakePauseControlFixtureStorage(),
+        MakeOpcodeCoverageStorage(),
+    };
+    constexpr std::array<std::uint8_t, 8U> magic{
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x00U};
+
+    for (std::size_t index = 0; index < storages.size(); ++index) {
+        const auto original = FinalizeFixture(storages[index], "weavec source fixture");
+        if (original == nullptr) {
+            continue;
+        }
+        const std::vector<std::uint8_t> bytes = EncodeWeavec(*original);
+        Check(bytes.size() >= kWeavecHeaderSize,
+            "encoded artifact contains the complete header");
+        Check(
+            bytes.size() >= magic.size()
+                && std::equal(magic.begin(), magic.end(), bytes.begin()),
+            "encoded artifact uses the WEAVEC magic bytes");
+        Check(
+            ReadLittleEndianU64(bytes, 8U)
+                == static_cast<std::uint64_t>(bytes.size() - kWeavecHeaderSize),
+            "encoded header contains the exact payload length");
+
+        const DecodeWeavecResult decoded = DecodeWeavec(bytes);
+        Check(!decoded.decodeError.has_value(),
+            "encoded artifact passes binary decoding");
+        Check(decoded.validationErrors.empty(),
+            "decoded artifact passes structural validation");
+        Check(decoded.program != nullptr,
+            "decoded artifact produces an immutable program");
+        if (decoded.program != nullptr) {
+            Check(
+                DumpCompiledProgram(*decoded.program) == DumpCompiledProgram(*original),
+                "weavec round trip preserves the deterministic program dump");
+            Check(EncodeWeavec(*decoded.program) == bytes,
+                "weavec round trip reproduces identical bytes");
+        }
+    }
+}
+
+void TestWeavecRejection()
+{
+    using namespace inputweaver;
+    const auto program = FinalizeFixture(test::MakeTapFixtureStorage(), "weavec rejection");
+    if (program == nullptr) {
+        return;
+    }
+    const std::vector<std::uint8_t> valid = EncodeWeavec(*program);
+
+    {
+        const std::vector<std::uint8_t> shortHeader(15U, 0U);
+        const auto result = DecodeWeavec(shortHeader);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidHeader),
+            "short weavec header is rejected");
+    }
+    {
+        auto bytes = valid;
+        bytes[0] ^= 0xffU;
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidHeader),
+            "invalid weavec magic is rejected");
+    }
+    {
+        auto bytes = valid;
+        WriteLittleEndianU64(
+            bytes,
+            8U,
+            ReadLittleEndianU64(bytes, 8U) + 1U);
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::LengthMismatch),
+            "mismatched weavec payload length is rejected");
+    }
+    {
+        auto bytes = valid;
+        bytes.pop_back();
+        WriteLittleEndianU64(
+            bytes,
+            8U,
+            static_cast<std::uint64_t>(bytes.size() - kWeavecHeaderSize));
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::Truncated),
+            "internally truncated weavec payload is rejected");
+    }
+    {
+        auto bytes = valid;
+        bytes.push_back(0U);
+        WriteLittleEndianU64(
+            bytes,
+            8U,
+            static_cast<std::uint64_t>(bytes.size() - kWeavecHeaderSize));
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::TrailingData),
+            "trailing weavec payload field is rejected");
+    }
+    {
+        auto bytes = valid;
+        constexpr std::size_t targetKindOffset = kWeavecHeaderSize + 16U;
+        bytes[targetKindOffset] = 0xffU;
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
+            "unknown encoded enumeration is rejected");
+    }
+    {
+        auto bytes = valid;
+        constexpr std::size_t requirementsBooleanOffset =
+            kWeavecHeaderSize + 16U + 29U + (13U * 4U);
+        bytes[requirementsBooleanOffset] = 2U;
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
+            "noncanonical encoded Boolean is rejected");
+    }
+    {
+        WeavecDecodeLimits limits{};
+        limits.maximumPayloadBytes = 0U;
+        const auto result = DecodeWeavec(valid, limits);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::LimitExceeded),
+            "configured weavec payload limit is enforced");
+    }
+    {
+        WeavecDecodeLimits limits{};
+        limits.maximumCollectionElements = 0U;
+        const auto result = DecodeWeavec(valid, limits);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::LimitExceeded),
+            "configured weavec collection limit is enforced before allocation");
+    }
+    {
+        auto bytes = valid;
+        constexpr std::size_t maximumTasksOffset =
+            kWeavecHeaderSize + 16U + 29U + (7U * 4U);
+        bytes[maximumTasksOffset] = 0U;
+        const auto result = DecodeWeavec(bytes);
+        Check(!result.decodeError.has_value() && result.program == nullptr
+                && HasError(
+                    result.validationErrors,
+                    ProgramValidationErrorCode::Requirements),
+            "structurally inconsistent decoded program is rejected by finalization");
+    }
+    {
+        auto bytes = valid;
+        constexpr std::size_t firstStringByteOffset =
+            kWeavecHeaderSize + 16U + 29U + 53U + 4U + 4U;
+        bytes[firstStringByteOffset] = 0xc0U;
+        const auto result = DecodeWeavec(bytes);
+        Check(!result.decodeError.has_value() && result.program == nullptr
+                && HasError(
+                    result.validationErrors,
+                    ProgramValidationErrorCode::String),
+            "decoded UTF-8 violation reaches structural validation");
+    }
+}
+
 void TestCanonicalization()
 {
     inputweaver::CompiledProgramStorage baselineStorage =
@@ -354,6 +614,11 @@ void TestCanonicalization()
             && inputweaver::DumpCompiledProgram(*baseline)
                 == inputweaver::DumpCompiledProgram(*noisy),
         "canonicalization removes pool and ordering history");
+    Check(
+        baseline != nullptr && noisy != nullptr
+            && inputweaver::EncodeWeavec(*baseline)
+                == inputweaver::EncodeWeavec(*noisy),
+        "canonicalization produces deterministic weavec bytes");
 }
 
 void TestBuilderAndImmutableAccess()
@@ -364,7 +629,6 @@ void TestBuilderAndImmutableAccess()
     inputweaver::FinalizeResult result = std::move(builder).Finalize();
     Check(result.program != nullptr, "builder finalizes a valid program");
     if (result.program != nullptr) {
-        Check(result.program->SchemaVersion() == 1U, "immutable program exposes schema");
         Check(result.program->Rules().size() == 1U, "immutable program exposes const rule span");
         Check(result.program->PauseControlRules().empty(),
             "immutable program exposes const pause-control span");
@@ -591,13 +855,6 @@ void TestRemainingValidationFamilies()
 {
     {
         auto storage = inputweaver::test::MakeTapFixtureStorage();
-        storage.schemaVersion = 99U;
-        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
-        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Schema),
-            "unsupported schema is diagnosed");
-    }
-    {
-        auto storage = inputweaver::test::MakeTapFixtureStorage();
         storage.source.displayPath = inputweaver::StringId{99U};
         const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
         Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Identifier),
@@ -609,6 +866,16 @@ void TestRemainingValidationFamilies()
         const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
         Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::String),
             "invalid UTF-8 is diagnosed");
+    }
+    {
+        auto storage = MakeOpcodeCoverageStorage();
+        storage.strings[4] = std::string("tool\0argument", 13U);
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Action)
+                && HasError(
+                    result.errors,
+                    inputweaver::ProgramValidationErrorCode::Identifier),
+            "embedded NUL in executable text is diagnosed");
     }
     {
         auto storage = inputweaver::test::MakeTapFixtureStorage();
@@ -652,6 +919,9 @@ void TestValidationErrorLimit()
 int main()
 {
     TestRequiredFixtures();
+    TestControlIdentityContract();
+    TestWeavecRoundTrips();
+    TestWeavecRejection();
     TestPauseControlContract();
     TestCanonicalization();
     TestBuilderAndImmutableAccess();

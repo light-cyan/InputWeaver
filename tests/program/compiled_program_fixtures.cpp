@@ -1,6 +1,6 @@
 #include "compiled_program_fixtures.hpp"
 
-#include "core/program_validator.hpp"
+#include "program/program_validator.hpp"
 
 #include <cstdint>
 #include <string>
@@ -10,6 +10,16 @@ namespace {
 
 constexpr DurationValue kDefaultTapDuration{30'000'000};
 constexpr DurationValue kDefaultActionGap{10'000'000};
+constexpr ControlRef kF6{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0x3fU,
+    kControlQualifierNone};
+constexpr ControlRef kF7{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0x40U,
+    kControlQualifierNone};
 
 void SetCommonSource(
     CompiledProgramStorage& storage,
@@ -45,8 +55,8 @@ void SetCommonSource(
 void AddCommonControls(CompiledProgramStorage& storage)
 {
     storage.controls = {
-        {DeviceKind::Keyboard, control::kF7},
-        {DeviceKind::Keyboard, control::kF6},
+        kF7,
+        kF6,
     };
 }
 
@@ -91,7 +101,7 @@ CompiledProgramStorage MakeTapFixtureStorage()
         0U,
         WholeSource(storage)});
     storage.eventBuckets.push_back({
-        {{DeviceKind::Keyboard, control::kF6}, EventTransition::Down},
+        {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
     Derive(storage);
     return storage;
@@ -112,10 +122,10 @@ CompiledProgramStorage MakeMappingFixtureStorage()
         {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
     };
     storage.mappingSlots.push_back({
-        {DeviceKind::Keyboard, control::kF6}});
+        ControlRefId{1U}});
     storage.mappings.push_back({
         MappingSlotId{0U},
-        {DeviceKind::Keyboard, control::kF7},
+        ControlRefId{0U},
         WholeSource(storage)});
     storage.rules.push_back({
         ExpressionId{},
@@ -127,7 +137,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
         0U,
         WholeSource(storage)});
     storage.eventBuckets.push_back({
-        {{DeviceKind::Keyboard, control::kF6}, EventTransition::Down},
+        {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
     Derive(storage);
     return storage;
@@ -202,7 +212,7 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         0U,
         WholeSource(storage)});
     storage.eventBuckets.push_back({
-        {{DeviceKind::Keyboard, control::kF6}, EventTransition::Down},
+        {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
     Derive(storage);
     return storage;
@@ -216,7 +226,7 @@ CompiledProgramStorage MakePauseControlFixtureStorage()
     CompiledProgramStorage storage{};
     SetCommonSource(storage, "fixture.pause-control.weave", source);
     storage.controls = {
-        {DeviceKind::Keyboard, control::kF6},
+        kF6,
     };
     storage.controlRequirements = {
         {ControlRefId{0U}, ToControlUseBits(ControlUse::EventSource)},
@@ -228,7 +238,7 @@ CompiledProgramStorage MakePauseControlFixtureStorage()
         0U,
         WholeSource(storage)});
     storage.pauseControlBuckets.push_back({
-        {{DeviceKind::Keyboard, control::kF6}, EventTransition::Down},
+        {ControlRefId{0U}, EventTransition::Down},
         {0U, 1U}});
     Derive(storage);
     return storage;

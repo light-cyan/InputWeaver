@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/input_event.hpp"
+#include "input/input_types.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -18,13 +18,13 @@ class RemapEngine;
 class TargetProcessContext;
 struct RuntimeTestAccess;
 
-struct AppRuntimeOptions final {
+struct WindowsRuntimeSessionOptions final {
     bool mappingMode{};
     bool traceInput{};
     SelfTag selfTag{};
 };
 
-struct AppRuntimeMetrics final {
+struct WindowsRuntimeSessionMetrics final {
     std::uint64_t hookEvents{};
     std::uint64_t suppressedEvents{};
     std::uint64_t queuedBatches{};
@@ -36,16 +36,16 @@ struct AppRuntimeMetrics final {
     bool circuitBreakerOpen{};
 };
 
-class AppRuntime final {
+class WindowsRuntimeSession final {
 public:
-    AppRuntime(
-        AppRuntimeOptions options,
+    WindowsRuntimeSession(
+        WindowsRuntimeSessionOptions options,
         TargetProcessContext* targetContext,
         DiagnosticLog& diagnosticLog) noexcept;
-    ~AppRuntime();
+    ~WindowsRuntimeSession();
 
-    AppRuntime(const AppRuntime&) = delete;
-    AppRuntime& operator=(const AppRuntime&) = delete;
+    WindowsRuntimeSession(const WindowsRuntimeSession&) = delete;
+    WindowsRuntimeSession& operator=(const WindowsRuntimeSession&) = delete;
 
     bool Start(std::wstring& errorMessage);
     void RequestStop() noexcept;
@@ -53,7 +53,7 @@ public:
 
     [[nodiscard]] HANDLE StoppedEvent() const noexcept;
     [[nodiscard]] HANDLE ActionQueueErrorEvent() const noexcept;
-    [[nodiscard]] AppRuntimeMetrics Metrics() const noexcept;
+    [[nodiscard]] WindowsRuntimeSessionMetrics Metrics() const noexcept;
 
 private:
     friend struct RuntimeTestAccess;
@@ -62,7 +62,7 @@ private:
     bool CreateShutdownEvent(std::wstring& errorMessage) noexcept;
     bool CreateComponents(std::wstring& errorMessage);
 
-    AppRuntimeOptions options_;
+    WindowsRuntimeSessionOptions options_;
     TargetProcessContext* targetContext_;
     DiagnosticLog& diagnosticLog_;
     HANDLE shutdownEvent_{nullptr};

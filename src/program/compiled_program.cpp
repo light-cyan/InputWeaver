@@ -81,6 +81,18 @@ void CanonicalizeControls(CompiledProgramStorage& storage)
     for (auto& requirement : storage.controlRequirements) {
         RemapId(requirement.control, remap);
     }
+    for (auto& slot : storage.mappingSlots) {
+        RemapId(slot.source, remap);
+    }
+    for (auto& mapping : storage.mappings) {
+        RemapId(mapping.target, remap);
+    }
+    for (auto& bucket : storage.pauseControlBuckets) {
+        RemapId(bucket.key.control, remap);
+    }
+    for (auto& bucket : storage.eventBuckets) {
+        RemapId(bucket.key.control, remap);
+    }
     for (auto& instruction : storage.expressionCode) {
         if (instruction.opcode == ExpressionOpcode::ReadControlHeld
             && instruction.operand0 < remap.size()) {
@@ -292,11 +304,6 @@ CompiledProgram::CompiledProgram(CompiledProgramStorage storage) noexcept
 {
 }
 
-std::uint32_t CompiledProgram::SchemaVersion() const noexcept
-{
-    return storage_.schemaVersion;
-}
-
 const ProgramSource& CompiledProgram::Source() const noexcept
 {
     return storage_.source;
@@ -428,7 +435,7 @@ const CompiledProgramStorage& CompiledProgramBuilder::Storage() const noexcept
     return storage_;
 }
 
-void CompiledProgramBuilder::DeriveRequirements() noexcept
+void CompiledProgramBuilder::DeriveRequirements()
 {
     storage_.requirements = ComputeProgramRequirements(storage_);
 }

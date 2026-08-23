@@ -7,7 +7,7 @@
 namespace inputweaver {
 
 [[nodiscard]] ProgramRequirements ComputeProgramRequirements(
-    const CompiledProgramStorage& storage) noexcept;
+    const CompiledProgramStorage& storage);
 
 [[nodiscard]] std::vector<ProgramValidationError> ValidateCompiledProgram(
     const CompiledProgramStorage& storage);

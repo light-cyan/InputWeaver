@@ -65,14 +65,10 @@ void WriteSpan(std::ostream& output, SourceSpan span)
     return output.str();
 }
 
-[[nodiscard]] std::string_view DeviceName(DeviceKind value) noexcept
-{
-    return value == DeviceKind::Keyboard ? "keyboard" : "mouse";
-}
-
 void WriteControl(std::ostream& output, ControlRef control)
 {
-    output << DeviceName(control.device) << ':' << control.code;
+    output << control.namespaceId << ':' << control.familyId << ':'
+           << control.code << ':' << control.qualifier;
 }
 
 [[nodiscard]] std::string_view TransitionName(EventTransition value) noexcept
@@ -95,10 +91,8 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "unspecified";
     case TargetSelectorKind::Global:
         return "global";
-    case TargetSelectorKind::ExecutableName:
-        return "executable-name";
-    case TargetSelectorKind::AbsolutePath:
-        return "absolute-path";
+    case TargetSelectorKind::Executable:
+        return "executable";
     }
     return "unknown";
 }
@@ -254,7 +248,6 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     output.imbue(std::locale::classic());
     output << std::setprecision(17);
 
-    output << "schema " << program.SchemaVersion() << '\n';
     output << "source display=";
     WriteId(output, 's', program.Source().displayPath);
     output << " bytes=" << program.Source().byteLength << " lines=";
@@ -394,7 +387,7 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     output << "mapping-slots " << program.MappingSlots().size() << '\n';
     for (std::size_t index = 0; index < program.MappingSlots().size(); ++index) {
         output << "  ms" << index << " source=";
-        WriteControl(output, program.MappingSlots()[index].source);
+        WriteId(output, 'c', program.MappingSlots()[index].source);
         output << '\n';
     }
     output << "mappings " << program.Mappings().size() << '\n';
@@ -403,7 +396,7 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         output << "  m" << index << " slot=";
         WriteId(output, 'q', mapping.slot);
         output << " target=";
-        WriteControl(output, mapping.target);
+        WriteId(output, 'c', mapping.target);
         output << " source=";
         WriteSpan(output, mapping.source);
         output << '\n';
@@ -416,7 +409,7 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
          ++index) {
         const PauseControlBucket& bucket = program.PauseControlBuckets()[index];
         output << "  p" << index << " key=";
-        WriteControl(output, bucket.key.control);
+        WriteId(output, 'c', bucket.key.control);
         output << ':' << TransitionName(bucket.key.transition) << " rules=";
         WriteRange(output, bucket.rules);
         output << '\n';
@@ -439,7 +432,7 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     for (std::size_t index = 0; index < program.EventBuckets().size(); ++index) {
         const EventBucket& bucket = program.EventBuckets()[index];
         output << "  b" << index << " key=";
-        WriteControl(output, bucket.key.control);
+        WriteId(output, 'c', bucket.key.control);
         output << ':' << TransitionName(bucket.key.transition) << " rules=";
         WriteRange(output, bucket.rules);
         output << '\n';

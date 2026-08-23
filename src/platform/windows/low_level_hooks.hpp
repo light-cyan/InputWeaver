@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/input_event.hpp"
-#include "core/stop_request.hpp"
+#include "input/input_types.hpp"
+#include "support/stop_request.hpp"
 #include "process_context.hpp"
 
 #include <algorithm>

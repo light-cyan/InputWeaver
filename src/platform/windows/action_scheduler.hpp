@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/action_queue.hpp"
-#include "core/stop_request.hpp"
+#include "runtime/action_queue.hpp"
+#include "support/stop_request.hpp"
 #include "diagnostics/diagnostic_log.hpp"
 #include "platform/windows/input_injector.hpp"
 #include "platform/windows/process_context.hpp"
@@ -18,7 +18,7 @@
 namespace inputweaver {
 
 class RemapEngine;
-class AppRuntime;
+class WindowsRuntimeSession;
 struct RuntimeTestAccess;
 
 inline constexpr unsigned int kInjectionFailureThreshold = 3;
@@ -68,7 +68,7 @@ public:
     [[nodiscard]] ActionSchedulerMetrics Metrics() const noexcept;
 
 private:
-    friend class AppRuntime;
+    friend class WindowsRuntimeSession;
     friend struct RuntimeTestAccess;
 
     enum class CancellationReason : std::uint8_t {

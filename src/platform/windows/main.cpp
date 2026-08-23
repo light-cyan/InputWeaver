@@ -1,5 +1,5 @@
 #include "diagnostics/diagnostic_log.hpp"
-#include "app/runtime.hpp"
+#include "runtime_session.hpp"
 #include "platform/windows/process_locator.hpp"
 #include "platform/windows/process_context.hpp"
 
@@ -125,7 +125,7 @@ inputweaver::SelfTag GenerateSelfTag() noexcept {
 }
 
 void PrintMetrics(
-    const inputweaver::AppRuntimeMetrics& metrics,
+    const inputweaver::WindowsRuntimeSessionMetrics& metrics,
     const inputweaver::DiagnosticLog& diagnosticLog) {
     std::wcout << L"Session stopped. hook_events=" << metrics.hookEvents
                << L" suppressed=" << metrics.suppressedEvents
@@ -152,7 +152,7 @@ bool WaitForRetry() noexcept {
            WaitForSingleObject(gConsoleStopEvent, 1000) == WAIT_OBJECT_0;
 }
 
-DWORD WaitForRuntime(inputweaver::AppRuntime& runtime, DWORD& waitError) {
+DWORD WaitForRuntime(inputweaver::WindowsRuntimeSession& runtime, DWORD& waitError) {
     const HANDLE waitHandles[] = {
         runtime.StoppedEvent(),
         gConsoleStopEvent,
@@ -164,7 +164,7 @@ DWORD WaitForRuntime(inputweaver::AppRuntime& runtime, DWORD& waitError) {
             return waitResult;
         }
 
-        const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
+        const inputweaver::WindowsRuntimeSessionMetrics metrics = runtime.Metrics();
         std::wcerr
             << L"Runtime error: the action queue reached capacity; the triggering input "
                L"was forwarded to keep the system responsive. "
@@ -200,7 +200,8 @@ int RunObserver(
     const CommandLineOptions& options,
     inputweaver::SelfTag selfTag,
     inputweaver::DiagnosticLog& diagnosticLog) {
-    inputweaver::AppRuntime runtime({false, options.traceInput, selfTag}, nullptr, diagnosticLog);
+    inputweaver::WindowsRuntimeSession runtime(
+        {false, options.traceInput, selfTag}, nullptr, diagnosticLog);
     std::wstring errorMessage;
     if (!runtime.Start(errorMessage)) {
         std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -215,7 +216,7 @@ int RunObserver(
         runtime.RequestStop();
     }
     runtime.Wait();
-    const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
+    const inputweaver::WindowsRuntimeSessionMetrics metrics = runtime.Metrics();
     PrintMetrics(metrics, diagnosticLog);
     if (waitResult == WAIT_FAILED) {
         std::wcerr << L"WaitForMultipleObjects failed with Win32 error " << waitError << L".\n";
@@ -290,7 +291,8 @@ int RunTargeted(
                    << L"Fixed rules are active only while this process is foreground.\n"
                    << L"Press physical Ctrl+Shift+F12 to stop.\n";
 
-        inputweaver::AppRuntime runtime({true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
+        inputweaver::WindowsRuntimeSession runtime(
+            {true, options.traceInput, selfTag}, &targetContext, diagnosticLog);
         std::wstring errorMessage;
         if (!runtime.Start(errorMessage)) {
             std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -303,7 +305,7 @@ int RunTargeted(
             runtime.RequestStop();
         }
         runtime.Wait();
-        const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
+        const inputweaver::WindowsRuntimeSessionMetrics metrics = runtime.Metrics();
         PrintMetrics(metrics, diagnosticLog);
 
         if (waitResult == WAIT_FAILED) {

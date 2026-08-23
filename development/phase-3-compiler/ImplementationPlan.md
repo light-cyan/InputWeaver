@@ -2,11 +2,11 @@
 
 ## Objective
 
-This successor phase implements the complete Weave v1 source-to-`CompiledProgram` compiler against the frozen Phase 2 contract. It owns compilation only and is complete when valid `.weave` source deterministically produces a validated immutable program and invalid source produces bounded source diagnostics with no program.
+This successor phase implements the complete Weave v1 source-to-`CompiledProgram` compiler against the frozen Phase 2 contract. It owns compilation and compiled-artifact emission and is complete when valid `.weave` source deterministically produces a validated immutable program and a persistent `.weavec` intermediate file, while invalid source produces bounded source diagnostics with no program or artifact.
 
 ## Plan coverage
 
-This is the complete implementation and verification plan for the compiler successor phase, not an initial subset or an exploratory sequence. Work packages C1 through C6 cover every compiler-owned stage from source loading through the public compiler commands. Application integration, runtime execution, TUI work, and installation are outside this phase and belong to later integration work.
+This is the complete implementation and verification plan for the compiler successor phase, not an initial subset or an exploratory sequence. Work packages C1 through C6 cover every compiler-owned stage from source loading through persistent `.weavec` emission and the public compiler commands. Application integration, runtime execution, TUI work, and installation are outside this phase and belong to later integration work.
 
 The work packages may be refined into implementation checklists inside this directory, but such checklists may not reduce the objective, normative inputs, semantic obligations, tests, or completion gate defined here.
 
@@ -14,7 +14,7 @@ The work packages may be refined into implementation checklists inside this dire
 
 - `docs/language/grammar.v1.md` is the authoritative source for Weave v1 lexical rules, grammar, type rules, source-order behavior, and user-visible runtime semantics that affect compilation.
 - `development/phase-2/CompiledProgramDesign.md` is the authoritative design for every emitted table, ID, range, instruction, descriptor, requirement, debug record, and validation invariant.
-- `src/core/compiled_program.*`, `src/core/program_validator.*`, and `src/core/program_dump.*` are the executable Phase 2 contract used by compiler code and tests.
+- `src/program/compiled_program.*`, `src/program/program_validator.*`, and `src/program/program_dump.*` are the executable shared contract used by compiler code and tests.
 - `development/OpenDesignIssues.md` records active decisions that must be resolved before affected compiler behavior can pass its completion gate.
 
 A contradiction between the language specification and the compiled-program contract is a phase blocker. The compiler does not silently choose one interpretation, introduce a compiler-private semantic side table, or encode behavior that the runtime cannot derive from the frozen contract.
@@ -23,7 +23,7 @@ A contradiction between the language specification and the compiled-program cont
 
 This phase starts from the reviewed Phase 2 completion commit and proceeds without synchronization with the runtime successor phase. It does not wait for runtime features, consume runtime branch commits, share progress gates, or modify runtime-owned files. Tests compare compiler output with the frozen Phase 2 fixtures and dumps, not with a live runtime.
 
-The normative Phase 2 design and frozen core implementation are dependencies. A discovered representation gap is recorded as a compiler-phase blocker for a future contract revision; this phase does not add compiler-private side tables or change the contract unilaterally.
+The normative Phase 2 design and frozen shared `program` implementation are dependencies. A discovered representation gap is recorded as a compiler-phase blocker for a future contract revision; this phase does not add compiler-private side tables or change the contract unilaterally.
 
 ## Owned paths
 
@@ -45,6 +45,8 @@ UTF-8 .weave bytes
     -> CompiledProgramStorage
     -> FinalizeCompiledProgram
     -> shared_ptr<const CompiledProgram>
+    -> .weavec encoder
+    -> persistent .weavec file
 ```
 
 A compile failure returns bounded diagnostics and no program. A lowering or finalization defect is reported as an internal compiler failure and no program.
@@ -98,6 +100,7 @@ A compile failure returns bounded diagnostics and no program. A lowering or fina
 ## C6: compiler-facing commands
 
 - Provide compile, validate, and deterministic dump operations without installing hooks or creating runtime objects.
+- Make the compile operation serialize the finalized program as a `.weavec` intermediate file that the runtime can load without reparsing `.weave` source.
 - Format source diagnostics with path, line, column, source excerpt, and stable diagnostic code.
 - Keep command handling behind a narrow compiler entry point so a later application or TUI integration phase can reuse it.
 
@@ -122,12 +125,13 @@ A compile failure returns bounded diagnostics and no program. A lowering or fina
 - Lowering tests cover every expression opcode, action opcode, rule kind, pause effect, arrow combination, mapping form, range, requirement, control-use bit, debug span table, empty-action invalid ID, task-local repeat-frame index, and yielded backward edge.
 - Semantic lowering tests cover one-time repeat-limit evaluation, `5.8` producing six iterations under the contract model, non-positive repeat limits, per-iteration `while` evaluation, short-circuit expressions, and exact source-order rule buckets.
 - Canonicalization tests prove that duplicate or differently ordered construction pools finalize to the same IDs and deterministic dump.
+- Artifact tests prove deterministic `.weavec` emission, successful save-load equivalence, and rejection of invalid headers, truncation, corrupt fields, and trailing data.
 - Golden tests compile the four Phase 2 fixture sources and match the frozen canonical dumps exactly.
 - Negative end-to-end tests prove that source errors produce diagnostics and no program while internal lowering corruptions are caught by finalization.
 
 ## Open design gates
 
-The compiler may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` can change Weave binding, control identity, the frozen contract, or compiler-facing artifact commands. The shared Weave v1 control catalog is a direct binding dependency. The persistent compiled-program artifact decision affects C6 but does not block C1 through C5. `docs/language/grammar.v2.md` is successor-language design input and must not be backported by this branch without a separately reviewed contract revision.
+The compiler may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` can change compiler-owned behavior. `docs/language/grammar.v2.md` is successor-language design input and must not be backported by this branch without a separately reviewed contract revision.
 
 ## Completion gate
 
@@ -140,4 +144,4 @@ The compiler may implement work that does not depend on an active issue, but it 
 
 ## Handoff artifact
 
-The completed artifact is a compiler API that returns `std::shared_ptr<const CompiledProgram>` plus source diagnostics. A future integration phase may connect that API to the application and runtime; this phase does not perform or wait for that integration.
+The completed artifact is a compiler API that accepts source and destination paths, writes a validated `.weavec` file on success, and returns bounded source diagnostics and artifact metadata. Its public boundary does not return a `CompiledProgram` for direct runtime use. A future integration phase may connect this API to the application; this phase does not invoke or wait for the runtime.

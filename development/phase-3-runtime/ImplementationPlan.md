@@ -2,7 +2,7 @@
 
 ## Objective
 
-This successor phase implements deterministic execution of a validated immutable `CompiledProgram` against fake platform ports and then implements the Windows-facing runtime adapters required by that execution. It owns execution only and is complete when every frozen Phase 2 fixture behaves correctly under deterministic tests and all safety gates pass.
+This successor phase implements bounded loading of a `.weavec` intermediate file and deterministic execution of its validated immutable `CompiledProgram` against fake platform ports, then implements the Windows-facing runtime adapters required by that execution. It owns artifact loading and execution and is complete when every frozen Phase 2 fixture behaves correctly under deterministic tests and all safety gates pass.
 
 ## Plan coverage
 
@@ -14,7 +14,7 @@ The work packages may be refined into implementation checklists inside this dire
 
 - `docs/language/grammar.v1.md` is authoritative for user-visible Weave v1 matching, action, mapping, timing, cancellation, state, target, and input-origin semantics even though runtime tests consume fixtures rather than source text.
 - `development/phase-2/CompiledProgramDesign.md` is authoritative for the immutable representation, instruction effects, structural invariants, resource requirements, activation contract, and Phase 1 output boundary.
-- `src/core/compiled_program.*`, `src/core/program_validator.*`, and `src/core/program_dump.*` are the executable Phase 2 contract consumed by runtime code and fixture tests.
+- `src/program/compiled_program.*`, `src/program/program_validator.*`, and `src/program/program_dump.*` are the executable shared contract consumed by runtime code and fixture tests.
 - `development/OpenDesignIssues.md` records active decisions that must be resolved before affected runtime behavior can pass its completion gate.
 
 A contradiction between the language specification and the compiled-program contract is a phase blocker. The runtime does not reinterpret fields, infer missing semantics from source text, or create semantic side tables that are not derivable from the validated contract and platform capabilities.
@@ -23,7 +23,7 @@ A contradiction between the language specification and the compiled-program cont
 
 This phase starts from the reviewed Phase 2 completion commit and proceeds without synchronization with the compiler successor phase. It does not wait for lexer, parser, binder, or lowering work, consume compiler branch commits, share progress gates, or modify compiler-owned files. Tests obtain programs exclusively from the frozen Phase 2 fixture builders.
 
-The normative Phase 2 design and frozen core implementation are dependencies. A discovered representation gap is recorded as a runtime-phase blocker for a future contract revision; this phase does not reinterpret fields, add runtime-private semantic side tables, or change the contract unilaterally.
+The normative Phase 2 design and frozen shared `program` implementation are dependencies. A discovered representation gap is recorded as a runtime-phase blocker for a future contract revision; this phase does not reinterpret fields, add runtime-private semantic side tables, or change the contract unilaterally.
 
 ## Owned paths
 
@@ -38,7 +38,9 @@ This phase does not modify `src/compiler/`, compiler tests, source syntax, parsi
 ## Input and boundary
 
 ```text
-shared_ptr<const CompiledProgram>
+.weavec bytes
+    -> bounded decode
+    -> shared_ptr<const CompiledProgram>
     -> structural and activation validation
     -> RuntimeState
     -> normalized physical event
@@ -52,15 +54,18 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 ## R1: activation and fixed storage
 
+- Load `.weavec` files without invoking the source compiler, reject malformed or incompatible artifacts, and reconstruct an immutable program before activation.
 - Revalidate the program structurally and verify backend control capabilities, task pool, transaction scratch, queue, expression stack, repeat frames, ownership records, mapping state, value slots, hook steps, and process-launch policy.
 - Allocate and initialize all mutable runtime storage before program publication or hook installation.
-- Initialize user values, built-in `PAUSE`, settings-backed built-in durations, physical state, mapping slots, task pools, ownership pools, timer queues, and diagnostic snapshots.
+- Initialize one reader-writer lock for the complete user-variable pool and one independent reader-writer lock dedicated to `PAUSE`. Every operation that needs both locks acquires the `PAUSE` lock before the variable-pool lock and releases them in reverse order.
+- Initialize user values, built-in `PAUSE`, settings-backed built-in durations, physical state, mapping slots, task pools, ownership pools, timer queues, and bounded diagnostic records.
 - Make activation transactional and retain the previously active program when replacement activation fails.
 - Retain the immutable program through `std::shared_ptr<const CompiledProgram>` and store typed IDs plus local positions in mutable runtime records rather than pointers into program tables.
 
 ## R2: expression VM
 
 - Evaluate typed expression programs using preallocated stacks and resolved IDs only.
+- Keep synchronization outside the expression VM. Ordinary reads hold shared access to the required state locks for the complete expression evaluation; a user-variable `Set` or `Toggle` holds shared access to `PAUSE` and exclusive access to the variable pool across both expression evaluation and the resulting modification.
 - Implement constants, values, physical held state, unary operations, binary operations, forward branches, short-circuit behavior, and typed return.
 - Implement finite-number and duration arithmetic rules, division and modulo faults, stack faults, and source-span diagnostics.
 - Apply fatal predicate-fault and task-expression-fault behavior without partial event consumption or leaked output ownership.
@@ -69,9 +74,11 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 - Convert normalized physical keyboard down into `Down` or `Repeat` after updating stable physical state, and handle mouse button down and up.
 - After physical-state update, force-stop recognition, and applicable target and pointer routing checks, binary-search the dedicated pause-control buckets before consulting the current `PAUSE` value.
-- Evaluate pause-control predicates against the event snapshot in source order; the first match synchronously applies `On`, `Off`, or `Toggle`, returns its consume or observe decision, and creates no ordinary event transaction, mapping, or task.
+- For an event with pause-control candidates, acquire exclusive access to the dedicated `PAUSE` lock and shared access to the variable-pool lock in the fixed global order. Evaluate pause-control predicates while retaining both locks; the first match synchronously applies `On`, `Off`, or `Toggle`, returns its consume or observe decision, and creates no ordinary event transaction, mapping, or task.
 - When no pause-control rule matches, forward immediately while `PAUSE` is off and enter ordinary mapping and rule dispatch only while `PAUSE` is on.
-- Binary-search event buckets, evaluate every rule for one physical event against one stable logical-state snapshot, preserve source order, combine delivery and flow, and collect actions or mappings in fixed transaction scratch.
+- For ordinary dispatch without pause-control candidates, acquire shared access to the dedicated `PAUSE` lock and the variable-pool lock in the fixed global order. When pause-control candidates were evaluated but none matched, retain the already held exclusive `PAUSE` access and shared variable-pool access instead of reacquiring either lock. Retain the resulting lock pair while evaluating every ordinary rule for the physical event, preserve source order, combine delivery and flow, and collect actions or mappings in fixed transaction scratch.
+- Lock acquisition waits normally. Variable-lock contention never forwards the original event, abandons the event decision, or produces a contention diagnostic.
+- Release both state locks after the event decision and any synchronous pause-control modification are complete and before queued tasks begin executing.
 - Process the active mapping lifecycle before ordinary event rules so a source repeat or release cannot be intercepted by a later stop rule, while still allowing ordinary rules to observe the event afterward.
 - Reserve the complete event transaction before committing mapping activation or returning suppression.
 - Forward the triggering event and request controlled shutdown on predicate or internal invariant failure. A transient transaction-capacity rejection forwards the event, commits no task or mapping state, publishes a bounded visible error, and leaves the runtime active.
@@ -80,7 +87,7 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 - Execute action programs by program ID and local position without storing instruction pointers.
 - Give every task independent instruction position, repeat frames, wait state, wake deadline, cancellation generation, and task-owned output records while sharing immutable action code.
-- Implement press, release, timed tap, cancellable wait, action gap, set, toggle, exec, forward branches, one-time repeat-limit initialization, per-iteration while conditions, cooperative back edges, yield, and end.
+- Implement press, release, timed tap, cancellable wait, action gap, set, toggle, exec, forward branches, one-time repeat-limit initialization, per-iteration while conditions, cooperative back edges, yield, and end. Each `Set` evaluates its right-hand expression and writes its target while retaining the variable-pool write lock, and each `Toggle` performs its read-modify-write while retaining that lock.
 - Use one cooperative task thread with ready and timed queues, a fake monotonic clock in tests, and cancellable waits in production; no macro receives a dedicated operating-system thread.
 - Execute adjacent non-waiting instructions in one task slice until the task reaches a gap, wait, tap hold, yielded back edge, end, fault, or cancellation; timed tasks leave the ready queue without blocking the task thread.
 - Run process launch on the task thread through an injected platform launcher port, resolve the executable before launch, use the resolved executable's containing directory as the child working directory, and never launch on the hook path.
@@ -101,8 +108,8 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 - Implement cancellation generations for `PAUSE`, reload, target loss, fatal failure, force stop, and shutdown.
 - On an invalidating transition, advance the monotonic generation before accepting another transaction, reject stale publications, wake the scheduler, discard old-generation ready and timed tasks, clear mappings, and release ownership in deterministic order.
 - Ensure an off-on pause cycle cannot revive a task from the earlier generation. A real pause-control value change performs the invalidating transition synchronously; an idempotent `On` or `Off` still returns its delivery decision without advancing the generation.
-- Publish bounded immutable snapshots containing program identity, source spans, rule decisions, task positions, deadlines, cancellation reasons, evaluation faults, and ownership changes.
-- Keep console, file, process, waiting, allocation, and injection work outside the hook callback.
+- Publish bounded immutable diagnostic records containing program identity, source spans, rule decisions, task positions, deadlines, cancellation reasons, evaluation faults, and ownership changes.
+- Keep console, file, process, allocation, and injection work outside the hook callback. Acquiring the dedicated `PAUSE` lock and the variable-pool lock is the hook callback's only permitted wait.
 
 ## R7: Windows adapters and Phase 1 boundary
 
@@ -117,9 +124,10 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 ## Test matrix
 
 - Activation tests cover every requirement at acceptance and rejection boundaries and prove transactional publication.
+- Artifact-loading tests cover valid `.weavec` files, deterministic reconstruction, invalid headers, truncation, corrupt fields, trailing data, and rejection before hook installation.
 - Expression tests cover every opcode, operator signature, stack depth, branch merge, short circuit, physical read, user value, built-in value, finite-number rule, and duration fault.
-- Dispatcher tests cover all ordinary arrows, pause-control `On`, `Off`, and `Toggle`, pause delivery, first-match source order, recovery while paused, injected-input bypass, idempotent effects, rule overlap, stable snapshots, empty action rules, mapping precedence, atomic reservation, and fail-open failure.
-- Scheduler tests cover every action opcode, fake time, tap phases, gap timing, task ordering, nested repeat frames, cooperative loops, process launching, and faults.
+- Dispatcher tests cover all ordinary arrows, pause-control `On`, `Off`, and `Toggle`, pause delivery, first-match source order, recovery while paused, injected-input bypass, idempotent effects, rule overlap, stable lock-protected reads, blocking writer contention without input pass-through, fixed lock ordering, empty action rules, mapping precedence, atomic reservation, and fail-open capacity failure.
+- Scheduler tests cover every action opcode, lock-protected `Set` expression-and-write, lock-protected `Toggle`, concurrent readers, exclusive writers, fake time, tap phases, gap timing, task ordering, nested repeat frames, cooperative loops, process launching, and faults.
 - Ownership tests cover overlapping tasks and mappings, repeated acquisition, unowned release, cancellation during tap, target loss, partial injection, normal end, and shutdown.
 - Fixture tests execute the tap, mapping, conditional repeat, and pause-control programs from Phase 2 without invoking compiler code.
 - Windows regression tests cover normalization, self-tag loopback, target routing, queue full, partial injection, cleanup, and force stop.
@@ -127,7 +135,7 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 ## Required semantic preservation
 
-- One physical event updates physical state before predicate evaluation, and every rule scanned for that event sees one stable logical-state snapshot unaffected by tasks selected by the same event.
+- One physical event updates physical state before predicate evaluation, and every rule scanned for that event reads `PAUSE` and the variable pool while continuously held read locks prevent modification; tasks selected by the event cannot modify either state until the event decision releases its locks.
 - Physical pause-control dispatch runs before the ordinary pause guard, never accepts injected input, applies only one synchronous effect, and creates no action task or mapping transaction.
 - Event transaction publication is all-or-nothing: selected mappings, tasks, consumption, and output state are committed together or the event is forwarded with no partial state.
 - Empty action rules apply delivery and flow without creating tasks, and active complete mappings retain their latched target through source repeat and release.
@@ -136,12 +144,12 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 - Output ownership, rather than queue contents, determines required release behavior on every task exit and global cleanup path.
 - Self-injected and third-party injected input bypasses physical state and user rules, while the physical force-stop recognizer runs before target, pause, and rule dispatch guards.
 - Target identity and pointer routing are checked before dispatch and immediately before injection, without claiming that system input injection is process-bound.
-- Hook-path work remains bounded and performs no allocation, wait, process creation, console or file access, or input injection.
+- Hook-path work performs no allocation, process creation, console or file access, or input injection. Its only waits acquire the dedicated `PAUSE` lock and the variable-pool lock, whose holders perform only bounded in-memory expression evaluation or state modification.
 - Static capacity insufficiency rejects activation; transient precommit capacity exhaustion forwards the event, publishes no partial state, reports through the bounded visible-error path, and keeps the runtime active.
 
 ## Safety gate
 
-- Hook-path execution performs no allocation, waiting, file access, console access, process creation, or input injection.
+- Hook-path execution performs no allocation, file access, console access, process creation, or input injection. Normal waiting is permitted only when acquiring the dedicated `PAUSE` lock and the variable-pool lock in their fixed global order.
 - No event is consumed before its complete mapping and task transaction has capacity.
 - Any capacity failure is fail-open and uses the bounded visible-error path outside the hook callback.
 - Self-injected and third-party injected events never enter user rules.
@@ -160,8 +168,8 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 
 ## Open design gates
 
-The runtime may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` affects stable event snapshots, the Weave v1 backend control identity or output recipes, or executable resolution. Each resolved decision must be reflected in the language specification when user-visible, in the Phase 2 contract when representational, and in runtime tests before implementation is accepted. `docs/language/grammar.v2.md` does not change this branch's frozen v1 contract.
+The runtime may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` affects executable resolution. Each resolved decision must be reflected in the language specification when user-visible, in the Phase 2 contract when representational, and in runtime tests before implementation is accepted. `docs/language/grammar.v2.md` does not change this branch's frozen v1 contract.
 
 ## Handoff artifact
 
-The completed artifact is a runtime activation and execution API that consumes `std::shared_ptr<const CompiledProgram>` plus platform ports. A future integration phase may connect a completed compiler, application mode, and TUI; this phase does not perform or wait for that integration.
+The completed artifact is a runtime loading, activation, and execution API that consumes a `.weavec` intermediate file plus platform ports. A future integration phase may connect a completed compiler, application mode, and TUI; this phase does not perform or wait for that integration.

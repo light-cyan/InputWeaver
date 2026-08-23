@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/compiled_program.hpp"
+#include "program/compiled_program.hpp"
 
 namespace inputweaver::test {
 

@@ -1,9 +1,9 @@
-#include "core/action_queue.hpp"
-#include "core/fixed_rules.hpp"
-#include "core/producer_done_drain.hpp"
-#include "app/action_scheduler.hpp"
-#include "app/remap_engine.hpp"
-#include "app/runtime.hpp"
+#include "runtime/action_queue.hpp"
+#include "runtime/fixed_rules.hpp"
+#include "support/producer_done_drain.hpp"
+#include "platform/windows/action_scheduler.hpp"
+#include "platform/windows/remap_engine.hpp"
+#include "platform/windows/runtime_session.hpp"
 #include "diagnostics/diagnostic_log.hpp"
 #include "platform/windows/input_classifier.hpp"
 #include "platform/windows/input_injector.hpp"
@@ -24,14 +24,14 @@ namespace inputweaver {
 
 struct RuntimeTestAccess final {
     static void SetSendInput(
-        AppRuntime& runtime,
+        WindowsRuntimeSession& runtime,
         SendInputFunction sendInput) noexcept {
         runtime.actionScheduler_->injector_ =
             InputInjector(runtime.options_.selfTag, sendInput);
     }
 
     static void ExecuteEligible(
-        AppRuntime& runtime,
+        WindowsRuntimeSession& runtime,
         const ActionBatch& batch) noexcept {
         InjectionDiagnosticRecord record{};
         record.sourceSequence = batch.sourceSequence;
@@ -39,45 +39,45 @@ struct RuntimeTestAccess final {
         runtime.actionScheduler_->ExecuteEligibleActionBatch(batch, record);
     }
 
-    static void Process(AppRuntime& runtime, const ActionBatch& batch) noexcept {
+    static void Process(WindowsRuntimeSession& runtime, const ActionBatch& batch) noexcept {
         runtime.actionScheduler_->ProcessActionBatch(batch);
     }
 
-    static bool Enqueue(AppRuntime& runtime, const ActionBatch& batch) noexcept {
+    static bool Enqueue(WindowsRuntimeSession& runtime, const ActionBatch& batch) noexcept {
         return runtime.actionScheduler_->actionQueue_.TryPush(batch);
     }
 
     static ActionQueuePushResult Schedule(
-        AppRuntime& runtime,
+        WindowsRuntimeSession& runtime,
         const ActionBatch& batch) noexcept {
         return runtime.actionScheduler_->TrySchedule(
             batch,
             {nullptr, &RuntimeTestAccess::CommitCapture});
     }
 
-    static bool NewCapturesEnabled(const AppRuntime& runtime) noexcept {
+    static bool NewCapturesEnabled(const WindowsRuntimeSession& runtime) noexcept {
         return runtime.remapEngine_->NewCapturesEnabled();
     }
 
-    static bool QueueEmpty(const AppRuntime& runtime) noexcept {
+    static bool QueueEmpty(const WindowsRuntimeSession& runtime) noexcept {
         return runtime.actionScheduler_->actionQueue_.Empty();
     }
 
-    static bool ShutdownRequested(const AppRuntime& runtime) noexcept {
+    static bool ShutdownRequested(const WindowsRuntimeSession& runtime) noexcept {
         return runtime.shutdownRequested_.load(std::memory_order_acquire);
     }
 
     static bool CreateEvents(
-        AppRuntime& runtime,
+        WindowsRuntimeSession& runtime,
         std::wstring& errorMessage) {
         return runtime.CreateComponents(errorMessage);
     }
 
-    static void SignalProducerDone(AppRuntime& runtime) noexcept {
+    static void SignalProducerDone(WindowsRuntimeSession& runtime) noexcept {
         runtime.actionScheduler_->NotifyProducerDone();
     }
 
-    static void DrainForShutdown(AppRuntime& runtime) noexcept {
+    static void DrainForShutdown(WindowsRuntimeSession& runtime) noexcept {
         runtime.actionScheduler_->DrainForShutdown();
     }
 
@@ -597,9 +597,9 @@ void TestQueueSpscConcurrency()
 void TestRuntimeQueueFullErrorSignal()
 {
     inputweaver::DiagnosticLog diagnosticLog;
-    inputweaver::AppRuntimeOptions options{};
+    inputweaver::WindowsRuntimeSessionOptions options{};
     options.selfTag = static_cast<inputweaver::SelfTag>(0x51554555U);
-    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::WindowsRuntimeSession runtime(options, nullptr, diagnosticLog);
     std::wstring componentError;
     const bool componentsCreated =
         inputweaver::RuntimeTestAccess::CreateEvents(runtime, componentError);
@@ -883,13 +883,13 @@ void TestInjectionCircuitBreaker()
     Check(breaker.IsOpen(), "success does not silently rearm an opened circuit");
 }
 
-void TestAppRuntimeFailureCircuit()
+void TestWindowsRuntimeSessionFailureCircuit()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5232U);
     inputweaver::DiagnosticLog diagnosticLog;
-    inputweaver::AppRuntimeOptions options{};
+    inputweaver::WindowsRuntimeSessionOptions options{};
     options.selfTag = selfTag;
-    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::WindowsRuntimeSession runtime(options, nullptr, diagnosticLog);
     std::wstring componentError;
     const bool componentsCreated =
         inputweaver::RuntimeTestAccess::CreateEvents(runtime, componentError);
@@ -919,7 +919,7 @@ void TestAppRuntimeFailureCircuit()
         "runtime failure test queues work behind the third injection");
     inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, third);
 
-    const inputweaver::AppRuntimeMetrics opened = runtime.Metrics();
+    const inputweaver::WindowsRuntimeSessionMetrics opened = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 3 && opened.injectionFailures == 3,
         "three failed runtime injections are counted once each");
@@ -936,20 +936,20 @@ void TestAppRuntimeFailureCircuit()
     const inputweaver::ActionBatch rejected = inputweaver::MakeTapActionBatch(
         85, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
     inputweaver::RuntimeTestAccess::Process(runtime, rejected);
-    const inputweaver::AppRuntimeMetrics afterRejectedBatch = runtime.Metrics();
+    const inputweaver::WindowsRuntimeSessionMetrics afterRejectedBatch = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == callsBeforeRejectedBatch
             && afterRejectedBatch.cancelledBatches == 3,
         "an open runtime circuit rejects later work before SendInput");
 }
 
-void TestAppRuntimePersistentCleanupFailure()
+void TestWindowsRuntimeSessionPersistentCleanupFailure()
 {
     constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x554B5233U);
     inputweaver::DiagnosticLog diagnosticLog;
-    inputweaver::AppRuntimeOptions options{};
+    inputweaver::WindowsRuntimeSessionOptions options{};
     options.selfTag = selfTag;
-    inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
+    inputweaver::WindowsRuntimeSession runtime(options, nullptr, diagnosticLog);
 
     std::wstring eventError;
     const bool eventsCreated =
@@ -965,7 +965,7 @@ void TestAppRuntimePersistentCleanupFailure()
         90, 0, 0, inputweaver::DeviceKind::Keyboard, VK_F7);
     inputweaver::RuntimeTestAccess::ExecuteEligible(runtime, batch);
 
-    const inputweaver::AppRuntimeMetrics beforeShutdownDrain = runtime.Metrics();
+    const inputweaver::WindowsRuntimeSessionMetrics beforeShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 6
             && beforeShutdownDrain.injectionFailures == 5,
@@ -992,7 +992,7 @@ void TestAppRuntimePersistentCleanupFailure()
 
     inputweaver::RuntimeTestAccess::SignalProducerDone(runtime);
     inputweaver::RuntimeTestAccess::DrainForShutdown(runtime);
-    const inputweaver::AppRuntimeMetrics afterShutdownDrain = runtime.Metrics();
+    const inputweaver::WindowsRuntimeSessionMetrics afterShutdownDrain = runtime.Metrics();
     Check(
         g_fakeSendState.callCount == 9
             && afterShutdownDrain.injectionFailures == 8,
@@ -1313,7 +1313,7 @@ void TestShutdownGraceWithFakeClock()
     Check(grace.RemainingSlice(2100, 50) == 0, "expired shutdown grace has no remaining wait");
 }
 
-void TestAppRuntimeLifecycle()
+void TestWindowsRuntimeSessionLifecycle()
 {
     inputweaver::DiagnosticLog diagnosticLog;
     std::wstring errorMessage;
@@ -1325,9 +1325,9 @@ void TestAppRuntimeLifecycle()
 
     {
         constexpr ULONG_PTR selfTag = static_cast<ULONG_PTR>(0x49575631U);
-        inputweaver::AppRuntimeOptions options{};
+        inputweaver::WindowsRuntimeSessionOptions options{};
         options.selfTag = selfTag;
-        inputweaver::AppRuntime runtime(options, nullptr, diagnosticLog);
+        inputweaver::WindowsRuntimeSession runtime(options, nullptr, diagnosticLog);
         const bool runtimeStarted = runtime.Start(errorMessage);
         Check(runtimeStarted, "observer runtime installs both low-level hooks");
         if (runtimeStarted) {
@@ -1336,7 +1336,7 @@ void TestAppRuntimeLifecycle()
             Check(
                 WaitForSingleObject(runtime.StoppedEvent(), 0) == WAIT_OBJECT_0,
                 "observer runtime signals hook-thread termination");
-            const inputweaver::AppRuntimeMetrics metrics = runtime.Metrics();
+            const inputweaver::WindowsRuntimeSessionMetrics metrics = runtime.Metrics();
             Check(
                 metrics.suppressedEvents == 0 && metrics.queuedBatches == 0 &&
                     metrics.unresolvedSyntheticReleases == 0,
@@ -1362,14 +1362,14 @@ int main()
     TestEmergencyStopAndCapturedRelease();
     TestInjectorPreparationAndFailureHandling();
     TestInjectionCircuitBreaker();
-    TestAppRuntimeFailureCircuit();
-    TestAppRuntimePersistentCleanupFailure();
+    TestWindowsRuntimeSessionFailureCircuit();
+    TestWindowsRuntimeSessionPersistentCleanupFailure();
     TestDiagnosticPrivacyAndBounds();
     TestProcessLocator();
     TestProcessContextValidation();
     TestTargetProcessLifecycle();
     TestShutdownGraceWithFakeClock();
-    TestAppRuntimeLifecycle();
+    TestWindowsRuntimeSessionLifecycle();
 
     if (g_failureCount != 0) {
         std::cerr << g_failureCount << " Phase 1 automated test(s) failed.\n";

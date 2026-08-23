@@ -14,11 +14,11 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [2/4] Building InputWeaver.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
-    "src\main.cpp" ^
-    "src\app\runtime.cpp" ^
-    "src\app\remap_engine.cpp" ^
-    "src\app\action_scheduler.cpp" ^
-    "src\core\fixed_rules.cpp" ^
+    "src\platform\windows\main.cpp" ^
+    "src\platform\windows\runtime_session.cpp" ^
+    "src\platform\windows\remap_engine.cpp" ^
+    "src\platform\windows\action_scheduler.cpp" ^
+    "src\runtime\fixed_rules.cpp" ^
     "src\platform\windows\low_level_hooks.cpp" ^
     "src\platform\windows\input_injector.cpp" ^
     "src\platform\windows\process_context.cpp" ^
@@ -31,11 +31,11 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [3/4] Building InputWeaverTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
-    "tests\runtime_tests.cpp" ^
-    "src\app\runtime.cpp" ^
-    "src\app\remap_engine.cpp" ^
-    "src\app\action_scheduler.cpp" ^
-    "src\core\fixed_rules.cpp" ^
+    "tests\runtime\runtime_tests.cpp" ^
+    "src\platform\windows\runtime_session.cpp" ^
+    "src\platform\windows\remap_engine.cpp" ^
+    "src\platform\windows\action_scheduler.cpp" ^
+    "src\runtime\fixed_rules.cpp" ^
     "src\platform\windows\low_level_hooks.cpp" ^
     "src\platform\windows\input_injector.cpp" ^
     "src\platform\windows\process_context.cpp" ^
@@ -47,11 +47,12 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [4/4] Building CompiledProgramTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
-    "tests\compiled_program_tests.cpp" ^
-    "tests\compiled_program_fixtures.cpp" ^
-    "src\core\compiled_program.cpp" ^
-    "src\core\program_dump.cpp" ^
-    "src\core\program_validator.cpp" ^
+    "tests\program\compiled_program_tests.cpp" ^
+    "tests\program\compiled_program_fixtures.cpp" ^
+    "src\program\compiled_program.cpp" ^
+    "src\program\program_dump.cpp" ^
+    "src\program\program_validator.cpp" ^
+    "src\program\weavec_codec.cpp" ^
     -o "bin\CompiledProgramTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 

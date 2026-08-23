@@ -2,9 +2,9 @@
 
 ## Status and authority
 
-This document is the normative definition of the in-memory `CompiledProgram` consumed by the InputWeaver rule runtime. `docs/language/grammar.v1.md` is authoritative for Weave v1 source syntax and user-visible semantics. The compiler and runtime successor plans own their complete implementation and verification scope, and `development/OpenDesignIssues.md` records active decisions that are not yet fixed.
+This document is the normative compiler/runtime contract for both the immutable in-memory `CompiledProgram` and its persistent `.weavec` representation. `docs/language/grammar.v1.md` is authoritative for the existing Weave execution semantics, while `docs/language/grammar.v2.md` extends source-level control references that lower into the control identity defined here. The compiler and runtime successor plans own implementation and verification, and `development/OpenDesignIssues.md` records decisions that remain open.
 
-The contract is an internal C++20 data model, not a serialized bytecode format or a stable external ABI. Compiler and runtime changes may revise the C++ layout during Phase 2 only through the contract-change process in `development/phase-2/ImplementationPlan.md`; the semantic invariants in this document must remain true.
+The C++20 object layout is an internal implementation detail and is not an ABI. The `.weavec` field encoding, numeric assignments, table meanings, validation rules, and execution semantics defined here are the shared standard. Compiler and runtime code may change the internal C++ layout only while preserving this contract.
 
 ## Role in the pipeline
 
@@ -13,7 +13,18 @@ The contract is an internal C++20 data model, not a serialized bytecode format o
     -> TokenStream
     -> SyntaxTree
     -> BoundProgram
+    -> CompiledProgramStorage
+    -> FinalizeCompiledProgram
     -> CompiledProgram
+    -> EncodeWeavec
+    -> .weavec file
+
+.weavec file
+    -> DecodeWeavec
+    -> CompiledProgramStorage
+    -> FinalizeCompiledProgram
+    -> CompiledProgram
+    -> backend activation binding
     -> RuleRuntime
 ```
 
@@ -21,16 +32,34 @@ The contract is an internal C++20 data model, not a serialized bytecode format o
 
 The parser does not emit `CompiledProgram` directly. This boundary allows syntax diagnostics, semantic diagnostics, and executable lowering to evolve independently while preserving a single runtime contract.
 
+## Compiler/runtime ownership boundary
+
+| Concern | Compiler | Shared `CompiledProgram` / `.weavec` | Runtime core | Platform adapter |
+|---|---|---|---|---|
+| Source text | Decode, parse, bind, type-check, and diagnose | Retain only required strings, source identity, line starts, and spans | Never parse source | None |
+| Controls | Resolve source names and raw constructors to stable `ControlRef` values and derive required uses | Store canonical identities and `ControlRequirement` bits | Build dense activated-control records and execute by `ControlRefId` | Bind identities to native input matches, state queries, capabilities, and output recipes |
+| Expressions, actions, rules, and mappings | Lower and canonicalize | Store immutable typed instructions, descriptors, indexes, and operands | Execute without name binding or type inference | Perform only requested platform operations |
+| Variables | Emit types, initial values, and resolved `ValueRef` operands | Store immutable layout and initial values | Own mutable values, the variable-pool lock, and the dedicated `PAUSE` lock | None |
+| Capacity | Derive conservative maxima from final tables | Store recomputable `ProgramRequirements` | Reject activation when fixed storage cannot satisfy them | Report backend-specific capacity or capability limits |
+| Targets and `Exec` | Validate source strings and preserve authored text | Store selectors, commands, requirements, and spans without resolved processes or paths | Schedule target checks and process-launch requests | Resolve platform paths, processes, command semantics, and native API parameters |
+| Persistence | Encode one validated program deterministically | Define the canonical `.weavec` bytes | Decode with bounds, finalize, validate, and activate transactionally | Never reinterpret file fields |
+
+The shared contract is neither a platform-native program nor unresolved source delegated to the runtime. The compiler performs all language binding, while platform-dependent capability and native-recipe selection occurs once during runtime activation. No compiler branch or runtime branch may introduce a private opcode, numeric identity, operand meaning, table, or serialization field.
+
+The control identity definitions, `CompiledProgram` records, structural validator, and `.weavec` codec API form the shared `program` module and must be frozen before the compiler and runtime branches diverge. The compiler owns calls that encode finalized programs; the runtime owns calls that decode artifacts and create activated state. Neither successor branch may copy these definitions into an owned directory or revise the shared module independently.
+
 ## Global invariants
 
 - A successful compile produces one structurally valid `CompiledProgram`; a failed compile produces diagnostics and no program.
+- Encoding and then decoding a valid program produces the same deterministic program dump and execution semantics.
 - A runtime activates only a structurally validated program whose capability and capacity requirements are satisfied.
 - The program owns every table, string, constant, descriptor, instruction, source span, and index used during execution.
 - The program contains no pointers or references to source buffers, syntax nodes, compiler symbol objects, Win32 handles, process IDs, runtime tasks, mutable variables, active mappings, or output ownership records.
 - The program is immutable after finalization and may be shared by the hook, task, application, and diagnostic threads through a `std::shared_ptr<const CompiledProgram>`.
 - Every cross-table reference is a strong typed ID or a checked table range. Runtime string lookup is not used for controls, variables, rules, mappings, expressions, or action programs.
 - Every instruction operand is fully resolved before activation. Runtime execution never performs name binding, type inference, source parsing, or backend control-name lookup.
-- Hook-path access performs only bounded table lookup, bounded expression evaluation, bounded rule scanning, and fixed-capacity reservation. It performs no allocation, file access, console access, process creation, waiting, or input injection.
+- `CompiledProgram` contains no unqualified native key number, native hook record, native output recipe, operating-system handle, or resolved executable path.
+- Access to `CompiledProgram` itself never allocates, blocks, or mutates state. Runtime synchronization for mutable variables and `PAUSE` is outside the immutable program contract.
 - Mutable execution data is stored in `RuntimeState`, `TaskInstance`, `MappingRuntime`, and `OutputOwnership`, never in `CompiledProgram`.
 - A program that violates an internal invariant is rejected before hooks are installed.
 
@@ -83,8 +112,10 @@ Valid compiled durations are in `[0, INT64_MAX]` nanoseconds. The compiler parse
 
 ```cpp
 struct ControlRef final {
-    DeviceKind device{};
-    ControlCode code{};
+    std::uint32_t namespaceId{};
+    std::uint32_t familyId{};
+    std::uint32_t code{};
+    std::uint32_t qualifier{};
 };
 
 enum class EventTransition : std::uint8_t {
@@ -94,14 +125,40 @@ enum class EventTransition : std::uint8_t {
 };
 
 struct EventKey final {
-    ControlRef control{};
+    ControlRefId control{};
     EventTransition transition{};
 };
 ```
 
 `EventTransition` is separate from the Phase 1 normalized `Transition` because Weave distinguishes first down from keyboard repeat and excludes movement and wheel transitions in v1. The input normalizer and physical-state tracker classify an incoming physical keyboard down as `Down` or `Repeat` before rule lookup.
 
-`ControlRef` ordering compares `device` and then `code`. `EventKey` ordering compares `ControlRef` and then `EventTransition`. These orderings are used by sorted program indexes and deterministic dumps.
+The complete four-field tuple is the control identity. Equality never compares `code` alone. Ordering is lexicographic by `namespaceId`, `familyId`, `code`, and `qualifier`. The finalized control pool is sorted and unique by this order; all other program tables use its dense `ControlRefId`. `EventKey` ordering compares `ControlRefId` and then `EventTransition`.
+
+`namespaceId = 0` is invalid. Published namespace and family assignments are permanent and may not be reinterpreted or reused.
+
+| `namespaceId` | Meaning | `familyId` | `code` | `qualifier` |
+|---|---|---|---|---|
+| `1` | USB HID | Usage Page | Usage ID | `0` |
+| `2` | Weave-defined portable controls | Published control family | Published family-local code | `0` |
+| `256` | Windows | `1` = Virtual-Key, `2` = Scan Code | Native code | Scan Code uses `0` = none, `1` = E0, `2` = E1; other families use `0` |
+| `257` | Linux | `1` = `EV_KEY` | Native event code | `0` |
+| `258` | macOS | `1` = native key code | Native key code | `0` |
+
+Source raw constructors lower deterministically: `HID.Usage(page, usage)` becomes `{1, page, usage, 0}`; `Windows.VirtualKey(code)` becomes `{256, 1, code, 0}`; `Windows.ScanCode(code)`, `Windows.ScanCode(code, E0)`, and `Windows.ScanCode(code, E1)` use namespace `256`, family `2`, and qualifiers `0`, `1`, and `2`; `Linux.Key(code)` becomes `{257, 1, code, 0}`; and `MacOS.KeyCode(code)` becomes `{258, 1, code, 0}`.
+
+The compiler control catalog contains source name, canonical name, and `ControlRef`. Aliases always lower to the same identity and never create duplicate control-pool entries. The catalog contains no platform capability or output recipe. Those properties belong exclusively to backend activation tables.
+
+Portable keyboard names use HID Keyboard/Keypad Usage Page `0x07`: `A` through `Z` use Usage IDs `0x04` through `0x1D`; `Digit1` through `Digit9` use `0x1E` through `0x26`, and `Digit0` uses `0x27`; `Enter`, `Esc`, `Backspace`, `Tab`, and `Space` use `0x28` through `0x2C`; `CapsLock` uses `0x39`; `F1` through `F12` use `0x3A` through `0x45`; `ScrollLock` and `Pause` use `0x47` and `0x48`; `Insert`, `Home`, `PageUp`, `Delete`, `End`, `PageDown`, `ArrowRight`, `ArrowLeft`, `ArrowDown`, and `ArrowUp` use `0x49` through `0x52`; `NumLock`, `NumpadDivide`, `NumpadMultiply`, `NumpadSubtract`, `NumpadAdd`, `Numpad1` through `Numpad9`, `Numpad0`, and `NumpadDecimal` use `0x53` through `0x57`, `0x59` through `0x61`, `0x62`, and `0x63`; `F13` through `F24` use `0x68` through `0x73`; and `LCtrl`, `LShift`, `LAlt`, `RCtrl`, `RShift`, and `RAlt` use `0xE0`, `0xE1`, `0xE2`, `0xE4`, `0xE5`, and `0xE6`. A v1 short name and its `Keyboard.` form lower to the same identity.
+
+Portable mouse buttons use HID Button Usage Page `0x09`: `Mouse.Left`, `Mouse.Right`, `Mouse.Middle`, `Mouse.X1`, and `Mouse.X2` use Usage IDs `1` through `5`. Portable consumer controls use HID Consumer Usage Page `0x0C`: `Consumer.PlayPause`, `Consumer.ScanNextTrack`, `Consumer.ScanPreviousTrack`, `Consumer.Stop`, `Consumer.Mute`, `Consumer.VolumeUp`, and `Consumer.VolumeDown` use Usage IDs `0x00CD`, `0x00B5`, `0x00B6`, `0x00B7`, `0x00E2`, `0x00E9`, and `0x00EA`.
+
+Platform-qualified readable names are ordinary catalog entries whose identities use the corresponding platform namespace. Aliases lower to an existing identity. Every namespace and family used by the catalog requires a published numeric assignment and conformance tests.
+
+The initial platform-qualified entries used by the v2 language examples are fixed as follows: `Windows.Keyboard.IMEOn` is `{256, 1, 0x16, 0}` for `VK_IME_ON`; `Linux.Keyboard.Compose` is `{257, 1, 127, 0}` for `KEY_COMPOSE`; and `MacOS.Keyboard.Fn` is `{258, 1, 0x3F, 0}` for `kVK_Function`.
+
+Namespace `1` follows the numeric Usage Page and Usage ID assignments published in the USB-IF [HID Usage Tables](https://www.usb.org/hid). Windows Virtual-Key identities follow Microsoft's [Virtual-Key Codes](https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes), Linux `EV_KEY` identities follow the Linux kernel [input event code](https://docs.kernel.org/input/event-codes.html) definitions, and macOS native key identities use Apple's [CGKeyCode](https://developer.apple.com/documentation/coregraphics/cgkeycode) numeric domain. External numbers enter only their assigned namespace and family; they never become unqualified portable codes.
+
+During activation, the selected backend resolves every required `ControlRef` into one runtime-local activated-control record. That record owns the native input match, physical-state query mechanism, output-down/up recipe, repeat behavior, routing classification, and capability bits. It is mutable environment state, is indexed by `ControlRefId`, and is never serialized. An unsupported identity or missing required capability rejects activation before hooks are installed.
 
 ## Source identity, strings, and settings
 
@@ -110,6 +167,8 @@ struct EventKey final {
 The program owns a `std::vector<std::string>` UTF-8 string pool. Target selectors, the source path, `exec` command lines, and diagnostic symbol names use `StringId`. Platform adapters convert strings to their native process API representation.
 
 The compiler rejects an embedded NUL in a target selector, path, or `exec` command because supported native process and path APIs use terminated strings.
+
+An `Exec` instruction retains exactly one authored command string. `CompiledProgram` does not store a compiler-parsed executable token, resolved executable path, child working directory, or native argument vector. These values depend on the execution environment and belong to the platform launcher. The exact Windows resolution policy remains governed by open issue `ODI-004`.
 
 ### Program source
 
@@ -129,8 +188,7 @@ Weave v1 compiles one source file. Source identity supports diagnostics only and
 enum class TargetSelectorKind : std::uint8_t {
     Unspecified,
     Global,
-    ExecutableName,
-    AbsolutePath,
+    Executable,
 };
 
 struct TargetSelector final {
@@ -140,7 +198,7 @@ struct TargetSelector final {
 };
 ```
 
-`text` is invalid for `Unspecified` and `Global` and valid for the two string forms. A command-line target override is an application activation option and does not mutate this record.
+`text` is invalid for `Unspecified` and `Global` and valid for `Executable`. It preserves the authored selector without classifying it under the compiler host's path rules. The selected platform adapter determines whether it is a supported executable name or path during activation. A command-line target override is an application activation option and does not mutate this record.
 
 ### Program settings
 
@@ -166,6 +224,7 @@ enum class ValueType : std::uint8_t {
 };
 
 enum class ExpressionType : std::uint8_t {
+    None,
     Boolean,
     State,
     Number,
@@ -459,12 +518,12 @@ The conservative maximum number of non-empty event-rule actions in any bucket be
 
 ```cpp
 struct MappingSlotDescriptor final {
-    ControlRef source{};
+    ControlRefId source{};
 };
 
 struct MappingDescriptor final {
     MappingSlotId slot{};
-    ControlRef target{};
+    ControlRefId target{};
     SourceSpan source{};
 };
 ```
@@ -495,7 +554,7 @@ struct ControlRequirement final {
 };
 ```
 
-The compiler merges all uses of each resolved control. Event triggers require `EventSource`, `[held]` and `[idle]` require `PhysicalState`, input actions and mapping targets require `OutputDownUp`, and complete mappings require target `OutputRepeat` when the backend represents repeat explicitly. Activation compares this table with the selected backend capability catalog before hooks are installed.
+The compiler merges all uses of each resolved control. Event triggers require `EventSource`, `[held]` and `[idle]` require `PhysicalState`, input actions and mapping targets require `OutputDownUp`, and every complete mapping target requires the semantic `OutputRepeat` capability. The compiler does not inspect a backend to derive these bits. A backend may satisfy `OutputRepeat` with an explicit native repeat event, held-key behavior, or another tested recipe, but activation rejects a backend that cannot reproduce the required semantics.
 
 ### Program requirements
 
@@ -507,7 +566,10 @@ struct ProgramRequirements final {
     std::uint32_t mappingSlotCount{};
     std::uint32_t maximumPauseRulesPerEvent{};
     std::uint32_t maximumRulesPerEvent{};
+    std::uint32_t maximumPredicateStepsPerEvent{};
     std::uint32_t maximumTasksPerEvent{};
+    std::uint32_t maximumMappingOperationsPerEvent{};
+    std::uint32_t maximumTransactionItemsPerEvent{};
     std::uint32_t maximumExpressionStackDepth{};
     std::uint32_t maximumRepeatFramesPerTask{};
     std::uint32_t maximumOwnedControlsPerTask{};
@@ -531,15 +593,12 @@ struct ProgramDebugInfo final {
 
 Rule, mapping, expression, and action descriptors retain their enclosing source spans. Parallel instruction-span tables have exactly the same length as their instruction tables. Debug names do not participate in runtime lookup or semantics.
 
-A deterministic `DumpCompiledProgram` utility prints settings, value slots, controls, requirements, event buckets, rules, mappings, expressions, actions, and source spans using stable IDs. Compiler golden tests and runtime fixture tests use this dump as the contract comparison format; it is a diagnostic format rather than a serialized executable format.
+A deterministic `DumpCompiledProgram` utility prints settings, value slots, controls, requirements, event buckets, rules, mappings, expressions, actions, and source spans using stable IDs. Compiler golden tests and runtime fixture tests use this human-readable diagnostic format to compare semantics. It is distinct from the binary `.weavec` encoding.
 
 ## Top-level definition
 
 ```cpp
-inline constexpr std::uint32_t kCompiledProgramSchemaVersion = 1U;
-
 struct CompiledProgramStorage final {
-    std::uint32_t schemaVersion{kCompiledProgramSchemaVersion};
     ProgramSource source{};
     ProgramSettings settings{};
     ProgramRequirements requirements{};
@@ -570,9 +629,63 @@ struct CompiledProgramStorage final {
 };
 ```
 
-The implementation exposes this storage through a `CompiledProgram` class with const accessors returning values or `std::span<const T>`. Only `CompiledProgramBuilder` and `FinalizeCompiledProgram` may mutate storage. The runtime never receives mutable storage.
+The implementation exposes this storage through a `CompiledProgram` class with const accessors returning values or `std::span<const T>`. Only `CompiledProgramBuilder`, the `.weavec` decoder, and `FinalizeCompiledProgram` may construct mutable storage. The executing runtime receives only the finalized immutable program.
 
-`schemaVersion` protects in-process contract assumptions and deterministic dumps. Phase 2 does not load a program produced by another executable or persist this representation to disk.
+## Persistent `.weavec` artifact
+
+### File identity and header
+
+`.weavec` is the canonical persistent representation of one finalized `CompiledProgram`. It is a field-by-field binary encoding, never a dump of C++ object memory, `sizeof` bytes, pointers, vector internals, padding, or implementation-specific enum layout.
+
+The file begins with this 16-byte header:
+
+| Offset | Size | Field |
+|---|---|---|
+| `0` | `8` | Magic bytes `57 45 41 56 45 43 00 00`, representing `WEAVEC` followed by two zero bytes |
+| `8` | `8` | Payload byte length, unsigned little-endian |
+
+The payload begins immediately after the header and must occupy exactly the declared length. Truncation and trailing bytes are errors. The field definitions and payload order in this document define the encoding.
+
+The header contains no compiler-host or target-platform tag. Portability is determined by the identities and requirements inside the program: a program containing only identities supported by the selected backend can activate, while an explicit platform namespace, target selector, or command that the backend cannot support fails activation with a specific diagnostic.
+
+### Scalar and record encoding
+
+- Unsigned and signed integers use their documented fixed width and little-endian byte order.
+- Strong IDs, table counts, `TableRange` members, `SourceSpan` members, and instruction operands are 32-bit unsigned integers.
+- `ControlRef` is four consecutive 32-bit unsigned integers in `namespaceId`, `familyId`, `code`, and `qualifier` order.
+- `DurationValue` is one signed 64-bit integer.
+- A `number` is the exact IEEE 754 binary64 bit pattern written as one little-endian 64-bit word; decoding rejects non-finite values wherever the program contract requires finiteness.
+- Enumerations are encoded using the fixed underlying width declared by their normative definition. Boolean fields use one byte and accept only `0` or `1`.
+- A string is a 32-bit byte count followed by exactly that many UTF-8 bytes without a terminator.
+- A vector is a 32-bit element count followed by its elements. Nested vectors, including initial-value and debug arrays, repeat the same rule.
+- A record writes its documented logical fields in declaration order with no alignment or padding bytes.
+
+Numeric enum and opcode values are their zero-based declaration order unless an explicit value is shown. Their declaration order and operand meanings are part of the persistent encoding. Names that lower to existing `ControlRef` identities use the same encoded identity.
+
+### Payload order
+
+The payload encodes `CompiledProgramStorage` in this fixed order:
+
+1. `ProgramSource`, `ProgramSettings`, and `ProgramRequirements`.
+2. `strings`, then `lineStarts`.
+3. `controls`, `controlRequirements`, and `valueRefs`.
+4. `UserValueLayout.initialStates`, `initialNumbers`, and `initialDurations`.
+5. `numberConstants`, `durationConstants`, `expressions`, and `expressionCode`.
+6. `actionPrograms` and `actionCode`.
+7. `mappingSlots` and `mappings`.
+8. `pauseControlBuckets` and `pauseControlRules`.
+9. `eventBuckets` and `rules`.
+10. `ProgramDebugInfo.variables`, `expressionInstructionSpans`, and `actionInstructionSpans`.
+
+Every nested record uses the field order in its normative definition in this document. Optional strong IDs remain encoded as their 32-bit invalid value. There are no native paths, handles, pointer values, backend bindings, task records, active mappings, variable mutations, lock state, timers, queue contents, or output-ownership records in the artifact.
+
+### Determinism, loading, and replacement
+
+The compiler finalizes and canonicalizes the program before encoding. Identical finalized programs produce identical `.weavec` bytes. The compiler writes the encoded bytes to a sibling temporary file, closes it successfully, and atomically replaces the destination.
+
+The runtime reads and validates the header and declared payload bound before allocating table storage. Every count, byte length, multiplication, addition, and cursor advance uses checked arithmetic and configured hard limits. Decoding rejects an invalid header, oversized artifact, invalid UTF-8, invalid scalar representation, truncated field, trailing field, or impossible allocation before publication.
+
+Successful decoding produces `CompiledProgramStorage` and passes it through the same `FinalizeCompiledProgram` path used by the compiler and fixtures. Structural validation recomputes requirements and canonical invariants rather than trusting serialized claims. Backend activation begins only after decoding and structural validation succeed. A load failure preserves the previously active program.
 
 ## Construction and finalization
 
@@ -590,19 +703,23 @@ struct FinalizeResult final {
 FinalizeResult FinalizeCompiledProgram(CompiledProgramStorage storage);
 ```
 
-The compiler lowers a fully valid `BoundProgram` into mutable storage, sorts and flattens indexes, derives requirements, and calls the shared finalizer. Test fixtures use the same finalizer. Finalization validates before constructing the immutable handle and never returns a partial handle.
+The compiler lowers a fully valid `BoundProgram` into mutable storage, canonicalizes the control pool and every dependent `ControlRefId`, sorts and flattens indexes, derives requirements, and calls the shared finalizer. Test fixtures and the `.weavec` decoder use the same finalizer. Finalization validates before constructing the immutable handle and never returns a partial handle.
 
-Compiler diagnostics describe source errors. Program validation errors describe compiler, fixture, or internal data defects and are not user-language diagnostics.
+The field codec belongs to the shared `program` module used by both successor branches. The compiler calls the encoder only with a finalized `CompiledProgram`; the runtime calls the decoder and finalizer before creating any runtime state. Neither branch maintains a duplicate wire struct, opcode table, namespace assignment, or record-size calculation.
+
+Compiler diagnostics describe source errors. An invalid compiler-built program is an internal compiler defect. Invalid bytes or a structurally invalid decoded program produce a bounded artifact-load diagnostic and are never activated.
 
 ## Structural validation
 
 `ValidateCompiledProgram` performs all of the following checks without consulting a platform backend:
 
-- The schema version is supported and every table length is below `kInvalidProgramIndex`.
+- Every table length is below `kInvalidProgramIndex`.
 - Every ID is valid for its table or is invalid only in an explicitly optional field.
 - Every range uses checked arithmetic, lies inside its owning table, and obeys the required disjointness and coverage rules.
 - All strings are valid UTF-8, API-bound strings contain no embedded NUL, source offsets are within `byteLength`, and line starts are strictly increasing.
 - Settings and all initial or constant values satisfy finite-number and duration invariants.
+- The control pool is strictly sorted and unique; every `ControlRef` has a published nonzero namespace, a defined family, a valid qualifier for that family, and no reserved field value.
+- Every `ControlRefId` in event keys, expression and action operands, mappings, and requirements addresses the canonical control pool.
 - Every `ValueRef` domain, type, and index combination is valid.
 - Every expression instruction has valid operands, valid operator signatures, forward-only targets, consistent stack types at merges, a bounded declared stack depth, and exactly one correctly typed result on every path.
 - Every action descriptor ends with a reachable `End`, every target stays inside its descriptor, every expression operand has the required result type, every repeat frame is in range, and every backward edge is an immediately yielded loop edge.
@@ -615,13 +732,15 @@ Compiler diagnostics describe source errors. Program validation errors describe 
 - Debug span arrays match their instruction arrays and every retained span is valid.
 - Recomputed program requirements exactly equal the stored requirements.
 
-The validator reports all defects that can be collected safely in one pass, up to a fixed diagnostic limit. Runtime activation treats any validation error as an internal startup failure and installs no hooks.
+The validator reports all defects that can be collected safely in one pass, up to a fixed diagnostic limit. Compiler-built validation failures are internal defects; decoded-artifact validation failures are artifact errors. Neither path installs hooks or publishes a partial program.
 
 ## Activation validation
 
 After structural validation, application activation performs checks that depend on the selected environment:
 
-- The backend supports every `ControlRequirement` use.
+- The selected backend resolves every required `ControlRef` into exactly one runtime-local activated-control record.
+- Each activated-control capability set contains every `ControlRequirement` use requested for that identity.
+- Platform-qualified identities are accepted structurally on every host but reject activation when the selected backend cannot bind them.
 - The configured task pool and publication queue satisfy `maximumTasksPerEvent`.
 - Expression scratch storage satisfies `maximumExpressionStackDepth`.
 - Task local and ownership pools satisfy the per-task repeat-frame and control-ownership maxima.
@@ -631,9 +750,11 @@ After structural validation, application activation performs checks that depend 
 
 Activation is transactional. Runtime state is initialized and all capacity checks complete before program publication or hook installation. Failure preserves the previously active program, or leaves the application in observer mode when no program was active.
 
+Backend binding does not alter the immutable program. The activated-control array is indexed by `ControlRefId` and contains backend-owned opaque references or fixed descriptors. Input normalization maps a supported native event to an activated `ControlRefId`; an unbound native event bypasses user rules. Output execution uses the same activated record, so input and output cannot independently reinterpret one compiled identity.
+
 ## Runtime access model
 
-The dispatcher first searches `pauseControlBuckets` without consulting the current `PAUSE` value. A matching pause-control rule applies one synchronous effect and returns its delivery decision. When no pause-control rule matches and `PAUSE` is on, the dispatcher searches `eventBuckets`, evaluates conditions with a preallocated typed stack, scans the contiguous ordinary rule span, and writes selected action and mapping IDs into a preallocated event transaction. It reserves the full transaction before committing mapping state or returning `Suppress`.
+The dispatcher receives an activated `ControlRefId`, forms an `EventKey`, and first searches `pauseControlBuckets` without consulting the current `PAUSE` value. A matching pause-control rule applies one synchronous effect and returns its delivery decision. When no pause-control rule matches and `PAUSE` is on, the dispatcher searches `eventBuckets`, evaluates conditions with a preallocated typed stack, scans the contiguous ordinary rule span, and writes selected action and mapping IDs into a preallocated event transaction. It reserves the full transaction before committing mapping state or returning `Suppress`.
 
 The task scheduler stores program IDs and local positions, not instruction pointers. Holding a shared immutable program handle keeps all referenced tables alive. A program reload publishes a new handle only after old-generation tasks and mapping state have been cancelled and their outputs released.
 
@@ -641,7 +762,7 @@ The action VM reads strings only for `Exec` on the task thread. The hook path ne
 
 ## Phase 1 integration boundary
 
-The existing `Action`, `ActionBatch`, bounded queue, self-tagged injector, target checks, and cleanup behavior remain the platform-output boundary. `CompiledProgram` does not contain `ActionBatch` records. The rule runtime translates selected mapping lifecycle operations and action VM output primitives into the existing bounded injection contract.
+The existing `Action`, `ActionBatch`, bounded queue, self-tagged injector, target checks, and cleanup behavior remain the initial platform-output boundary. `CompiledProgram` does not contain `ActionBatch` records or native output codes. The rule runtime resolves each selected `ControlRefId` through its activated-control record and translates mapping lifecycle operations and action VM output primitives into the backend's bounded injection contract.
 
 The existing `FixedRuleEngine` remains a regression oracle until the equivalent Weave rules pass deterministic runtime tests and real Windows loopback verification. It is not embedded in `CompiledProgram`.
 
@@ -672,4 +793,4 @@ pause F6:down => toggle;
 
 The first fixture proves event indexing, consumption, task creation, `Tap`, timed wakeup, and paired release. The second proves mapping slots and down, repeat, and up lifecycle handling. The third proves value layout, Boolean expressions, repeat frames, backward-yield validation, and action gaps. The fourth proves the dedicated pause-control index, stop-only delivery, synchronous effect representation, and zero task requirement.
 
-Compiler output and hand-built runtime fixtures must produce the same deterministic dump for the same semantic program. This equality is the principal convergence gate for the forked Phase 2 workstreams.
+Compiler output and hand-built runtime fixtures must produce the same deterministic dump for the same semantic program. Every fixture must also encode to `.weavec`, decode, finalize, and reproduce the same dump byte-for-byte. Control fixtures additionally prove alias canonicalization, raw constructor lowering, portable backend binding, platform-specific activation rejection, and identical `ControlRefId` use by normalized input and output recipes. These equalities are the principal convergence gate for the forked compiler and runtime workstreams.

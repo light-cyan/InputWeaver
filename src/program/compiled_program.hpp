@@ -1,7 +1,5 @@
 #pragma once
 
-#include "input_event.hpp"
-
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -14,7 +12,6 @@
 namespace inputweaver {
 
 inline constexpr std::uint32_t kInvalidProgramIndex = 0xffffffffU;
-inline constexpr std::uint32_t kCompiledProgramSchemaVersion = 1U;
 inline constexpr std::size_t kMaximumProgramValidationErrors = 64U;
 
 template <typename Tag>
@@ -67,9 +64,24 @@ struct DurationValue final {
     auto operator<=>(const DurationValue&) const = default;
 };
 
+inline constexpr std::uint32_t kControlNamespaceUsbHid = 1U;
+inline constexpr std::uint32_t kControlNamespaceWeave = 2U;
+inline constexpr std::uint32_t kControlNamespaceWindows = 256U;
+inline constexpr std::uint32_t kControlNamespaceLinux = 257U;
+inline constexpr std::uint32_t kControlNamespaceMacOs = 258U;
+inline constexpr std::uint32_t kWindowsVirtualKeyFamily = 1U;
+inline constexpr std::uint32_t kWindowsScanCodeFamily = 2U;
+inline constexpr std::uint32_t kLinuxEvKeyFamily = 1U;
+inline constexpr std::uint32_t kMacOsKeyCodeFamily = 1U;
+inline constexpr std::uint32_t kControlQualifierNone = 0U;
+inline constexpr std::uint32_t kWindowsScanCodeQualifierE0 = 1U;
+inline constexpr std::uint32_t kWindowsScanCodeQualifierE1 = 2U;
+
 struct ControlRef final {
-    DeviceKind device{};
-    ControlCode code{};
+    std::uint32_t namespaceId{};
+    std::uint32_t familyId{};
+    std::uint32_t code{};
+    std::uint32_t qualifier{};
 
     auto operator<=>(const ControlRef&) const = default;
 };
@@ -81,7 +93,7 @@ enum class EventTransition : std::uint8_t {
 };
 
 struct EventKey final {
-    ControlRef control{};
+    ControlRefId control{};
     EventTransition transition{};
 
     auto operator<=>(const EventKey&) const = default;
@@ -96,8 +108,7 @@ struct ProgramSource final {
 enum class TargetSelectorKind : std::uint8_t {
     Unspecified,
     Global,
-    ExecutableName,
-    AbsolutePath,
+    Executable,
 };
 
 struct TargetSelector final {
@@ -299,12 +310,12 @@ struct EventBucket final {
 };
 
 struct MappingSlotDescriptor final {
-    ControlRef source{};
+    ControlRefId source{};
 };
 
 struct MappingDescriptor final {
     MappingSlotId slot{};
-    ControlRef target{};
+    ControlRefId target{};
     SourceSpan source{};
 };
 
@@ -350,7 +361,6 @@ struct ProgramDebugInfo final {
 };
 
 struct CompiledProgramStorage final {
-    std::uint32_t schemaVersion{kCompiledProgramSchemaVersion};
     ProgramSource source{};
     ProgramSettings settings{};
     ProgramRequirements requirements{};
@@ -381,7 +391,6 @@ struct CompiledProgramStorage final {
 };
 
 enum class ProgramValidationErrorCode : std::uint8_t {
-    Schema,
     TableSize,
     Identifier,
     Range,
@@ -405,7 +414,6 @@ struct ProgramValidationError final {
 
 class CompiledProgram final {
 public:
-    [[nodiscard]] std::uint32_t SchemaVersion() const noexcept;
     [[nodiscard]] const ProgramSource& Source() const noexcept;
     [[nodiscard]] const ProgramSettings& Settings() const noexcept;
     [[nodiscard]] const ProgramRequirements& Requirements() const noexcept;
@@ -450,7 +458,7 @@ class CompiledProgramBuilder final {
 public:
     [[nodiscard]] CompiledProgramStorage& Storage() noexcept;
     [[nodiscard]] const CompiledProgramStorage& Storage() const noexcept;
-    void DeriveRequirements() noexcept;
+    void DeriveRequirements();
     [[nodiscard]] CompiledProgramStorage TakeStorage() && noexcept;
     [[nodiscard]] FinalizeResult Finalize() &&;
 
