@@ -1,0 +1,64 @@
+#pragma once
+
+#include "expression_vm.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
+namespace inputweaver {
+
+class ProgramRuntime final {
+public:
+    ProgramRuntime(
+        RuntimeCapacities capacities,
+        RuntimeControlPort& controlPort,
+        RuntimeOutputPort& outputPort,
+        RuntimeRoutePort& routePort,
+        RuntimeProcessLauncher& processLauncher,
+        RuntimeClock& clock);
+    ~ProgramRuntime();
+
+    ProgramRuntime(const ProgramRuntime&) = delete;
+    ProgramRuntime& operator=(const ProgramRuntime&) = delete;
+
+    [[nodiscard]] RuntimeActivationResult Activate(
+        std::shared_ptr<const CompiledProgram> program);
+    void Deactivate() noexcept;
+
+    [[nodiscard]] InputDecision HandleInput(
+        const RuntimeInputEvent& event) noexcept;
+    [[nodiscard]] RuntimePumpResult Pump(
+        std::size_t maximumSlices = 1024U) noexcept;
+
+    [[nodiscard]] bool StartTaskThread();
+    void StopTaskThread() noexcept;
+    void NotifyTargetLost() noexcept;
+    void RequestShutdown() noexcept;
+
+    [[nodiscard]] bool HasActiveProgram() const noexcept;
+    [[nodiscard]] bool PauseOn() const noexcept;
+    [[nodiscard]] bool FatalShutdownRequested() const noexcept;
+    [[nodiscard]] std::uint64_t Generation() const noexcept;
+    [[nodiscard]] std::size_t ActiveTaskCount() const noexcept;
+    [[nodiscard]] bool HasActiveMappings() const noexcept;
+    [[nodiscard]] bool HasOwnedOutputs() const noexcept;
+    [[nodiscard]] RuntimeMetrics Metrics() const noexcept;
+
+    [[nodiscard]] RuntimeEvaluationResult EvaluateExpression(
+        ExpressionId expression) noexcept;
+    [[nodiscard]] bool ReadUserState(std::uint32_t index, bool& value) const noexcept;
+    [[nodiscard]] bool ReadUserNumber(std::uint32_t index, double& value) const noexcept;
+    [[nodiscard]] bool ReadUserDuration(
+        std::uint32_t index,
+        DurationValue& value) const noexcept;
+
+    [[nodiscard]] bool TryPopDiagnostic(
+        RuntimeDiagnosticRecord& record) noexcept;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace inputweaver

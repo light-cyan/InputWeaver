@@ -166,9 +166,9 @@ Runtime tests never need `.weave` source compilation. Program source spans and s
 - Strict warnings, runtime tests, runtime `-fanalyzer`, dependency audit, Windows regression checks, and `git diff --check` pass.
 - Verification evidence is recorded under `development/phase-3-runtime/` without requiring a compiler milestone.
 
-## Open design gates
+## Windows executable resolution
 
-The runtime may implement work that does not depend on an active issue, but it may not declare completion while an issue in `development/OpenDesignIssues.md` affects executable resolution. Each resolved decision must be reflected in the language specification when user-visible, in the Phase 2 contract when representational, and in runtime tests before implementation is accepted. `docs/language/grammar.v2.md` does not change this branch's frozen v1 contract.
+`development/phase-3-runtime/WindowsExecutableResolution.md` defines the Windows executable-token extraction, native search, `CreateProcessW` parameter contract, child working directory, failure behavior, and cancellation boundaries used by `Exec`. `docs/language/grammar.v2.md` does not change this branch's frozen v1 contract.
 
 ## Handoff artifact
 

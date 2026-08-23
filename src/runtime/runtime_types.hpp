@@ -1,0 +1,266 @@
+#pragma once
+
+#include "input/input_types.hpp"
+#include "program/compiled_program.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+
+namespace inputweaver {
+
+struct RuntimeValue final {
+    ExpressionType type{ExpressionType::None};
+    bool booleanValue{};
+    std::uint8_t stateValue{};
+    double numberValue{};
+    DurationValue durationValue{};
+};
+
+enum class RuntimeEvaluationFault : std::uint8_t {
+    None,
+    InvalidExpression,
+    InvalidInstruction,
+    StackUnderflow,
+    StackOverflow,
+    TypeMismatch,
+    DivisionByZero,
+    NonFiniteNumber,
+    InvalidDuration,
+    MissingReturn,
+};
+
+struct RuntimeEvaluationResult final {
+    RuntimeValue value{};
+    RuntimeEvaluationFault fault{RuntimeEvaluationFault::None};
+    std::uint32_t instructionPosition{};
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return fault == RuntimeEvaluationFault::None;
+    }
+};
+
+struct ActivatedControl final {
+    std::uintptr_t backendToken{};
+    std::uint8_t capabilities{};
+    DeviceKind device{DeviceKind::Keyboard};
+    bool requiresPointerTarget{};
+};
+
+enum class RuntimeControlBindResult : std::uint8_t {
+    Bound,
+    UnsupportedIdentity,
+    MissingCapability,
+};
+
+class RuntimeControlPort {
+public:
+    virtual ~RuntimeControlPort() = default;
+    virtual void BeginActivation() noexcept {}
+    [[nodiscard]] virtual RuntimeControlBindResult BindControl(
+        ControlRefId controlId,
+        const ControlRef& control,
+        std::uint8_t requiredUses,
+        ActivatedControl& activated) noexcept = 0;
+    virtual void CommitActivation() noexcept {}
+    virtual void AbortActivation() noexcept {}
+};
+
+enum class RuntimeOutputTransition : std::uint8_t {
+    Down,
+    Repeat,
+    Up,
+};
+
+struct RuntimeOutputRequest final {
+    std::uint64_t generation{};
+    std::uint64_t sequence{};
+    ControlRefId control{};
+    ControlRef identity{};
+    ActivatedControl activated{};
+    RuntimeOutputTransition transition{};
+};
+
+enum class RuntimeOutputResult : std::uint8_t {
+    Accepted,
+    RouteRejected,
+    CapacityRejected,
+    Failed,
+};
+
+class RuntimeOutputPort {
+public:
+    virtual ~RuntimeOutputPort() = default;
+    [[nodiscard]] virtual RuntimeOutputResult Publish(
+        const RuntimeOutputRequest& request) noexcept = 0;
+};
+
+struct RuntimeInputEvent final {
+    ControlRefId control{};
+    DeviceKind device{DeviceKind::Keyboard};
+    InputOrigin origin{InputOrigin::PhysicalCandidate};
+    Transition transition{Transition::Down};
+    ScreenPoint position{};
+    bool forceStopRequested{};
+};
+
+class RuntimeRoutePort {
+public:
+    virtual ~RuntimeRoutePort() = default;
+    [[nodiscard]] virtual bool ValidateTarget(
+        TargetSelectorKind kind,
+        std::string_view selector) noexcept = 0;
+    [[nodiscard]] virtual bool TargetValid(
+        TargetSelectorKind kind) noexcept
+    {
+        (void)kind;
+        return true;
+    }
+    [[nodiscard]] virtual bool CanDispatch(
+        TargetSelectorKind kind,
+        const RuntimeInputEvent& event) noexcept = 0;
+    [[nodiscard]] virtual bool CanInject(
+        TargetSelectorKind kind,
+        const ActivatedControl& control) noexcept = 0;
+};
+
+enum class RuntimeLaunchResult : std::uint8_t {
+    Launched,
+    Cancelled,
+    InvalidCommand,
+    ResolutionFailed,
+    CreationFailed,
+};
+
+struct RuntimeCancellationProbe final {
+    void* context{};
+    bool (*invoke)(void*) noexcept{};
+
+    [[nodiscard]] bool Cancelled() const noexcept {
+        return invoke != nullptr && invoke(context);
+    }
+};
+
+class RuntimeProcessLauncher {
+public:
+    virtual ~RuntimeProcessLauncher() = default;
+    [[nodiscard]] virtual bool Permitted() const noexcept = 0;
+    [[nodiscard]] virtual RuntimeLaunchResult Launch(
+        std::string_view command,
+        RuntimeCancellationProbe cancellation) noexcept = 0;
+};
+
+class RuntimeClock {
+public:
+    virtual ~RuntimeClock() = default;
+    [[nodiscard]] virtual std::int64_t NowNanoseconds() const noexcept = 0;
+};
+
+class SteadyRuntimeClock final : public RuntimeClock {
+public:
+    [[nodiscard]] std::int64_t NowNanoseconds() const noexcept override {
+        const auto now = std::chrono::steady_clock::now().time_since_epoch();
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+    }
+};
+
+struct RuntimeCapacities final {
+    std::uint32_t maximumControls{4096U};
+    std::uint32_t maximumStateSlots{4096U};
+    std::uint32_t maximumNumberSlots{4096U};
+    std::uint32_t maximumDurationSlots{4096U};
+    std::uint32_t maximumMappingSlots{4096U};
+    std::uint32_t maximumExpressionStackDepth{1024U};
+    std::uint32_t maximumRepeatFramesPerTask{256U};
+    std::uint32_t maximumOwnedControlsPerTask{256U};
+    std::uint32_t taskSlotCount{256U};
+    std::uint32_t transactionQueueItemCount{1024U};
+    std::uint32_t diagnosticRecordCount{256U};
+    bool permitProcessLaunch{true};
+};
+
+enum class RuntimeActivationErrorCode : std::uint8_t {
+    None,
+    MissingProgram,
+    ControlCapacity,
+    ValueCapacity,
+    MappingCapacity,
+    ExpressionStackCapacity,
+    RepeatFrameCapacity,
+    OwnershipCapacity,
+    TaskCapacity,
+    TransactionCapacity,
+    DiagnosticCapacity,
+    UnsupportedControl,
+    MissingControlCapability,
+    ProcessLaunchDenied,
+    InvalidTarget,
+    CleanupFailure,
+    AllocationFailure,
+};
+
+struct RuntimeActivationError final {
+    RuntimeActivationErrorCode code{RuntimeActivationErrorCode::None};
+    std::uint32_t subject{};
+    std::uint64_t required{};
+    std::uint64_t available{};
+};
+
+struct RuntimeActivationResult final {
+    bool activated{};
+    RuntimeActivationError error{};
+};
+
+enum class RuntimeCancellationReason : std::uint8_t {
+    Pause,
+    Reload,
+    TargetLoss,
+    FatalFailure,
+    ForceStop,
+    Shutdown,
+};
+
+enum class RuntimeDiagnosticKind : std::uint8_t {
+    ActivationFailure,
+    TransactionCapacity,
+    PredicateFault,
+    TaskExpressionFault,
+    TaskActionFault,
+    LaunchFailure,
+    OutputFailure,
+    OwnershipChange,
+    MappingChange,
+    Cancellation,
+};
+
+struct RuntimeDiagnosticRecord final {
+    RuntimeDiagnosticKind kind{};
+    std::uint64_t programSerial{};
+    std::uint64_t generation{};
+    std::uint64_t sequence{};
+    SourceSpan source{};
+    std::uint32_t subject{kInvalidProgramIndex};
+    std::uint32_t position{kInvalidProgramIndex};
+    std::int64_t deadlineNanoseconds{};
+    std::uint32_t detail{};
+};
+
+struct RuntimeMetrics final {
+    std::uint64_t dispatchedEvents{};
+    std::uint64_t suppressedEvents{};
+    std::uint64_t startedTasks{};
+    std::uint64_t completedTasks{};
+    std::uint64_t cancelledTasks{};
+    std::uint64_t transactionRejections{};
+    std::uint64_t droppedDiagnostics{};
+    std::uint64_t outputTransitions{};
+};
+
+struct RuntimePumpResult final {
+    std::size_t slices{};
+    bool readyWorkRemaining{};
+    bool timedWorkRemaining{};
+};
+
+} // namespace inputweaver

@@ -352,9 +352,21 @@ C:down =>>;
 
 `exec(command)` asks the platform process launcher to resolve and start the command's executable without an implicit command interpreter. The launcher may inspect the executable token for resolution, but it preserves the authored command and arguments when invoking the platform process API. Native quoting and explicit shell invocation follow the selected platform's rules.
 
-The launcher sets the child working directory to the directory containing the resolved executable. This rule does not depend on the InputWeaver executable directory, the `.weave` source directory, or the parent's current working directory. Failure to resolve either the executable or its containing directory is a launch failure.
+The launcher sets the child working directory to the directory containing the resolved executable. The final child working directory is therefore selected from the resolved executable path rather than from the InputWeaver executable directory, the `.weave` source directory, or the InputWeaver process working directory. Resolving a relative executable token can still use the InputWeaver process working directory as described below. Failure to resolve either the executable or its containing directory is a launch failure.
 
 The child inherits the environment visible to InputWeaver at launch. A successful launch completes the `exec` action immediately, and the task continues without waiting for process exit or retaining child-process ownership. Cancellation before launch prevents process creation; cancellation, `PAUSE`, force stop, and application shutdown do not terminate a child that was already created. A launch failure records the platform error and ends the current task while other tasks continue.
+
+#### Windows executable lookup and working directory
+
+On Windows, executable lookup and the child working directory are separate decisions. Lookup first produces an absolute executable path; the directory containing that resolved path then becomes the child working directory. Relative paths used by the child are interpreted from that directory unless the child changes its own working directory.
+
+A path-qualified executable token contains `\`, `/`, or `:`. An absolute token is used at its absolute location. A relative path-qualified token is resolved against the current working directory of the InputWeaver process. Path-qualified tokens must identify an existing file and do not receive an implicit extension.
+
+A bare executable token keeps its authored extension. A bare token without an extension receives `.exe` unless it ends with `.`. InputWeaver searches for the resulting name in this order: the InputWeaver executable directory, the InputWeaver process working directory, the Windows system directory, the legacy Windows `System` directory, the Windows directory, and the directories listed by `PATH` in their authored order.
+
+- `exec("C:\\Tools\\helper.exe config.json")` resolves the executable directly and starts it with `C:\\Tools` as its working directory.
+- `exec(".\\tools\\helper.exe config.json")` resolves `.\\tools\\helper.exe` against the InputWeaver process working directory, then starts it in the directory containing the resolved `helper.exe`.
+- `exec("helper.exe config.json")` uses the bare-name search. If it resolves to `D:\\SDK\\bin\\helper.exe`, the child working directory is `D:\\SDK\\bin` regardless of which search location supplied that path.
 
 ## 变量和类型
 
