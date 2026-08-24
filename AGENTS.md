@@ -35,7 +35,7 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - `development/` outside `development/legacy/` owns current designs, handoff material, research, and open design issues.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
-- `validation/` owns current validation assets, while `validation/legacy/` contains content-preserving validation snapshots that are outside current acceptance authority.
+- `validation/` is the tracked location for validation assets.
 - `development/CompilerRuntimeCompletionHandoff.md` is the interface handoff for the completed compiler and runtime stage.
 - Read the relevant language specification, compiler/runtime handoff, shared program contract in `src/program/`, and open-issue register before changing an owned subsystem.
 - Record a new decision in its owning document instead of duplicating phase history or handoff logs in `AGENTS.md`.
@@ -85,7 +85,7 @@ all modules -> support only for domain-independent primitives
 - `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows diagnostics but not on the CLI module.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; `validation/` contains current validation assets; `validation/legacy/` contains archived validation snapshots; `development/` contains current engineering documents; `development/legacy/` contains archived engineering material.
+- `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; `validation/` is the tracked location for validation assets; `development/` contains current engineering documents; `development/legacy/` contains archived engineering material.
 - `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Current Development
