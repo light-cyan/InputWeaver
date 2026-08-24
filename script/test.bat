@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0.."
 
-if not exist "bin\InputWeaverTests.exe" (
-    echo InputWeaverTests.exe is missing. Run script\build.bat first.
+if not exist "bin\WindowsPlatformTests.exe" (
+    echo WindowsPlatformTests.exe is missing. Run script\build.bat first.
     exit /b 2
 )
 
@@ -12,24 +12,11 @@ if not exist "bin\CompiledProgramTests.exe" (
     exit /b 2
 )
 
-if not exist "bin\ProgramRuntimeTests.exe" (
-    echo ProgramRuntimeTests.exe is missing. Run script\build.bat first.
-    exit /b 2
-)
-
-if not exist "bin\WindowsRuntimeAdapterTests.exe" (
-    echo WindowsRuntimeAdapterTests.exe is missing. Run script\build.bat first.
-    exit /b 2
-)
-
-"bin\InputWeaverTests.exe"
+"bin\WindowsPlatformTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
 "bin\CompiledProgramTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
-"bin\ProgramRuntimeTests.exe"
-if errorlevel 1 exit /b %errorlevel%
-
-"bin\WindowsRuntimeAdapterTests.exe"
+call script\test_runtime.bat
 exit /b %errorlevel%

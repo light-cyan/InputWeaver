@@ -1,5 +1,6 @@
 #include "compiler.hpp"
 
+#include "artifact_file.hpp"
 #include "frontend.hpp"
 #include "lowering.hpp"
 #include "semantics.hpp"
@@ -9,7 +10,6 @@
 #include "program/weavec_codec.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -22,13 +22,6 @@
 #include <system_error>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace inputweaver::compiler {
 namespace {
@@ -101,62 +94,13 @@ void AddCommandError(
     result.diagnostics.push_back(std::move(diagnostic));
 }
 
-[[nodiscard]] std::filesystem::path MakeTemporaryPath(
-    const std::filesystem::path& destination)
-{
-    static std::atomic<std::uint64_t> sequence{0U};
-#ifdef _WIN32
-    const std::uint64_t process = GetCurrentProcessId();
-#else
-    const std::uint64_t process = 0U;
-#endif
-    for (;;) {
-        const std::uint64_t ordinal = sequence.fetch_add(
-            1U,
-            std::memory_order_relaxed);
-        std::filesystem::path temporary = destination;
-        temporary += ".tmp." + std::to_string(process) + "."
-            + std::to_string(ordinal);
-        std::error_code existsError;
-        const bool exists = std::filesystem::exists(temporary, existsError);
-        if (!exists || existsError) {
-            return temporary;
-        }
-    }
-}
-
-[[nodiscard]] bool ReplaceDestination(
-    const std::filesystem::path& temporary,
-    const std::filesystem::path& destination,
-    std::string& error)
-{
-#ifdef _WIN32
-    if (MoveFileExW(
-            temporary.c_str(),
-            destination.c_str(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
-        != FALSE) {
-        return true;
-    }
-    error = std::system_category().message(static_cast<int>(GetLastError()));
-    return false;
-#else
-    std::error_code renameError;
-    std::filesystem::rename(temporary, destination, renameError);
-    if (!renameError) {
-        return true;
-    }
-    error = renameError.message();
-    return false;
-#endif
-}
-
 [[nodiscard]] bool WriteArtifact(
     const std::filesystem::path& destination,
     const std::vector<std::uint8_t>& bytes,
     CompilerCommandResult& result)
 {
-    const std::filesystem::path temporary = MakeTemporaryPath(destination);
+    const std::filesystem::path temporary =
+        artifact_file::MakeSiblingTemporaryPath(destination);
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) {
         AddCommandError(
@@ -193,7 +137,10 @@ void AddCommandError(
         return false;
     }
     std::string replaceError;
-    if (!ReplaceDestination(temporary, destination, replaceError)) {
+    if (!artifact_file::ReplaceDestination(
+            temporary,
+            destination,
+            replaceError)) {
         std::error_code removeError;
         std::filesystem::remove(temporary, removeError);
         AddCommandError(

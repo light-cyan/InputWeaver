@@ -53,6 +53,7 @@ private:
 class FakeControlPort final : public inputweaver::RuntimeControlPort {
 public:
     bool rejectRepeat{};
+    bool rejectPhysicalState{};
     bool rejectAll{};
 
     [[nodiscard]] inputweaver::RuntimeControlBindResult BindControl(
@@ -67,13 +68,17 @@ public:
             ? 0U
             : static_cast<std::uint8_t>(
                   inputweaver::ToControlUseBits(inputweaver::ControlUse::EventSource)
-                  | inputweaver::ToControlUseBits(inputweaver::ControlUse::PhysicalState)
+                  | (rejectPhysicalState
+                         ? 0U
+                         : inputweaver::ToControlUseBits(
+                               inputweaver::ControlUse::PhysicalState))
                   | inputweaver::ToControlUseBits(inputweaver::ControlUse::OutputDownUp)
                   | (rejectRepeat
                          ? 0U
                          : inputweaver::ToControlUseBits(
                                inputweaver::ControlUse::OutputRepeat)));
         activated.device = inputweaver::DeviceKind::Keyboard;
+        activated.initialStateQueryable = !rejectPhysicalState;
         if (rejectAll) {
             return inputweaver::RuntimeControlBindResult::UnsupportedIdentity;
         }
@@ -115,13 +120,15 @@ public:
     bool targetValid{true};
     bool dispatchAllowed{true};
     bool injectionAllowed{true};
+    inputweaver::TargetSelectorKind validatedKind{
+        inputweaver::TargetSelectorKind::Unspecified};
+    std::atomic<bool>* dispatchEntered{};
+    std::atomic<bool>* dispatchReleased{};
 
     [[nodiscard]] bool ValidateTarget(
-        inputweaver::TargetSelectorKind kind,
-        std::string_view selector) noexcept override
+        inputweaver::TargetSelectorKind kind) noexcept override
     {
-        (void)kind;
-        (void)selector;
+        validatedKind = kind;
         return targetValid;
     }
 
@@ -131,7 +138,20 @@ public:
     {
         (void)kind;
         (void)event;
+        if (dispatchEntered != nullptr && dispatchReleased != nullptr) {
+            dispatchEntered->store(true, std::memory_order_release);
+            while (!dispatchReleased->load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        }
         return dispatchAllowed;
+    }
+
+    [[nodiscard]] bool TargetValid(
+        inputweaver::TargetSelectorKind kind) noexcept override
+    {
+        (void)kind;
+        return targetValid;
     }
 
     [[nodiscard]] bool CanInject(
@@ -186,6 +206,13 @@ struct RuntimeHarness final {
     }
 };
 
+[[nodiscard]] inputweaver::RuntimeCapacities ProcessLaunchCapacities() noexcept
+{
+    inputweaver::RuntimeCapacities capacities{};
+    capacities.permitProcessLaunch = true;
+    return capacities;
+}
+
 [[nodiscard]] std::shared_ptr<const inputweaver::CompiledProgram> Finalize(
     inputweaver::CompiledProgramStorage storage)
 {
@@ -199,6 +226,65 @@ struct RuntimeHarness final {
     }
     Check(result.program != nullptr, "test fixture finalizes");
     return std::move(result.program);
+}
+
+void SelectExecutableTarget(inputweaver::CompiledProgramStorage& storage)
+{
+    storage.strings.push_back("target.exe");
+    storage.settings.target.kind = inputweaver::TargetSelectorKind::Executable;
+    storage.settings.target.text = inputweaver::StringId{
+        static_cast<std::uint32_t>(storage.strings.size() - 1U)};
+    storage.requirements = inputweaver::ComputeProgramRequirements(storage);
+}
+
+void TestEffectiveTargetOverride()
+{
+    using namespace inputweaver;
+    const auto globalProgram = Finalize(test::MakeTapFixtureStorage());
+    RuntimeHarness executableOverride;
+    Check(
+        executableOverride.runtime.Activate(
+            globalProgram,
+            TargetSelectorKind::Executable).activated
+            && executableOverride.route.validatedKind
+                == TargetSelectorKind::Executable,
+        "executable command-line target replaces compiled GLOBAL routing");
+
+    CompiledProgramStorage executableStorage = test::MakeTapFixtureStorage();
+    SelectExecutableTarget(executableStorage);
+    const auto executableProgram = Finalize(std::move(executableStorage));
+    RuntimeHarness globalOverride;
+    Check(
+        globalOverride.runtime.Activate(
+            executableProgram,
+            TargetSelectorKind::Global).activated
+            && globalOverride.route.validatedKind == TargetSelectorKind::Global,
+        "global command-line target replaces compiled executable routing");
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeMappingPauseStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeMappingFixtureStorage();
+    storage.controls.push_back({
+        kControlNamespaceUsbHid,
+        0x07U,
+        0x41U,
+        kControlQualifierNone});
+    storage.controlRequirements.push_back({
+        ControlRefId{2U},
+        ToControlUseBits(ControlUse::EventSource)});
+    storage.pauseControlRules.push_back({
+        ExpressionId{},
+        Delivery::Consume,
+        PauseEffect::Toggle,
+        1U,
+        storage.mappings[0].source});
+    storage.pauseControlBuckets.push_back({
+        {ControlRefId{2U}, EventTransition::Down},
+        {0U, 1U}});
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
 }
 
 [[nodiscard]] inputweaver::RuntimeInputEvent KeyboardEvent(
@@ -372,7 +458,11 @@ void TestPauseFixtureAndCancellation()
 
     const auto tapProgram = Finalize(inputweaver::test::MakeTapFixtureStorage());
     const std::uint32_t tapTrigger = TriggerControl(*tapProgram);
-    Check(harness.runtime.Activate(tapProgram).activated, "tap reload succeeds");
+    const std::uint64_t beforeReload = harness.runtime.Generation();
+    Check(
+        harness.runtime.Activate(tapProgram).activated
+            && harness.runtime.Generation() > beforeReload,
+        "tap reload succeeds with a fresh output generation");
     (void)harness.runtime.HandleInput(KeyboardEvent(
         tapTrigger,
         inputweaver::Transition::Down));
@@ -838,9 +928,150 @@ void TestArrowFlowAndOverlappingOwnership()
     return storage;
 }
 
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeInstructionBudgetStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.numberConstants = {1.0e12};
+    storage.durationConstants = {{0}};
+    storage.expressions.clear();
+    storage.expressionCode.clear();
+    AppendExpression(storage, ExpressionType::Number, 1U, {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
+    });
+    AppendExpression(storage, ExpressionType::Duration, 1U, {
+        {ExpressionOpcode::PushDuration, ExpressionType::Duration, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Duration, 0U, 0U},
+    });
+    storage.actionPrograms = {{{0U, 7U}, 1U, 0U, source}};
+    storage.actionCode = {
+        {ActionOpcode::RepeatInit, 0U, 0U},
+        {ActionOpcode::RepeatCheck, 0U, 6U},
+        {ActionOpcode::Wait, 1U, 0U},
+        {ActionOpcode::RepeatNext, 0U, 0U},
+        {ActionOpcode::Yield, 0U, 0U},
+        {ActionOpcode::Jump, 1U, 0U},
+        {ActionOpcode::End, 0U, 0U},
+    };
+    storage.controlRequirements = {
+        {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
+    };
+    storage.debugInfo.expressionInstructionSpans.assign(
+        storage.expressionCode.size(), source);
+    storage.debugInfo.actionInstructionSpans.assign(
+        storage.actionCode.size(), source);
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeOutputBudgetStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.numberConstants = {1.0e12};
+    storage.expressions.clear();
+    storage.expressionCode.clear();
+    AppendExpression(storage, ExpressionType::Number, 1U, {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
+    });
+    storage.actionPrograms = {{{0U, 8U}, 1U, 1U, source}};
+    storage.actionCode = {
+        {ActionOpcode::RepeatInit, 0U, 0U},
+        {ActionOpcode::RepeatCheck, 0U, 7U},
+        {ActionOpcode::Press, 0U, 0U},
+        {ActionOpcode::Release, 0U, 0U},
+        {ActionOpcode::RepeatNext, 0U, 0U},
+        {ActionOpcode::Yield, 0U, 0U},
+        {ActionOpcode::Jump, 1U, 0U},
+        {ActionOpcode::End, 0U, 0U},
+    };
+    storage.debugInfo.expressionInstructionSpans.assign(
+        storage.expressionCode.size(), source);
+    storage.debugInfo.actionInstructionSpans.assign(
+        storage.actionCode.size(), source);
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeMaximumDispatchStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.actionPrograms.clear();
+    storage.actionCode.clear();
+    storage.expressions = {{{0U, 16U}, ExpressionType::Boolean, 1U, source}};
+    storage.expressionCode = {
+        {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
+    };
+    for (std::size_t index = 0U; index < 14U; ++index) {
+        storage.expressionCode.push_back({
+            ExpressionOpcode::Unary,
+            ExpressionType::Boolean,
+            static_cast<std::uint32_t>(UnaryOperator::BooleanNot),
+            0U});
+    }
+    storage.expressionCode.push_back({
+        ExpressionOpcode::Return,
+        ExpressionType::Boolean,
+        0U,
+        0U});
+    storage.rules.clear();
+    for (std::uint32_t index = 0U; index < 256U; ++index) {
+        storage.rules.push_back({
+            ExpressionId{0U},
+            ActionProgramId{},
+            MappingId{},
+            Delivery::Observe,
+            index + 1U == 256U ? MatchFlow::Stop : MatchFlow::Continue,
+            RuleKind::Event,
+            index,
+            source});
+    }
+    storage.eventBuckets = {{
+        {ControlRefId{1U}, EventTransition::Down},
+        {0U, 256U}}};
+    storage.controlRequirements = {
+        {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
+    };
+    storage.debugInfo.expressionInstructionSpans.assign(
+        storage.expressionCode.size(), source);
+    storage.debugInfo.actionInstructionSpans.clear();
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeManyReadyTasksStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = MakeInstructionBudgetStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.rules.clear();
+    for (std::uint32_t index = 0U; index < 16U; ++index) {
+        storage.rules.push_back({
+            ExpressionId{},
+            ActionProgramId{0U},
+            MappingId{},
+            Delivery::Consume,
+            index + 1U == 16U ? MatchFlow::Stop : MatchFlow::Continue,
+            RuleKind::Event,
+            index,
+            source});
+    }
+    storage.eventBuckets = {{
+        {ControlRefId{1U}, EventTransition::Down},
+        {0U, 16U}}};
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
 void TestActionVm()
 {
-    RuntimeHarness harness;
+    RuntimeHarness harness(ProcessLaunchCapacities());
     const auto program = Finalize(MakeActionFixtureStorage());
     const std::uint32_t trigger = TriggerControl(*program);
     Check(harness.runtime.Activate(program).activated, "action fixture activates");
@@ -869,6 +1100,224 @@ void TestActionVm()
         harness.output.requests.size() == 6U
             && harness.runtime.ActiveTaskCount() == 0U,
         "action VM completes two cooperative repeat iterations");
+}
+
+void TestTaskProgressBudgets()
+{
+    const inputweaver::RuntimeCapacities defaults{};
+    Check(
+        defaults.maximumTaskInstructionsWithoutSuspension == 65'536U
+            && defaults.maximumTaskOutputsWithoutSuspension == 4'096U
+            && defaults.maximumContinuouslyReadyQuanta == 16U
+            && defaults.continuouslyReadyBackoffNanoseconds == 1'000'000
+            && defaults.maximumOutputTransitionsPerInterval == 2'048U
+            && defaults.outputRateIntervalNanoseconds == 1'000'000'000
+            && !defaults.permitProcessLaunch,
+        "Phase 4 asynchronous safety capacities remain frozen");
+    const auto instructionProgram = Finalize(MakeInstructionBudgetStorage());
+    inputweaver::RuntimeCapacities instructionCapacities{};
+    instructionCapacities.maximumTaskInstructionsWithoutSuspension = 12U;
+    RuntimeHarness instructionHarness(instructionCapacities);
+    Check(
+        instructionHarness.runtime.Activate(instructionProgram).activated,
+        "instruction-budget fixture activates");
+    (void)instructionHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*instructionProgram),
+        inputweaver::Transition::Down));
+    (void)instructionHarness.runtime.Pump();
+    bool foundInstructionBudget = false;
+    inputweaver::RuntimeDiagnosticRecord diagnostic{};
+    while (instructionHarness.runtime.TryPopDiagnostic(diagnostic)) {
+        foundInstructionBudget = foundInstructionBudget
+            || (diagnostic.kind
+                    == inputweaver::RuntimeDiagnosticKind::TaskBudgetExceeded
+                && diagnostic.detail == 1U);
+    }
+    Check(
+        foundInstructionBudget
+            && instructionHarness.runtime.ActiveTaskCount() == 0U
+            && instructionHarness.runtime.Metrics().cancelledTasks == 1U
+            && !instructionHarness.runtime.FatalShutdownRequested(),
+        "zero-duration waits do not reset the task instruction budget");
+
+    inputweaver::CompiledProgramStorage zeroGapStorage =
+        MakeInstructionBudgetStorage();
+    zeroGapStorage.actionCode[2U] = {
+        inputweaver::ActionOpcode::Gap,
+        0U,
+        0U};
+    zeroGapStorage.settings.actionGap = {0};
+    zeroGapStorage.requirements = inputweaver::ComputeProgramRequirements(
+        zeroGapStorage);
+    const auto zeroGapProgram = Finalize(std::move(zeroGapStorage));
+    RuntimeHarness zeroGapHarness(instructionCapacities);
+    Check(
+        zeroGapHarness.runtime.Activate(zeroGapProgram).activated,
+        "zero-gap instruction-budget fixture activates");
+    (void)zeroGapHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*zeroGapProgram),
+        inputweaver::Transition::Down));
+    (void)zeroGapHarness.runtime.Pump();
+    Check(
+        zeroGapHarness.runtime.ActiveTaskCount() == 0U
+            && zeroGapHarness.runtime.Metrics().cancelledTasks == 1U,
+        "zero-duration action gap does not reset the instruction budget");
+
+    inputweaver::CompiledProgramStorage positiveWaitStorage =
+        MakeInstructionBudgetStorage();
+    positiveWaitStorage.numberConstants[0U] = 3.0;
+    positiveWaitStorage.durationConstants[0U] = {1};
+    positiveWaitStorage.requirements = inputweaver::ComputeProgramRequirements(
+        positiveWaitStorage);
+    const auto positiveWaitProgram = Finalize(std::move(positiveWaitStorage));
+    inputweaver::RuntimeCapacities positiveWaitCapacities{};
+    positiveWaitCapacities.maximumTaskInstructionsWithoutSuspension = 5U;
+    RuntimeHarness positiveWaitHarness(positiveWaitCapacities);
+    Check(
+        positiveWaitHarness.runtime.Activate(positiveWaitProgram).activated,
+        "positive-wait budget fixture activates");
+    (void)positiveWaitHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*positiveWaitProgram),
+        inputweaver::Transition::Down));
+    for (std::size_t iteration = 0U;
+         iteration < 10U
+            && positiveWaitHarness.runtime.ActiveTaskCount() != 0U;
+         ++iteration) {
+        (void)positiveWaitHarness.runtime.Pump();
+        positiveWaitHarness.clock.Advance(1);
+    }
+    (void)positiveWaitHarness.runtime.Pump();
+    Check(
+        positiveWaitHarness.runtime.Metrics().completedTasks == 1U
+            && positiveWaitHarness.runtime.Metrics().cancelledTasks == 0U,
+        "positive-duration suspension resets progress for a bounded long loop");
+
+    const auto outputProgram = Finalize(MakeOutputBudgetStorage());
+    inputweaver::RuntimeCapacities outputCapacities{};
+    outputCapacities.maximumTaskOutputsWithoutSuspension = 2U;
+    RuntimeHarness outputHarness(outputCapacities);
+    Check(
+        outputHarness.runtime.Activate(outputProgram).activated,
+        "output-budget fixture activates");
+    (void)outputHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*outputProgram),
+        inputweaver::Transition::Down));
+    (void)outputHarness.runtime.Pump();
+    bool foundOutputBudget = false;
+    while (outputHarness.runtime.TryPopDiagnostic(diagnostic)) {
+        foundOutputBudget = foundOutputBudget
+            || (diagnostic.kind
+                    == inputweaver::RuntimeDiagnosticKind::TaskBudgetExceeded
+                && diagnostic.detail == 2U);
+    }
+    Check(
+        foundOutputBudget
+            && outputHarness.output.requests.size() == 4U
+            && outputHarness.runtime.ActiveTaskCount() == 0U
+            && outputHarness.runtime.Metrics().cancelledTasks == 1U
+            && !outputHarness.runtime.HasOwnedOutputs(),
+        "task output exhaustion cancels only its owner and preserves releases");
+
+    inputweaver::RuntimeCapacities schedulerCapacities{};
+    schedulerCapacities.maximumTaskInstructionsWithoutSuspension = 1'000'000U;
+    schedulerCapacities.maximumContinuouslyReadyQuanta = 1U;
+    schedulerCapacities.continuouslyReadyBackoffNanoseconds = 5'000'000;
+    RuntimeHarness schedulerHarness(schedulerCapacities);
+    Check(
+        schedulerHarness.runtime.Activate(instructionProgram).activated
+            && schedulerHarness.runtime.StartTaskThread(),
+        "scheduler-backoff fixture starts");
+    (void)schedulerHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*instructionProgram),
+        inputweaver::Transition::Down));
+    for (std::size_t attempt = 0U;
+         attempt < 100U
+            && schedulerHarness.runtime.Metrics().schedulerBackoffs == 0U;
+         ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    schedulerHarness.runtime.StopTaskThread();
+    Check(
+        schedulerHarness.runtime.Metrics().schedulerBackoffs != 0U,
+        "continuously ready work enters bounded scheduler backoff");
+    schedulerHarness.runtime.RequestShutdown();
+    (void)schedulerHarness.runtime.Pump();
+
+    const auto manyReadyProgram = Finalize(MakeManyReadyTasksStorage());
+    inputweaver::RuntimeCapacities manyReadyCapacities{};
+    manyReadyCapacities.taskSlotCount = 16U;
+    manyReadyCapacities.maximumTaskInstructionsWithoutSuspension = 1'000'000U;
+    manyReadyCapacities.maximumContinuouslyReadyQuanta = 1U;
+    manyReadyCapacities.continuouslyReadyBackoffNanoseconds = 5'000'000;
+    RuntimeHarness manyReadyHarness(manyReadyCapacities);
+    Check(
+        manyReadyHarness.runtime.Activate(manyReadyProgram).activated
+            && manyReadyHarness.runtime.StartTaskThread(),
+        "maximum configured ready-task fixture starts");
+    const std::uint32_t readyTrigger = TriggerControl(*manyReadyProgram);
+    Check(
+        manyReadyHarness.runtime.HandleInput(KeyboardEvent(
+            readyTrigger,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "maximum configured ready tasks commit atomically");
+    for (std::size_t attempt = 0U;
+         attempt < 100U
+            && manyReadyHarness.runtime.Metrics().schedulerBackoffs == 0U;
+         ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    inputweaver::RuntimeInputEvent forceStop = KeyboardEvent(
+        readyTrigger,
+        inputweaver::Transition::Up);
+    forceStop.forceStopRequested = true;
+    Check(
+        manyReadyHarness.runtime.HandleInput(forceStop)
+            == inputweaver::InputDecision::Suppress,
+        "force stop interrupts maximum continuously ready work");
+    for (std::size_t attempt = 0U;
+         attempt < 100U
+            && manyReadyHarness.runtime.ActiveTaskCount() != 0U;
+         ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    manyReadyHarness.runtime.StopTaskThread();
+    (void)manyReadyHarness.runtime.Pump();
+    Check(
+        manyReadyHarness.runtime.Metrics().schedulerBackoffs != 0U
+            && manyReadyHarness.runtime.ActiveTaskCount() == 0U
+            && manyReadyHarness.runtime.Metrics().cancelledTasks == 16U,
+        "scheduler backoff remains responsive to force-stop cancellation");
+}
+
+void TestMaximumSynchronousDispatch()
+{
+    const inputweaver::RuntimeCapacities defaults{};
+    Check(
+        defaults.maximumPauseRulesPerEvent == 64U
+            && defaults.maximumRulesPerEvent == 256U
+            && defaults.maximumPredicateStepsPerEvent == 4096U
+            && defaults.maximumMappingOperationsPerEvent == 64U,
+        "Phase 4 synchronous safety capacities remain frozen");
+    const auto program = Finalize(MakeMaximumDispatchStorage());
+    Check(
+        program->Requirements().maximumRulesPerEvent
+                == defaults.maximumRulesPerEvent
+            && program->Requirements().maximumPredicateStepsPerEvent
+                == defaults.maximumPredicateStepsPerEvent,
+        "worst-case fixture derives the frozen rule and predicate limits");
+    RuntimeHarness harness;
+    Check(
+        harness.runtime.Activate(program).activated,
+        "worst-case synchronous fixture activates at exact limits");
+    Check(
+        harness.runtime.HandleInput(KeyboardEvent(
+            TriggerControl(*program),
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Forward
+            && harness.runtime.Metrics().dispatchedEvents == 1U
+            && !harness.runtime.FatalShutdownRequested(),
+        "worst-case accepted event completes within its derived predicate work");
 }
 
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeNestedRepeatStorage()
@@ -980,19 +1429,23 @@ void TestConcurrentStateLocks()
     const std::uint32_t trigger = TriggerControl(*program);
     constexpr std::size_t taskCount = 128U;
     bool decisionsValid = true;
+    std::size_t acceptedTasks = 0U;
     for (std::size_t index = 0U; index < taskCount; ++index) {
+        const inputweaver::InputDecision decision = harness.runtime.HandleInput(
+            KeyboardEvent(trigger, inputweaver::Transition::Down));
         decisionsValid = decisionsValid
-            && harness.runtime.HandleInput(KeyboardEvent(
-                trigger,
-                inputweaver::Transition::Down))
-                == inputweaver::InputDecision::Suppress;
+            && (decision == inputweaver::InputDecision::Suppress
+                || decision == inputweaver::InputDecision::Forward);
+        if (decision == inputweaver::InputDecision::Suppress) {
+            ++acceptedTasks;
+        }
         (void)harness.runtime.HandleInput(KeyboardEvent(
             trigger,
             inputweaver::Transition::Up));
     }
     for (std::size_t attempt = 0U;
          attempt < 200U
-            && harness.runtime.Metrics().completedTasks < taskCount;
+            && harness.runtime.Metrics().completedTasks < acceptedTasks;
          ++attempt) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -1002,19 +1455,20 @@ void TestConcurrentStateLocks()
     bool finalValue = true;
     Check(
         decisionsValid
-            && harness.runtime.Metrics().completedTasks == taskCount
+            && acceptedTasks != 0U
+            && harness.runtime.Metrics().completedTasks == acceptedTasks
             && harness.runtime.ReadUserState(0U, finalValue)
-            && !finalValue
+            && finalValue == ((acceptedTasks % 2U) != 0U)
             && readerPasses.load(std::memory_order_relaxed) != 0U
             && !harness.runtime.FatalShutdownRequested(),
-        "blocking state locks preserve every event decision and exclusive toggle");
+        "nonblocking hook locks fail open while accepted toggles remain deterministic");
 }
 
 void TestExecCancellationBoundaries()
 {
     const auto program = Finalize(MakeActionFixtureStorage());
     const std::uint32_t trigger = TriggerControl(*program);
-    RuntimeHarness cancelledBefore;
+    RuntimeHarness cancelledBefore(ProcessLaunchCapacities());
     Check(
         cancelledBefore.runtime.Activate(program).activated,
         "pre-launch cancellation fixture activates");
@@ -1027,7 +1481,7 @@ void TestExecCancellationBoundaries()
         cancelledBefore.launcher.commands.empty(),
         "cancellation before task execution prevents process creation");
 
-    RuntimeHarness cancelledAfter;
+    RuntimeHarness cancelledAfter(ProcessLaunchCapacities());
     Check(
         cancelledAfter.runtime.Activate(program).activated,
         "post-launch cancellation fixture activates");
@@ -1048,7 +1502,7 @@ void TestExecCancellationBoundaries()
         cancelledAfter.launcher.commands.size() == 1U,
         "cancellation after creation does not acquire or terminate child ownership");
 
-    RuntimeHarness failedLaunch;
+    RuntimeHarness failedLaunch(ProcessLaunchCapacities());
     failedLaunch.launcher.result = inputweaver::RuntimeLaunchResult::CreationFailed;
     Check(
         failedLaunch.runtime.Activate(program).activated,
@@ -1365,6 +1819,8 @@ void TestActivationAndTransientCapacity()
     const auto mapping = Finalize(inputweaver::test::MakeMappingFixtureStorage());
     const auto repeat = Finalize(
         inputweaver::test::MakeConditionalRepeatFixtureStorage());
+    const auto pause = Finalize(
+        inputweaver::test::MakePauseControlFixtureStorage());
     const auto actions = Finalize(MakeActionFixtureStorage());
     const auto checkCapacityRejection = [](
                                             inputweaver::RuntimeCapacities capacities,
@@ -1397,6 +1853,38 @@ void TestActivationAndTransientCapacity()
         mapping,
         inputweaver::RuntimeActivationErrorCode::MappingCapacity,
         "mapping capacity rejects activation before publication");
+    inputweaver::RuntimeCapacities pauseRuleCapacity{};
+    pauseRuleCapacity.maximumPauseRulesPerEvent =
+        pause->Requirements().maximumPauseRulesPerEvent - 1U;
+    checkCapacityRejection(
+        pauseRuleCapacity,
+        pause,
+        inputweaver::RuntimeActivationErrorCode::PauseRuleCapacity,
+        "pause-rule hook-path capacity rejects activation");
+    inputweaver::RuntimeCapacities ruleCapacity{};
+    ruleCapacity.maximumRulesPerEvent =
+        tap->Requirements().maximumRulesPerEvent - 1U;
+    checkCapacityRejection(
+        ruleCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::RuleCapacity,
+        "ordinary-rule hook-path capacity rejects activation");
+    inputweaver::RuntimeCapacities predicateCapacity{};
+    predicateCapacity.maximumPredicateStepsPerEvent =
+        repeat->Requirements().maximumPredicateStepsPerEvent - 1U;
+    checkCapacityRejection(
+        predicateCapacity,
+        repeat,
+        inputweaver::RuntimeActivationErrorCode::PredicateStepCapacity,
+        "predicate-step hook-path capacity rejects activation");
+    inputweaver::RuntimeCapacities mappingOperationCapacity{};
+    mappingOperationCapacity.maximumMappingOperationsPerEvent =
+        mapping->Requirements().maximumMappingOperationsPerEvent - 1U;
+    checkCapacityRejection(
+        mappingOperationCapacity,
+        mapping,
+        inputweaver::RuntimeActivationErrorCode::MappingOperationCapacity,
+        "mapping-operation hook-path capacity rejects activation");
     inputweaver::RuntimeCapacities expressionCapacity{};
     expressionCapacity.maximumExpressionStackDepth = 1U;
     checkCapacityRejection(
@@ -1439,6 +1927,48 @@ void TestActivationAndTransientCapacity()
         tap,
         inputweaver::RuntimeActivationErrorCode::DiagnosticCapacity,
         "diagnostic capacity rejects activation before publication");
+    inputweaver::RuntimeCapacities instructionBudget{};
+    instructionBudget.maximumTaskInstructionsWithoutSuspension = 0U;
+    checkCapacityRejection(
+        instructionBudget,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::TaskInstructionCapacity,
+        "zero task instruction budget rejects activation");
+    inputweaver::RuntimeCapacities outputBudget{};
+    outputBudget.maximumTaskOutputsWithoutSuspension = 0U;
+    checkCapacityRejection(
+        outputBudget,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::TaskOutputCapacity,
+        "zero task output budget rejects activation");
+    inputweaver::RuntimeCapacities schedulerCapacity{};
+    schedulerCapacity.maximumContinuouslyReadyQuanta = 0U;
+    checkCapacityRejection(
+        schedulerCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::SchedulerCapacity,
+        "invalid scheduler backoff capacity rejects activation");
+    inputweaver::RuntimeCapacities schedulerDurationCapacity{};
+    schedulerDurationCapacity.continuouslyReadyBackoffNanoseconds = 0;
+    checkCapacityRejection(
+        schedulerDurationCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::SchedulerCapacity,
+        "nonpositive scheduler backoff duration rejects activation");
+    inputweaver::RuntimeCapacities outputRateCapacity{};
+    outputRateCapacity.maximumOutputTransitionsPerInterval = 0U;
+    checkCapacityRejection(
+        outputRateCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::OutputRateCapacity,
+        "invalid output rate capacity rejects activation");
+    inputweaver::RuntimeCapacities outputRateIntervalCapacity{};
+    outputRateIntervalCapacity.outputRateIntervalNanoseconds = 0;
+    checkCapacityRejection(
+        outputRateIntervalCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::OutputRateCapacity,
+        "nonpositive output-rate interval rejects activation");
     inputweaver::RuntimeCapacities launchPolicy{};
     launchPolicy.permitProcessLaunch = false;
     checkCapacityRejection(
@@ -1446,6 +1976,34 @@ void TestActivationAndTransientCapacity()
         actions,
         inputweaver::RuntimeActivationErrorCode::ProcessLaunchDenied,
         "process policy rejects exec program before publication");
+
+    inputweaver::RuntimeCapacities exactPause{};
+    exactPause.maximumPauseRulesPerEvent =
+        pause->Requirements().maximumPauseRulesPerEvent;
+    RuntimeHarness exactPauseHarness(exactPause);
+    Check(
+        exactPauseHarness.runtime.Activate(pause).activated,
+        "pause-rule requirement is accepted at the exact capacity");
+    inputweaver::RuntimeCapacities exactRule{};
+    exactRule.maximumRulesPerEvent = tap->Requirements().maximumRulesPerEvent;
+    RuntimeHarness exactRuleHarness(exactRule);
+    Check(
+        exactRuleHarness.runtime.Activate(tap).activated,
+        "ordinary-rule requirement is accepted at the exact capacity");
+    inputweaver::RuntimeCapacities exactPredicate{};
+    exactPredicate.maximumPredicateStepsPerEvent =
+        repeat->Requirements().maximumPredicateStepsPerEvent;
+    RuntimeHarness exactPredicateHarness(exactPredicate);
+    Check(
+        exactPredicateHarness.runtime.Activate(repeat).activated,
+        "predicate-step requirement is accepted at the exact capacity");
+    inputweaver::RuntimeCapacities exactMappingOperation{};
+    exactMappingOperation.maximumMappingOperationsPerEvent =
+        mapping->Requirements().maximumMappingOperationsPerEvent;
+    RuntimeHarness exactMappingOperationHarness(exactMappingOperation);
+    Check(
+        exactMappingOperationHarness.runtime.Activate(mapping).activated,
+        "mapping-operation requirement is accepted at the exact capacity");
 
     RuntimeHarness invalidTarget;
     invalidTarget.route.targetValid = false;
@@ -1553,7 +2111,9 @@ void TestArtifactLoading()
 
 void TestBoundedRuntimeStress()
 {
-    RuntimeHarness harness;
+    inputweaver::RuntimeCapacities capacities{};
+    capacities.maximumOutputTransitionsPerInterval = 8192U;
+    RuntimeHarness harness(capacities);
     const auto program = Finalize(inputweaver::test::MakeMappingFixtureStorage());
     Check(harness.runtime.Activate(program).activated, "mapping stress fixture activates");
     const std::uint32_t trigger = TriggerControl(*program);
@@ -1588,10 +2148,449 @@ void TestBoundedRuntimeStress()
         "bounded mapping transactions remain deterministic across stress cycles");
 }
 
+void TestReversibleTargetEligibility()
+{
+    inputweaver::CompiledProgramStorage mappingStorage =
+        inputweaver::test::MakeMappingFixtureStorage();
+    SelectExecutableTarget(mappingStorage);
+    const auto mapping = Finalize(std::move(mappingStorage));
+    RuntimeHarness mappingHarness;
+    Check(
+        mappingHarness.runtime.Activate(mapping).activated,
+        "target-eligibility mapping fixture activates");
+    const std::uint32_t source = TriggerControl(*mapping);
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "eligible target commits a mapping press");
+    (void)mappingHarness.runtime.Pump();
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "eligible target commits a mapping repeat");
+    (void)mappingHarness.runtime.Pump();
+    const std::uint64_t generation = mappingHarness.runtime.Generation();
+    mappingHarness.runtime.SetTargetEligible(false);
+    (void)mappingHarness.runtime.Pump();
+    Check(
+        !mappingHarness.runtime.TargetEligible()
+            && mappingHarness.runtime.Generation() == generation + 1U
+            && mappingHarness.output.requests.size() == 3U
+            && mappingHarness.output.requests[0].transition
+                == inputweaver::RuntimeOutputTransition::Down
+            && mappingHarness.output.requests[1].transition
+                == inputweaver::RuntimeOutputTransition::Repeat
+            && mappingHarness.output.requests[0].generation == generation
+            && mappingHarness.output.requests[1].generation == generation
+            && mappingHarness.output.requests[2].transition
+                == inputweaver::RuntimeOutputTransition::Up
+            && mappingHarness.output.requests[2].generation == generation + 1U
+            && !mappingHarness.runtime.HasActiveMappings()
+            && !mappingHarness.runtime.HasOwnedOutputs(),
+        "foreground loss cancels mapping ownership with one release");
+
+    mappingHarness.runtime.SetTargetEligible(true);
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Forward,
+        "held source repeat after foreground return does not remap");
+    (void)mappingHarness.runtime.Pump();
+    Check(
+        mappingHarness.output.requests.size() == 3U,
+        "foreground return synthesizes no mapping down");
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Up))
+                == inputweaver::InputDecision::Forward,
+        "held source release establishes a fresh lifecycle");
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "fresh source press remaps after foreground return");
+    (void)mappingHarness.runtime.Pump();
+    Check(
+        mappingHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Up))
+                == inputweaver::InputDecision::Suppress,
+        "fresh remap release remains consumed");
+    (void)mappingHarness.runtime.Pump();
+    Check(
+        mappingHarness.output.requests.size() == 5U
+            && !mappingHarness.runtime.HasOwnedOutputs(),
+        "fresh target-eligible mapping completes normally");
+
+    inputweaver::CompiledProgramStorage tapStorage =
+        inputweaver::test::MakeTapFixtureStorage();
+    SelectExecutableTarget(tapStorage);
+    const auto tap = Finalize(std::move(tapStorage));
+    RuntimeHarness taskHarness;
+    Check(
+        taskHarness.runtime.Activate(tap).activated,
+        "target-eligibility task fixture activates");
+    (void)taskHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*tap),
+        inputweaver::Transition::Down));
+    (void)taskHarness.runtime.Pump();
+    taskHarness.runtime.SetTargetEligible(false);
+    (void)taskHarness.runtime.Pump();
+    taskHarness.clock.Advance(100'000'000);
+    taskHarness.runtime.SetTargetEligible(true);
+    (void)taskHarness.runtime.Pump();
+    Check(
+        taskHarness.output.requests.size() == 2U
+            && taskHarness.output.requests[1].transition
+                == inputweaver::RuntimeOutputTransition::Up
+            && taskHarness.runtime.ActiveTaskCount() == 0U
+            && taskHarness.runtime.Metrics().cancelledTasks == 1U,
+        "foreground loss cancels timed tasks and blocks stale output");
+
+    RuntimeHarness transactionHarness;
+    Check(
+        transactionHarness.runtime.Activate(mapping).activated,
+        "target-transition transaction fixture activates");
+    std::atomic<bool> dispatchEntered{false};
+    std::atomic<bool> dispatchReleased{false};
+    transactionHarness.route.dispatchEntered = &dispatchEntered;
+    transactionHarness.route.dispatchReleased = &dispatchReleased;
+    std::atomic<inputweaver::InputDecision> racedDecision{
+        inputweaver::InputDecision::Suppress};
+    std::thread dispatchThread([&]() {
+        racedDecision.store(
+            transactionHarness.runtime.HandleInput(KeyboardEvent(
+                source,
+                inputweaver::Transition::Down)),
+            std::memory_order_release);
+    });
+    while (!dispatchEntered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    transactionHarness.runtime.SetTargetEligible(false);
+    transactionHarness.runtime.SetTargetEligible(true);
+    dispatchReleased.store(true, std::memory_order_release);
+    dispatchThread.join();
+    transactionHarness.route.dispatchEntered = nullptr;
+    transactionHarness.route.dispatchReleased = nullptr;
+    (void)transactionHarness.runtime.Pump();
+    Check(
+        racedDecision.load(std::memory_order_acquire)
+                == inputweaver::InputDecision::Forward
+            && transactionHarness.output.requests.empty()
+            && !transactionHarness.runtime.HasActiveMappings()
+            && !transactionHarness.runtime.HasOwnedOutputs(),
+        "foreground generation change aborts an in-flight event transaction");
+    Check(
+        transactionHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Up))
+                == inputweaver::InputDecision::Forward
+            && transactionHarness.runtime.HandleInput(KeyboardEvent(
+                source,
+                inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "aborted target transaction requires a fresh source lifecycle");
+    (void)transactionHarness.runtime.Pump();
+    (void)transactionHarness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Up));
+    (void)transactionHarness.runtime.Pump();
+
+    RuntimeHarness routeFailureHarness;
+    Check(
+        routeFailureHarness.runtime.Activate(mapping).activated,
+        "injection-route transition fixture activates");
+    const std::uint64_t routeGeneration =
+        routeFailureHarness.runtime.Generation();
+    Check(
+        routeFailureHarness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+            == inputweaver::InputDecision::Suppress,
+        "route transition queues an eligible mapping transaction");
+    routeFailureHarness.route.injectionAllowed = false;
+    (void)routeFailureHarness.runtime.Pump();
+    Check(
+        !routeFailureHarness.runtime.TargetEligible()
+            && routeFailureHarness.runtime.Generation() == routeGeneration + 1U
+            && routeFailureHarness.output.requests.empty()
+            && !routeFailureHarness.runtime.HasActiveMappings()
+            && !routeFailureHarness.runtime.HasOwnedOutputs(),
+        "injection-time route rejection enters reversible target ineligibility");
+    routeFailureHarness.route.injectionAllowed = true;
+    routeFailureHarness.runtime.SetTargetEligible(true);
+    (void)routeFailureHarness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Up));
+    (void)routeFailureHarness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Down));
+    (void)routeFailureHarness.runtime.Pump();
+    routeFailureHarness.runtime.NotifyTargetLost();
+    (void)routeFailureHarness.runtime.Pump();
+    Check(
+        routeFailureHarness.output.requests.size() == 2U
+            && routeFailureHarness.output.requests[0].transition
+                == inputweaver::RuntimeOutputTransition::Down
+            && routeFailureHarness.output.requests[1].transition
+                == inputweaver::RuntimeOutputTransition::Up
+            && !routeFailureHarness.runtime.HasOwnedOutputs()
+            && routeFailureHarness.runtime.HandleInput(KeyboardEvent(
+                source,
+                inputweaver::Transition::Up))
+                == inputweaver::InputDecision::Forward,
+        "terminal target loss releases ownership before disabling dispatch");
+}
+
+void TestMappingCancellationReleasePaths()
+{
+    const auto mapping = Finalize(
+        inputweaver::test::MakeMappingFixtureStorage());
+    const auto acquireMapping = [&mapping](RuntimeHarness& harness) {
+        const std::uint32_t source = TriggerControl(*mapping);
+        const bool consumed = harness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+            == inputweaver::InputDecision::Suppress;
+        (void)harness.runtime.Pump();
+        return consumed
+            && harness.output.requests.size() == 1U
+            && harness.output.requests[0].transition
+                == inputweaver::RuntimeOutputTransition::Down
+            && harness.runtime.HasOwnedOutputs();
+    };
+    const auto released = [](const RuntimeHarness& harness) {
+        return harness.output.requests.size() >= 2U
+            && harness.output.requests.back().transition
+                == inputweaver::RuntimeOutputTransition::Up
+            && !harness.runtime.HasActiveMappings()
+            && !harness.runtime.HasOwnedOutputs();
+    };
+
+    RuntimeHarness pauseHarness;
+    const auto pauseProgram = Finalize(MakeMappingPauseStorage());
+    Check(
+        pauseHarness.runtime.Activate(pauseProgram).activated,
+        "mapping PAUSE cancellation fixture activates");
+    const std::uint32_t pauseSource = TriggerControl(*pauseProgram);
+    (void)pauseHarness.runtime.HandleInput(KeyboardEvent(
+        pauseSource,
+        inputweaver::Transition::Down));
+    (void)pauseHarness.runtime.Pump();
+    Check(
+        pauseHarness.runtime.HandleInput(KeyboardEvent(
+            2U,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "PAUSE transition consumes its physical control");
+    (void)pauseHarness.runtime.Pump();
+    Check(
+        released(pauseHarness),
+        "PAUSE cancellation releases active mapping ownership");
+
+    RuntimeHarness forceStopHarness;
+    Check(
+        forceStopHarness.runtime.Activate(mapping).activated
+            && acquireMapping(forceStopHarness),
+        "mapping force-stop cancellation fixture acquires ownership");
+    inputweaver::RuntimeInputEvent forceStop = KeyboardEvent(
+        TriggerControl(*mapping),
+        inputweaver::Transition::Up);
+    forceStop.forceStopRequested = true;
+    Check(
+        forceStopHarness.runtime.HandleInput(forceStop)
+            == inputweaver::InputDecision::Suppress,
+        "physical force stop is accepted during mapping ownership");
+    (void)forceStopHarness.runtime.Pump();
+    Check(
+        released(forceStopHarness),
+        "physical force stop releases active mapping ownership");
+
+    RuntimeHarness failureHarness;
+    Check(
+        failureHarness.runtime.Activate(mapping).activated
+            && acquireMapping(failureHarness),
+        "mapping runtime-failure cancellation fixture acquires ownership");
+    failureHarness.output.nextResult = inputweaver::RuntimeOutputResult::Failed;
+    (void)failureHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*mapping),
+        inputweaver::Transition::Down));
+    (void)failureHarness.runtime.Pump();
+    Check(
+        failureHarness.runtime.FatalShutdownRequested()
+            && failureHarness.output.requests.size() == 3U
+            && released(failureHarness),
+        "runtime output failure releases active mapping ownership");
+
+    RuntimeHarness shutdownHarness;
+    Check(
+        shutdownHarness.runtime.Activate(mapping).activated
+            && acquireMapping(shutdownHarness),
+        "mapping shutdown cancellation fixture acquires ownership");
+    shutdownHarness.runtime.RequestShutdown();
+    (void)shutdownHarness.runtime.Pump();
+    Check(
+        released(shutdownHarness),
+        "normal shutdown releases active mapping ownership");
+}
+
+void TestPhysicalStateInitialization()
+{
+    const auto mapping = Finalize(
+        inputweaver::test::MakeMappingFixtureStorage());
+    const std::uint32_t source = TriggerControl(*mapping);
+    RuntimeHarness seeded;
+    Check(
+        seeded.runtime.Activate(mapping).activated
+            && seeded.runtime.SeedPhysicalState(
+                inputweaver::ControlRefId{source},
+                true),
+        "startup-held mapping source is seeded");
+    Check(
+        seeded.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Forward,
+        "startup-held source repeat cannot create a mapping");
+    (void)seeded.runtime.Pump();
+    Check(seeded.output.requests.empty(), "physical-state seeding publishes no output");
+    (void)seeded.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Up));
+    Check(
+        seeded.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "fresh press after seeded release dispatches");
+    (void)seeded.runtime.Pump();
+
+    RuntimeHarness unsynchronized;
+    Check(
+        unsynchronized.runtime.Activate(mapping).activated
+            && unsynchronized.runtime.MarkPhysicalStateUnsynchronized(
+                inputweaver::ControlRefId{source}),
+        "unqueryable event source starts unsynchronized");
+    Check(
+        unsynchronized.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Forward
+            && unsynchronized.runtime.HandleInput(KeyboardEvent(
+                source,
+                inputweaver::Transition::Up))
+                == inputweaver::InputDecision::Forward,
+        "unsynchronized source forwards through its first release");
+    Check(
+        unsynchronized.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "release synchronizes the next fresh source press");
+
+    const auto physicalExpression = Finalize(MakeExpressionFixtureStorage());
+    RuntimeHarness missingInitialState;
+    missingInitialState.controls.rejectPhysicalState = true;
+    Check(
+        missingInitialState.runtime.Activate(physicalExpression).error.code
+            == inputweaver::RuntimeActivationErrorCode::MissingControlCapability,
+        "physical-state requirement rejects an unqueryable backend control");
+}
+
+void TestOutputRateBudget()
+{
+    inputweaver::RuntimeCapacities capacities{};
+    capacities.maximumOutputTransitionsPerInterval = 1U;
+    capacities.outputRateIntervalNanoseconds = 1'000'000'000;
+    RuntimeHarness harness(capacities);
+    const auto mapping = Finalize(
+        inputweaver::test::MakeMappingFixtureStorage());
+    const std::uint32_t source = TriggerControl(*mapping);
+    Check(harness.runtime.Activate(mapping).activated, "output-rate fixture activates");
+    (void)harness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Down));
+    (void)harness.runtime.Pump();
+    (void)harness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Down));
+    (void)harness.runtime.Pump();
+    bool foundRateLimit = false;
+    inputweaver::RuntimeDiagnosticRecord diagnostic{};
+    while (harness.runtime.TryPopDiagnostic(diagnostic)) {
+        foundRateLimit = foundRateLimit
+            || diagnostic.kind
+                == inputweaver::RuntimeDiagnosticKind::OutputRateExceeded;
+    }
+    Check(
+        foundRateLimit
+            && harness.output.requests.size() == 2U
+            && harness.output.requests[0].transition
+                == inputweaver::RuntimeOutputTransition::Down
+            && harness.output.requests[1].transition
+                == inputweaver::RuntimeOutputTransition::Up
+            && !harness.runtime.HasOwnedOutputs(),
+        "mapping rate exhaustion cancels ownership but exempts its release");
+    (void)harness.runtime.HandleInput(KeyboardEvent(
+        source,
+        inputweaver::Transition::Up));
+    harness.clock.Advance(1'000'000'000);
+    Check(
+        harness.runtime.HandleInput(KeyboardEvent(
+            source,
+            inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "mapping can resume after the output rate window resets");
+    (void)harness.runtime.Pump();
+    Check(
+        harness.output.requests.size() == 3U
+            && harness.output.requests[2].transition
+                == inputweaver::RuntimeOutputTransition::Down,
+        "reset output window admits a fresh down transition");
+
+    inputweaver::RuntimeCapacities taskCapacities{};
+    taskCapacities.maximumOutputTransitionsPerInterval = 1U;
+    taskCapacities.outputRateIntervalNanoseconds = 1'000'000'000;
+    RuntimeHarness taskHarness(taskCapacities);
+    const auto taskProgram = Finalize(MakeOutputBudgetStorage());
+    Check(
+        taskHarness.runtime.Activate(taskProgram).activated,
+        "task output-rate fixture activates");
+    const std::uint64_t taskGeneration = taskHarness.runtime.Generation();
+    (void)taskHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*taskProgram),
+        inputweaver::Transition::Down));
+    (void)taskHarness.runtime.Pump();
+    bool foundTaskRateLimit = false;
+    while (taskHarness.runtime.TryPopDiagnostic(diagnostic)) {
+        foundTaskRateLimit = foundTaskRateLimit
+            || diagnostic.kind
+                == inputweaver::RuntimeDiagnosticKind::OutputRateExceeded;
+    }
+    Check(
+        foundTaskRateLimit
+            && taskHarness.runtime.Generation() == taskGeneration
+            && taskHarness.runtime.Metrics().cancelledTasks == 1U
+            && taskHarness.output.requests.size() == 2U
+            && !taskHarness.runtime.HasOwnedOutputs(),
+        "global output rate exhaustion cancels only the producing task");
+}
+
 void TestRoutingFailureAndForceStop()
 {
     RuntimeHarness harness;
-    const auto tap = Finalize(inputweaver::test::MakeTapFixtureStorage());
+    inputweaver::CompiledProgramStorage tapStorage =
+        inputweaver::test::MakeTapFixtureStorage();
+    SelectExecutableTarget(tapStorage);
+    const auto tap = Finalize(std::move(tapStorage));
     const std::uint32_t trigger = TriggerControl(*tap);
     Check(harness.runtime.Activate(tap).activated, "routing test program activates");
     harness.route.dispatchAllowed = false;
@@ -1599,9 +2598,12 @@ void TestRoutingFailureAndForceStop()
     Check(
         harness.runtime.HandleInput(KeyboardEvent(trigger, inputweaver::Transition::Down))
                 == inputweaver::InputDecision::Forward
-            && harness.runtime.Generation() == generation + 1U,
-        "target routing rejection forwards input and invalidates execution");
+            && harness.runtime.Generation() == generation + 1U
+            && !harness.runtime.TargetEligible()
+            && harness.runtime.HasActiveProgram(),
+        "keyboard dispatch rejection enters reversible target ineligibility");
     harness.route.dispatchAllowed = true;
+    harness.runtime.SetTargetEligible(true);
     inputweaver::RuntimeInputEvent stop = KeyboardEvent(
         trigger,
         inputweaver::Transition::Up);
@@ -1619,6 +2621,7 @@ void TestRoutingFailureAndForceStop()
 
 int main()
 {
+    TestEffectiveTargetOverride();
     TestTapFixture();
     TestMappingFixture();
     TestConditionalRepeatFixture();
@@ -1627,6 +2630,8 @@ int main()
     TestExpressionVm();
     TestArrowFlowAndOverlappingOwnership();
     TestActionVm();
+    TestTaskProgressBudgets();
+    TestMaximumSynchronousDispatch();
     TestNestedRepeatScheduling();
     TestConcurrentStateLocks();
     TestExecCancellationBoundaries();
@@ -1637,13 +2642,17 @@ int main()
     TestActivationAndTransientCapacity();
     TestArtifactLoading();
     TestBoundedRuntimeStress();
+    TestReversibleTargetEligibility();
+    TestMappingCancellationReleasePaths();
+    TestPhysicalStateInitialization();
+    TestOutputRateBudget();
     TestRoutingFailureAndForceStop();
     TestProductionTaskThread();
 
     if (g_failureCount != 0) {
-        std::cerr << g_failureCount << " Phase 3 runtime test(s) failed.\n";
+        std::cerr << g_failureCount << " Phase 4 runtime test(s) failed.\n";
         return 1;
     }
-    std::cout << "All Phase 3 runtime core tests passed.\n";
+    std::cout << "All Phase 4 runtime core tests passed.\n";
     return 0;
 }

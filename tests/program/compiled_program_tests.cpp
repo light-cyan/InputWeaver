@@ -596,6 +596,18 @@ void TestWeavecRejection()
     }
     {
         auto bytes = valid;
+        constexpr std::size_t maximumRulesOffset =
+            kWeavecHeaderSize + 16U + 29U + (5U * 4U);
+        bytes[maximumRulesOffset] = 0U;
+        const auto result = DecodeWeavec(bytes);
+        Check(!result.decodeError.has_value() && result.program == nullptr
+                && HasError(
+                    result.validationErrors,
+                    ProgramValidationErrorCode::Requirements),
+            "serialized synchronous requirement cannot understate hook-path work");
+    }
+    {
+        auto bytes = valid;
         constexpr std::size_t maximumTasksOffset =
             kWeavecHeaderSize + 16U + 29U + (7U * 4U);
         bytes[maximumTasksOffset] = 0U;
@@ -846,11 +858,41 @@ void TestCorruptMappingLink()
 
 void TestCorruptRequirements()
 {
-    auto storage = inputweaver::test::MakeTapFixtureStorage();
-    ++storage.requirements.maximumTasksPerEvent;
-    const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
-    Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
-        "requirements mismatch is diagnosed");
+    {
+        auto storage = inputweaver::test::MakeTapFixtureStorage();
+        ++storage.requirements.maximumTasksPerEvent;
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
+            "task requirement mismatch is diagnosed");
+    }
+    {
+        auto storage = inputweaver::test::MakePauseControlFixtureStorage();
+        --storage.requirements.maximumPauseRulesPerEvent;
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
+            "pause-rule requirement mismatch is diagnosed");
+    }
+    {
+        auto storage = inputweaver::test::MakeTapFixtureStorage();
+        --storage.requirements.maximumRulesPerEvent;
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
+            "ordinary-rule requirement mismatch is diagnosed");
+    }
+    {
+        auto storage = inputweaver::test::MakeConditionalRepeatFixtureStorage();
+        --storage.requirements.maximumPredicateStepsPerEvent;
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
+            "predicate-step requirement mismatch is diagnosed");
+    }
+    {
+        auto storage = inputweaver::test::MakeMappingFixtureStorage();
+        --storage.requirements.maximumMappingOperationsPerEvent;
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Requirements),
+            "mapping-operation requirement mismatch is diagnosed");
+    }
 }
 
 void TestCorruptDebugSpan()

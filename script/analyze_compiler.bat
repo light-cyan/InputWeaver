@@ -12,7 +12,9 @@ for %%F in (
     "src\compiler\semantics.cpp"
     "src\compiler\lowering.cpp"
     "src\compiler\compiler.cpp"
-    "src\compiler\compiler_cli.cpp"
+    "src\ui\cli\compiler_cli.cpp"
+    "src\platform\windows\compiler\artifact_file.cpp"
+    "src\platform\windows\cli\compiler_main.cpp"
 ) do (
     echo Analyzing %%~F...
     %INPUTWEAVER_CXX% %INPUTWEAVER_ANALYZE% "%%~F"

@@ -23,11 +23,19 @@ public:
     ProgramRuntime& operator=(const ProgramRuntime&) = delete;
 
     [[nodiscard]] RuntimeActivationResult Activate(
-        std::shared_ptr<const CompiledProgram> program);
+        std::shared_ptr<const CompiledProgram> program,
+        TargetSelectorKind targetKindOverride =
+            TargetSelectorKind::Unspecified);
     void Deactivate() noexcept;
 
     [[nodiscard]] InputDecision HandleInput(
         const RuntimeInputEvent& event) noexcept;
+    [[nodiscard]] bool SeedPhysicalState(
+        ControlRefId control,
+        bool down) noexcept;
+    [[nodiscard]] bool MarkPhysicalStateUnsynchronized(
+        ControlRefId control) noexcept;
+    void SetTargetEligible(bool eligible) noexcept;
     [[nodiscard]] RuntimePumpResult Pump(
         std::size_t maximumSlices = 1024U) noexcept;
 
@@ -37,6 +45,7 @@ public:
     void RequestShutdown() noexcept;
 
     [[nodiscard]] bool HasActiveProgram() const noexcept;
+    [[nodiscard]] bool TargetEligible() const noexcept;
     [[nodiscard]] bool PauseOn() const noexcept;
     [[nodiscard]] bool FatalShutdownRequested() const noexcept;
     [[nodiscard]] std::uint64_t Generation() const noexcept;

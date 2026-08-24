@@ -9,7 +9,9 @@ set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Ws
 
 echo [1/2] Building InputWeaverCompiler.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
-    "src\compiler\compiler_cli.cpp" ^
+    "src\platform\windows\cli\compiler_main.cpp" ^
+    "src\platform\windows\compiler\artifact_file.cpp" ^
+    "src\ui\cli\compiler_cli.cpp" ^
     "src\compiler\compiler.cpp" ^
     "src\compiler\source.cpp" ^
     "src\compiler\frontend.cpp" ^
@@ -28,6 +30,7 @@ echo [2/2] Building CompilerTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\compiler\compiler_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
+    "src\platform\windows\compiler\artifact_file.cpp" ^
     "src\compiler\compiler.cpp" ^
     "src\compiler\source.cpp" ^
     "src\compiler\frontend.cpp" ^

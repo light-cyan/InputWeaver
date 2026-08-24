@@ -46,6 +46,7 @@ struct ActivatedControl final {
     std::uint8_t capabilities{};
     DeviceKind device{DeviceKind::Keyboard};
     bool requiresPointerTarget{};
+    bool initialStateQueryable{};
 };
 
 enum class RuntimeControlBindResult : std::uint8_t {
@@ -109,8 +110,7 @@ class RuntimeRoutePort {
 public:
     virtual ~RuntimeRoutePort() = default;
     [[nodiscard]] virtual bool ValidateTarget(
-        TargetSelectorKind kind,
-        std::string_view selector) noexcept = 0;
+        TargetSelectorKind kind) noexcept = 0;
     [[nodiscard]] virtual bool TargetValid(
         TargetSelectorKind kind) noexcept
     {
@@ -171,13 +171,23 @@ struct RuntimeCapacities final {
     std::uint32_t maximumNumberSlots{4096U};
     std::uint32_t maximumDurationSlots{4096U};
     std::uint32_t maximumMappingSlots{4096U};
+    std::uint32_t maximumPauseRulesPerEvent{64U};
+    std::uint32_t maximumRulesPerEvent{256U};
+    std::uint32_t maximumPredicateStepsPerEvent{4096U};
+    std::uint32_t maximumMappingOperationsPerEvent{64U};
     std::uint32_t maximumExpressionStackDepth{1024U};
     std::uint32_t maximumRepeatFramesPerTask{256U};
     std::uint32_t maximumOwnedControlsPerTask{256U};
+    std::uint32_t maximumTaskInstructionsWithoutSuspension{65536U};
+    std::uint32_t maximumTaskOutputsWithoutSuspension{4096U};
+    std::uint32_t maximumContinuouslyReadyQuanta{16U};
+    std::int64_t continuouslyReadyBackoffNanoseconds{1'000'000LL};
+    std::uint32_t maximumOutputTransitionsPerInterval{2048U};
+    std::int64_t outputRateIntervalNanoseconds{1'000'000'000LL};
     std::uint32_t taskSlotCount{256U};
     std::uint32_t transactionQueueItemCount{1024U};
     std::uint32_t diagnosticRecordCount{256U};
-    bool permitProcessLaunch{true};
+    bool permitProcessLaunch{false};
 };
 
 enum class RuntimeActivationErrorCode : std::uint8_t {
@@ -186,9 +196,17 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     ControlCapacity,
     ValueCapacity,
     MappingCapacity,
+    PauseRuleCapacity,
+    RuleCapacity,
+    PredicateStepCapacity,
+    MappingOperationCapacity,
     ExpressionStackCapacity,
     RepeatFrameCapacity,
     OwnershipCapacity,
+    TaskInstructionCapacity,
+    TaskOutputCapacity,
+    SchedulerCapacity,
+    OutputRateCapacity,
     TaskCapacity,
     TransactionCapacity,
     DiagnosticCapacity,
@@ -215,6 +233,7 @@ struct RuntimeActivationResult final {
 enum class RuntimeCancellationReason : std::uint8_t {
     Pause,
     Reload,
+    TargetIneligible,
     TargetLoss,
     FatalFailure,
     ForceStop,
@@ -232,6 +251,10 @@ enum class RuntimeDiagnosticKind : std::uint8_t {
     OwnershipChange,
     MappingChange,
     Cancellation,
+    TargetEligibilityChange,
+    PhysicalStateSynchronization,
+    TaskBudgetExceeded,
+    OutputRateExceeded,
 };
 
 struct RuntimeDiagnosticRecord final {
@@ -255,6 +278,7 @@ struct RuntimeMetrics final {
     std::uint64_t transactionRejections{};
     std::uint64_t droppedDiagnostics{};
     std::uint64_t outputTransitions{};
+    std::uint64_t schedulerBackoffs{};
 };
 
 struct RuntimePumpResult final {

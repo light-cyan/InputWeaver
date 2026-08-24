@@ -1,9 +1,11 @@
-#include "platform/windows/input_injector.hpp"
-#include "platform/windows/process_context.hpp"
-#include "platform/windows/runtime_control_catalog.hpp"
-#include "platform/windows/runtime_process_launcher.hpp"
-#include "platform/windows/runtime_route_adapter.hpp"
+#include "platform/windows/runtime/compiled_target_resolver.hpp"
+#include "platform/windows/runtime/input_injector.hpp"
+#include "platform/windows/runtime/process_context.hpp"
+#include "platform/windows/runtime/runtime_control_catalog.hpp"
+#include "platform/windows/runtime/runtime_process_launcher.hpp"
+#include "platform/windows/runtime/runtime_route_adapter.hpp"
 #include "program/compiled_program.hpp"
+#include "program/program_validator.hpp"
 #include "runtime/action_queue.hpp"
 #include "runtime/program_runtime.hpp"
 #include "../program/compiled_program_fixtures.hpp"
@@ -219,6 +221,11 @@ void CheckSingleCatalogBinding(
         catalog.Binding(activated.backendToken);
     if (binding == nullptr) {
         return;
+    }
+    if (activated.device == inputweaver::DeviceKind::Keyboard) {
+        Check(
+            activated.initialStateQueryable && binding->initialStateQueryable,
+            "keyboard binding exposes initial-state query support");
     }
     inputweaver::InputEvent native{};
     native.device = activated.device;
@@ -453,6 +460,210 @@ void TestCatalogAmbiguityAndNormalization()
         "native F6 normalizes to its activated strong ID");
 }
 
+void TestKeyboardInitialStateCapabilities()
+{
+    using namespace inputweaver;
+    constexpr std::uint8_t inputAndState = static_cast<std::uint8_t>(
+        ToControlUseBits(ControlUse::EventSource)
+        | ToControlUseBits(ControlUse::PhysicalState));
+    win32::WindowsControlCatalog modifierCatalog;
+    modifierCatalog.BeginActivation();
+    ActivatedControl left{};
+    ActivatedControl right{};
+    Check(
+        modifierCatalog.BindControl(
+            ControlRefId{0U},
+            {kControlNamespaceUsbHid, 0x07U, 0xe0U, 0U},
+            inputAndState,
+            left) == RuntimeControlBindResult::Bound
+            && modifierCatalog.BindControl(
+                ControlRefId{1U},
+                {kControlNamespaceUsbHid, 0x07U, 0xe4U, 0U},
+                inputAndState,
+                right) == RuntimeControlBindResult::Bound,
+        "left and right modifiers stage as independent queryable controls");
+    modifierCatalog.CommitActivation();
+    const win32::WindowsControlBinding* const leftBinding =
+        modifierCatalog.Binding(left.backendToken);
+    const win32::WindowsControlBinding* const rightBinding =
+        modifierCatalog.Binding(right.backendToken);
+    Check(
+        leftBinding != nullptr
+            && rightBinding != nullptr
+            && leftBinding->virtualKey == VK_LCONTROL
+            && rightBinding->virtualKey == VK_RCONTROL
+            && leftBinding->initialStateQueryable
+            && rightBinding->initialStateQueryable,
+        "modifier initial-state recipes retain left-right identity");
+
+    std::uint32_t unqueryableScanCode = 0U;
+    for (std::uint32_t scanCode = 1U; scanCode <= 0xffU; ++scanCode) {
+        if (MapVirtualKeyW(scanCode, MAPVK_VSC_TO_VK_EX) == 0U) {
+            unqueryableScanCode = scanCode;
+            break;
+        }
+    }
+    Check(unqueryableScanCode != 0U, "Windows exposes an unqueryable scan-code identity");
+    if (unqueryableScanCode == 0U) {
+        return;
+    }
+    const ControlRef rawScan{
+        kControlNamespaceWindows,
+        kWindowsScanCodeFamily,
+        unqueryableScanCode,
+        kControlQualifierNone};
+    win32::WindowsControlCatalog eventCatalog;
+    eventCatalog.BeginActivation();
+    ActivatedControl eventOnly{};
+    Check(
+        eventCatalog.BindControl(
+            ControlRefId{0U},
+            rawScan,
+            ToControlUseBits(ControlUse::EventSource),
+            eventOnly) == RuntimeControlBindResult::Bound
+            && !eventOnly.initialStateQueryable,
+        "unqueryable raw scan code remains available as an unsynchronized event source");
+    eventCatalog.AbortActivation();
+    win32::WindowsControlCatalog stateCatalog;
+    stateCatalog.BeginActivation();
+    ActivatedControl physicalState{};
+    Check(
+        stateCatalog.BindControl(
+            ControlRefId{0U},
+            rawScan,
+            inputAndState,
+            physicalState) == RuntimeControlBindResult::MissingCapability,
+        "unqueryable raw scan code rejects physical-state requirements");
+    stateCatalog.AbortActivation();
+}
+
+void TestModifierStateSeeding()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.controls = {
+        {kControlNamespaceUsbHid, 0x07U, 0xe0U, 0U},
+        {kControlNamespaceUsbHid, 0x07U, 0xe4U, 0U},
+    };
+    storage.actionPrograms.clear();
+    storage.actionCode.clear();
+    storage.rules.clear();
+    storage.eventBuckets.clear();
+    storage.expressions = {
+        {{0U, 2U}, ExpressionType::Boolean, 1U, source},
+        {{2U, 2U}, ExpressionType::Boolean, 1U, source},
+    };
+    storage.expressionCode = {
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 1U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    };
+    storage.controlRequirements = {
+        {ControlRefId{0U}, ToControlUseBits(ControlUse::PhysicalState)},
+        {ControlRefId{1U}, ToControlUseBits(ControlUse::PhysicalState)},
+    };
+    storage.debugInfo.actionInstructionSpans.clear();
+    storage.debugInfo.expressionInstructionSpans.assign(4U, source);
+    storage.requirements = ComputeProgramRequirements(storage);
+    const auto program = Finalize(std::move(storage));
+    win32::WindowsControlCatalog catalog;
+    ActionQueue queue;
+    win32::WindowsRuntimeOutputPort output(
+        catalog,
+        0U,
+        &queue,
+        &win32::PublishRuntimeBatchToActionQueue);
+    win32::WindowsRuntimeRoutePort route(nullptr);
+    FakeClock clock;
+    NoLaunch launcher;
+    ProgramRuntime runtime({}, catalog, output, route, launcher, clock);
+    Check(
+        runtime.Activate(program).activated
+            && runtime.SeedPhysicalState(ControlRefId{0U}, true)
+            && runtime.SeedPhysicalState(ControlRefId{1U}, false),
+        "left and right modifier states seed before the first event");
+    const RuntimeEvaluationResult leftHeld = runtime.EvaluateExpression(
+        ExpressionId{0U});
+    const RuntimeEvaluationResult rightHeld = runtime.EvaluateExpression(
+        ExpressionId{1U});
+    Check(
+        leftHeld.Succeeded()
+            && leftHeld.value.booleanValue
+            && rightHeld.Succeeded()
+            && !rightHeld.value.booleanValue,
+        "seeded modifier held and idle predicates remain independent");
+}
+
+void TestCompiledTargetResolution()
+{
+    using namespace inputweaver;
+    TargetSelectorKind kind = TargetSelectorKind::Unspecified;
+    std::wstring selector;
+    std::wstring errorMessage;
+    const auto globalProgram = Finalize(test::MakeTapFixtureStorage());
+    if (globalProgram == nullptr) {
+        return;
+    }
+    Check(
+        win32::ResolveCompiledTarget(
+            *globalProgram, false, {}, kind, selector, errorMessage)
+            && kind == TargetSelectorKind::Global
+            && selector.empty(),
+        "compiled GLOBAL target is used when no command-line override exists");
+    Check(
+        win32::ResolveCompiledTarget(
+            *globalProgram, false, L"notepad.exe", kind, selector, errorMessage)
+            && kind == TargetSelectorKind::Executable
+            && selector == L"notepad.exe",
+        "command-line executable target overrides the compiled target");
+    Check(
+        win32::ResolveCompiledTarget(
+            *globalProgram, true, {}, kind, selector, errorMessage)
+            && kind == TargetSelectorKind::Global
+            && selector.empty(),
+        "--target-global overrides the compiled target");
+    Check(
+        win32::ResolveCompiledTarget(
+            *globalProgram, false, L"GLOBAL", kind, selector, errorMessage)
+            && kind == TargetSelectorKind::Executable
+            && selector == L"GLOBAL",
+        "--target values remain executable selectors without reserved words");
+    errorMessage.clear();
+    Check(
+        !win32::ResolveCompiledTarget(
+            *globalProgram, true, L"notepad.exe", kind, selector, errorMessage)
+            && !errorMessage.empty(),
+        "executable and global target overrides are mutually exclusive");
+
+    CompiledProgramStorage executableStorage = test::MakeTapFixtureStorage();
+    executableStorage.strings.push_back("notepad.exe");
+    executableStorage.settings.target.kind = TargetSelectorKind::Executable;
+    executableStorage.settings.target.text = StringId{1U};
+    const auto executableProgram = Finalize(std::move(executableStorage));
+    if (executableProgram != nullptr) {
+        Check(
+            win32::ResolveCompiledTarget(
+                *executableProgram, false, {}, kind, selector, errorMessage)
+                && kind == TargetSelectorKind::Executable
+                && selector == L"notepad.exe",
+            "compiled executable target is the default without an override");
+    }
+
+    CompiledProgramStorage unspecifiedStorage = test::MakeTapFixtureStorage();
+    unspecifiedStorage.settings.target = {};
+    const auto unspecifiedProgram = Finalize(std::move(unspecifiedStorage));
+    if (unspecifiedProgram != nullptr) {
+        errorMessage.clear();
+        Check(
+            !win32::ResolveCompiledTarget(
+                *unspecifiedProgram, false, {}, kind, selector, errorMessage)
+                && !errorMessage.empty(),
+            "missing compiled and command-line targets are rejected");
+    }
+}
+
 void TestRuntimeAdaptersAndForceStop()
 {
     using namespace inputweaver;
@@ -492,17 +703,18 @@ void TestRuntimeAdaptersAndForceStop()
     control.origin = InputOrigin::PhysicalCandidate;
     control.transition = Transition::Down;
     control.code = VK_LCONTROL;
-    Check(
-        runtime.HandleInput(inputAdapter.Normalize(control)) == InputDecision::Forward,
-        "unbound force-stop modifier is observed and forwarded");
     InputEvent shift = control;
     shift.code = VK_RSHIFT;
-    (void)runtime.HandleInput(inputAdapter.Normalize(shift));
     InputEvent f12 = control;
     f12.code = VK_F12;
+    win32::WindowsRuntimeInputAdapter startupSeedAdapter(catalog);
+    (void)startupSeedAdapter.Normalize(control);
+    (void)startupSeedAdapter.Normalize(shift);
+    const RuntimeInputEvent seededForceStop = startupSeedAdapter.Normalize(f12);
     Check(
-        runtime.HandleInput(inputAdapter.Normalize(f12)) == InputDecision::Suppress,
-        "physical Ctrl-Shift-F12 triggers force stop before program lookup");
+        seededForceStop.forceStopRequested
+            && runtime.HandleInput(seededForceStop) == InputDecision::Suppress,
+        "startup-seeded Ctrl-Shift state preserves physical F12 force stop");
     Check(
         runtime.HandleInput(inputAdapter.Normalize(f6)) == InputDecision::Forward,
         "force stop disables subsequent runtime transactions");
@@ -552,6 +764,14 @@ void TestExecutableResolutionAndCreateContract()
         "resolution failure is reported before process creation");
 
     g_createProcess = {};
+    WindowsProcessLauncher deniedLauncher(false, &FakeCreateProcessW);
+    Check(
+        !deniedLauncher.Permitted()
+            && deniedLauncher.Launch("cmd.exe /d /c echo denied", {})
+                == inputweaver::RuntimeLaunchResult::CreationFailed
+            && deniedLauncher.LastWin32Error() == ERROR_ACCESS_DISABLED_BY_POLICY
+            && g_createProcess.calls == 0U,
+        "denied process launcher never reaches native process creation");
     WindowsProcessLauncher fakeLauncher(true, &FakeCreateProcessW);
     Check(
         fakeLauncher.Launch("cmd.exe /d /c echo ready", {})
@@ -657,6 +877,9 @@ int main(int argc, char** argv)
 
     TestWindowsControlCatalogCoverage();
     TestCatalogAmbiguityAndNormalization();
+    TestKeyboardInitialStateCapabilities();
+    TestModifierStateSeeding();
+    TestCompiledTargetResolution();
     TestRuntimeAdaptersAndForceStop();
     TestExecutableResolutionAndCreateContract();
     TestChildWorkingDirectoryAndImmediateReturn();

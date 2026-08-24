@@ -4,6 +4,9 @@
 *.o
 *.obj
 
+# Example-local negative activation output
+/example/phase-4-safety/denied.jsonl
+
 # IDE and editor files
 .vscode/
 .idea/

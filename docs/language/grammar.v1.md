@@ -175,7 +175,7 @@ TARGET = "C:\\Games\\Example\\game.exe";
 TARGET = GLOBAL;
 ```
 
-`TARGET` 指定唯一目标程序。字符串可以是可执行文件名或绝对路径，`GLOBAL` 明确请求全局规则。命令行显式目标可以覆盖文件中的 `TARGET`；如果两处都没有目标，程序拒绝启动映射。
+`TARGET` 指定唯一目标程序。字符串可以是可执行文件名或绝对路径，`GLOBAL` 明确请求全局规则。执行器的 `--target <exe-name-or-absolute-path>` 可以覆盖为目标进程模式，`--target-global` 可以覆盖为全局模式，两个命令行选项互斥；如果两处都没有目标，程序拒绝启动映射。
 
 An executable `TARGET` string must be non-empty after escape decoding. Its non-empty decoded bytes are preserved without compiler-host path classification and are resolved by the selected platform during activation.
 
