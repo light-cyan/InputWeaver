@@ -90,13 +90,12 @@ all modules -> support only for domain-independent primitives
 
 ## Current Development
 
-- The current delivered stage is the completed compiler and runtime command-line interface recorded in `development/CompilerRuntimeCompletionHandoff.md`.
+- The current delivered stage is the compiler and runtime command-line interface with completed Phase 5 integrity hardening; its integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
 - `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
-- `development/phase-5-integrity-hardening/ProblemStatement.md` and `development/phase-5-integrity-hardening/ModificationPlan.md` own the current correctness, efficiency, redundancy, and internal-structure hardening work.
 - `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
-- Completed Phase 2, Phase 3, and Phase 4 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, and `development/legacy/phase-4-refactor/`.
+- Completed Phase 2, Phase 3, Phase 4, and Phase 5 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, `development/legacy/phase-4-refactor/`, and `development/legacy/phase-5-integrity-hardening/`.
 - Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_phase3.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices

@@ -750,15 +750,25 @@ void TestArtifactAndFileCommands()
         file << source;
     }
     const CompilerCommandResult validateResult = ValidateFile(sourcePath);
-    Check(validateResult.succeeded && validateResult.dump.empty(),
-        "ValidateFile accepts valid source without producing a dump");
+    Check(
+        validateResult.succeeded
+            && validateResult.dump.empty()
+            && validateResult.artifactByteLength == 0U,
+        "ValidateFile finalizes without encoding or formatting products");
     const CompilerCommandResult dumpResult = DumpFile(sourcePath);
-    Check(dumpResult.succeeded && !dumpResult.dump.empty(),
-        "DumpFile returns the deterministic dump for valid source");
+    Check(
+        dumpResult.succeeded
+            && !dumpResult.dump.empty()
+            && dumpResult.artifactByteLength == 0U,
+        "DumpFile formats one dump without encoding an artifact");
     const CompilerCommandResult compileResult = CompileFile(
         sourcePath,
         artifactPath);
-    Check(compileResult.succeeded, "CompileFile writes an artifact");
+    Check(
+        compileResult.succeeded
+            && compileResult.dump.empty()
+            && compileResult.artifactByteLength != 0U,
+        "CompileFile encodes one artifact without formatting a dump");
     Check(std::filesystem::exists(artifactPath), "CompileFile publishes destination");
     std::vector<char> previousBytes;
     {

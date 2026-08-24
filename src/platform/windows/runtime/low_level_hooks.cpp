@@ -18,8 +18,8 @@ std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
 [[nodiscard]] bool NormalizeKeyboardMessage(
     WPARAM message,
     const KBDLLHOOKSTRUCT& source,
-    SelfTag selfTag,
-    InputEvent& event) noexcept {
+    WindowsSelfTag selfTag,
+    WindowsNativeInputEvent& event) noexcept {
     switch (message) {
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
@@ -35,65 +35,65 @@ std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
 
     event.device = DeviceKind::Keyboard;
     event.origin = ClassifyKeyboard(source, selfTag);
-    event.code = static_cast<ControlCode>(source.vkCode);
-    event.scanCode = static_cast<ScanCode>(source.scanCode);
-    event.flags = static_cast<RawInputFlags>(source.flags);
-    event.timestamp = static_cast<InputTimestamp>(source.time);
-    event.extraInfo = static_cast<InputExtraInfo>(source.dwExtraInfo);
+    event.virtualKey = static_cast<WindowsVirtualKey>(source.vkCode);
+    event.scanCode = static_cast<WindowsScanCode>(source.scanCode);
+    event.hookFlags = static_cast<WindowsHookFlags>(source.flags);
+    event.timestamp = static_cast<WindowsInputTimestamp>(source.time);
+    event.extraInfo = static_cast<WindowsInputExtraInfo>(source.dwExtraInfo);
     return true;
 }
 
 [[nodiscard]] bool NormalizeMouseMessage(
     WPARAM message,
     const MSLLHOOKSTRUCT& source,
-    SelfTag selfTag,
-    InputEvent& event) noexcept {
+    WindowsSelfTag selfTag,
+    WindowsNativeInputEvent& event) noexcept {
     event.device = DeviceKind::Mouse;
     event.origin = ClassifyMouse(source, selfTag);
-    event.flags = static_cast<RawInputFlags>(source.flags);
-    event.mouseData = static_cast<MouseData>(source.mouseData);
+    event.hookFlags = static_cast<WindowsHookFlags>(source.flags);
+    event.mouseData = static_cast<WindowsMouseData>(source.mouseData);
     event.position = {
         static_cast<InputCoordinate>(source.pt.x),
         static_cast<InputCoordinate>(source.pt.y)};
-    event.timestamp = static_cast<InputTimestamp>(source.time);
-    event.extraInfo = static_cast<InputExtraInfo>(source.dwExtraInfo);
+    event.timestamp = static_cast<WindowsInputTimestamp>(source.time);
+    event.extraInfo = static_cast<WindowsInputExtraInfo>(source.dwExtraInfo);
 
     switch (message) {
         case WM_LBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = control::kMouseLeft;
+            event.virtualKey = VK_LBUTTON;
             return true;
         case WM_LBUTTONUP:
             event.transition = Transition::Up;
-            event.code = control::kMouseLeft;
+            event.virtualKey = VK_LBUTTON;
             return true;
         case WM_RBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = control::kMouseRight;
+            event.virtualKey = VK_RBUTTON;
             return true;
         case WM_RBUTTONUP:
             event.transition = Transition::Up;
-            event.code = control::kMouseRight;
+            event.virtualKey = VK_RBUTTON;
             return true;
         case WM_MBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = control::kMouseMiddle;
+            event.virtualKey = VK_MBUTTON;
             return true;
         case WM_MBUTTONUP:
             event.transition = Transition::Up;
-            event.code = control::kMouseMiddle;
+            event.virtualKey = VK_MBUTTON;
             return true;
         case WM_XBUTTONDOWN:
             event.transition = Transition::Down;
-            event.code = HIWORD(source.mouseData) == XBUTTON1
-                ? control::kMouseX1
-                : control::kMouseX2;
+            event.virtualKey = HIWORD(source.mouseData) == XBUTTON1
+                ? VK_XBUTTON1
+                : VK_XBUTTON2;
             return true;
         case WM_XBUTTONUP:
             event.transition = Transition::Up;
-            event.code = HIWORD(source.mouseData) == XBUTTON1
-                ? control::kMouseX1
-                : control::kMouseX2;
+            event.virtualKey = HIWORD(source.mouseData) == XBUTTON1
+                ? VK_XBUTTON1
+                : VK_XBUTTON2;
             return true;
         case WM_MOUSEMOVE:
             event.transition = Transition::Move;
@@ -112,7 +112,7 @@ std::atomic<LowLevelHooks*> gActiveHooks{nullptr};
 }  // namespace
 
 LowLevelHooks::LowLevelHooks(
-    SelfTag selfTag,
+    WindowsSelfTag selfTag,
     LowLevelInputSink& sink,
     TargetProcessContext* targetContext,
     StopRequest stopRequest,
@@ -247,7 +247,7 @@ LRESULT LowLevelHooks::HandleKeyboardHook(int code, WPARAM wParam, LPARAM lParam
         return CallNextHookEx(keyboardHook_, code, wParam, lParam);
     }
 
-    InputEvent event{};
+    WindowsNativeInputEvent event{};
     if (!NormalizeKeyboardMessage(wParam, *source, selfTag_, event)) {
         return CallNextHookEx(keyboardHook_, code, wParam, lParam);
     }
@@ -264,7 +264,7 @@ LRESULT LowLevelHooks::HandleMouseHook(int code, WPARAM wParam, LPARAM lParam) n
         return CallNextHookEx(mouseHook_, code, wParam, lParam);
     }
 
-    InputEvent event{};
+    WindowsNativeInputEvent event{};
     if (!NormalizeMouseMessage(wParam, *source, selfTag_, event)) {
         return CallNextHookEx(mouseHook_, code, wParam, lParam);
     }
@@ -392,7 +392,7 @@ void LowLevelHooks::ThreadMain() noexcept {
         }
     }
 
-    sink_.FlushDiagnostics(ReadPerformanceCounter());
+    sink_.FlushDiagnostics();
     if (foregroundHook_ != nullptr) {
         UnhookWinEvent(foregroundHook_);
         foregroundHook_ = nullptr;
@@ -414,30 +414,26 @@ void LowLevelHooks::ThreadMain() noexcept {
 }
 
 void LowLevelHooks::SeedObservedPhysicalState() noexcept {
-    struct KeyboardControlSeed final {
-        int virtualKey;
-        ControlCode control;
-    };
-    constexpr KeyboardControlSeed keyboardControls[] = {
-        {VK_F6, control::kF6},
-        {VK_F7, control::kF7},
-        {VK_F8, control::kF8},
-        {VK_F9, control::kF9},
-        {VK_F10, control::kF10},
-        {VK_F12, control::kF12},
-        {VK_LCONTROL, control::kLeftControl},
-        {VK_RCONTROL, control::kRightControl},
-        {VK_LSHIFT, control::kLeftShift},
-        {VK_RSHIFT, control::kRightShift}};
-    for (const KeyboardControlSeed& seed : keyboardControls) {
+    constexpr WindowsVirtualKey keyboardControls[] = {
+        VK_F6,
+        VK_F7,
+        VK_F8,
+        VK_F9,
+        VK_F10,
+        VK_F12,
+        VK_LCONTROL,
+        VK_RCONTROL,
+        VK_LSHIFT,
+        VK_RSHIFT};
+    for (const WindowsVirtualKey virtualKey : keyboardControls) {
         sink_.SeedPhysicalState(
             DeviceKind::Keyboard,
-            seed.control,
-            (GetAsyncKeyState(seed.virtualKey) & 0x8000) != 0);
+            virtualKey,
+            (GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000) != 0);
     }
     sink_.SeedPhysicalState(
         DeviceKind::Mouse,
-        control::kMouseMiddle,
+        VK_MBUTTON,
         (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
 }
 

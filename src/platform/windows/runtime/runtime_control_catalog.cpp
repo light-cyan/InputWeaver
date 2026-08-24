@@ -1,7 +1,5 @@
 #include "runtime_control_catalog.hpp"
 
-#include "runtime/action_queue.hpp"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -16,16 +14,17 @@ constexpr std::uint8_t kOutputCapabilities =
     ToControlUseBits(ControlUse::OutputDownUp)
     | ToControlUseBits(ControlUse::OutputRepeat);
 
-[[nodiscard]] ControlCode KeyboardUsageToVirtualKey(std::uint32_t usage) noexcept
+[[nodiscard]] WindowsVirtualKey KeyboardUsageToVirtualKey(
+    std::uint32_t usage) noexcept
 {
     if (usage >= 0x04U && usage <= 0x1dU) {
-        return static_cast<ControlCode>('A') + usage - 0x04U;
+        return static_cast<WindowsVirtualKey>('A') + usage - 0x04U;
     }
     if (usage >= 0x1eU && usage <= 0x26U) {
-        return static_cast<ControlCode>('1') + usage - 0x1eU;
+        return static_cast<WindowsVirtualKey>('1') + usage - 0x1eU;
     }
     if (usage == 0x27U) {
-        return static_cast<ControlCode>('0');
+        return static_cast<WindowsVirtualKey>('0');
     }
     if (usage >= 0x3aU && usage <= 0x45U) {
         return VK_F1 + usage - 0x3aU;
@@ -104,7 +103,8 @@ constexpr std::uint8_t kOutputCapabilities =
     }
 }
 
-[[nodiscard]] ControlCode ConsumerUsageToVirtualKey(std::uint32_t usage) noexcept
+[[nodiscard]] WindowsVirtualKey ConsumerUsageToVirtualKey(
+    std::uint32_t usage) noexcept
 {
     switch (usage) {
     case 0x00cdU:
@@ -126,7 +126,8 @@ constexpr std::uint8_t kOutputCapabilities =
     }
 }
 
-[[nodiscard]] ControlCode MouseUsageToVirtualKey(std::uint32_t usage) noexcept
+[[nodiscard]] WindowsVirtualKey MouseUsageToVirtualKey(
+    std::uint32_t usage) noexcept
 {
     switch (usage) {
     case 1U:
@@ -144,7 +145,7 @@ constexpr std::uint8_t kOutputCapabilities =
     }
 }
 
-[[nodiscard]] bool IsMouseVirtualKey(ControlCode virtualKey) noexcept
+[[nodiscard]] bool IsMouseVirtualKey(WindowsVirtualKey virtualKey) noexcept
 {
     return virtualKey == VK_LBUTTON
         || virtualKey == VK_RBUTTON
@@ -165,29 +166,81 @@ constexpr std::uint8_t kOutputCapabilities =
     return kControlQualifierNone;
 }
 
+[[nodiscard]] std::uint32_t NativeScanQualifier(
+    const WindowsNativeInputEvent& event) noexcept
+{
+    if ((event.hookFlags & LLKHF_EXTENDED) != 0U) {
+        return kWindowsScanCodeQualifierE0;
+    }
+    return event.virtualKey == VK_PAUSE && event.scanCode == 0x45U
+        ? kWindowsScanCodeQualifierE1
+        : kControlQualifierNone;
+}
+
 void FillKeyboardRecipe(
     WindowsControlBinding& binding,
-    ControlCode virtualKey) noexcept
+    WindowsVirtualKey virtualKey,
+    bool preserveVirtualKey) noexcept
 {
     binding.kind = WindowsControlKind::Keyboard;
     binding.virtualKey = virtualKey;
     const UINT scanCode = MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC_EX);
     binding.scanCode = scanCode & 0xffU;
     binding.scanQualifier = ScanQualifierFromMappedCode(scanCode);
+    binding.capabilities = kInputCapabilities;
+    if (preserveVirtualKey) {
+        binding.outputRecipe.kind = WindowsOutputKind::KeyboardVirtualKey;
+        binding.outputRecipe.virtualKey = virtualKey;
+    } else if (binding.scanCode != 0U
+        && binding.scanQualifier != kWindowsScanCodeQualifierE1) {
+        binding.outputRecipe.kind = WindowsOutputKind::KeyboardScanCode;
+        binding.outputRecipe.scanCode = binding.scanCode;
+        binding.outputRecipe.extendedScanCode = binding.scanQualifier
+            == kWindowsScanCodeQualifierE0;
+    } else {
+        binding.outputRecipe.kind = WindowsOutputKind::KeyboardVirtualKey;
+        binding.outputRecipe.virtualKey = virtualKey;
+    }
     binding.capabilities = static_cast<std::uint8_t>(
-        kInputCapabilities | kOutputCapabilities);
-    binding.layoutSensitive = virtualKey >= 0xbaU && virtualKey <= 0xe2U;
-    binding.exceptionalSequence = binding.scanQualifier
-        == kWindowsScanCodeQualifierE1;
+        binding.capabilities | kOutputCapabilities);
     binding.initialStateQueryable = virtualKey != 0U;
 }
 
 void FillMouseRecipe(
     WindowsControlBinding& binding,
-    ControlCode virtualKey) noexcept
+    WindowsVirtualKey virtualKey) noexcept
 {
     binding.kind = WindowsControlKind::MouseButton;
     binding.virtualKey = virtualKey;
+    binding.outputRecipe.kind = WindowsOutputKind::MouseButton;
+    binding.outputRecipe.virtualKey = virtualKey;
+    switch (virtualKey) {
+    case VK_LBUTTON:
+        binding.outputRecipe.mouseDownFlags = MOUSEEVENTF_LEFTDOWN;
+        binding.outputRecipe.mouseUpFlags = MOUSEEVENTF_LEFTUP;
+        break;
+    case VK_RBUTTON:
+        binding.outputRecipe.mouseDownFlags = MOUSEEVENTF_RIGHTDOWN;
+        binding.outputRecipe.mouseUpFlags = MOUSEEVENTF_RIGHTUP;
+        break;
+    case VK_MBUTTON:
+        binding.outputRecipe.mouseDownFlags = MOUSEEVENTF_MIDDLEDOWN;
+        binding.outputRecipe.mouseUpFlags = MOUSEEVENTF_MIDDLEUP;
+        break;
+    case VK_XBUTTON1:
+        binding.outputRecipe.mouseDownFlags = MOUSEEVENTF_XDOWN;
+        binding.outputRecipe.mouseUpFlags = MOUSEEVENTF_XUP;
+        binding.outputRecipe.mouseData = XBUTTON1;
+        break;
+    case VK_XBUTTON2:
+        binding.outputRecipe.mouseDownFlags = MOUSEEVENTF_XDOWN;
+        binding.outputRecipe.mouseUpFlags = MOUSEEVENTF_XUP;
+        binding.outputRecipe.mouseData = XBUTTON2;
+        break;
+    default:
+        binding.outputRecipe = {};
+        break;
+    }
     binding.capabilities = static_cast<std::uint8_t>(
         kInputCapabilities | kOutputCapabilities);
 }
@@ -247,6 +300,24 @@ void WindowsControlCatalog::CommitActivation() noexcept
 {
     committed_.swap(staged_);
     staged_.clear();
+    keyboardVirtualKeyIndex_.fill(ControlRefId{});
+    mouseVirtualKeyIndex_.fill(ControlRefId{});
+    for (auto& index : scanCodeIndex_) {
+        index.fill(ControlRefId{});
+    }
+    for (const WindowsControlBinding& binding : committed_) {
+        if (!RequiresInput(binding.requiredUses)) {
+            continue;
+        }
+        if (binding.kind == WindowsControlKind::MouseButton) {
+            mouseVirtualKeyIndex_[binding.virtualKey] = binding.control;
+        } else if (binding.matchByScanCode) {
+            scanCodeIndex_[binding.scanQualifier][binding.scanCode] =
+                binding.control;
+        } else {
+            keyboardVirtualKeyIndex_[binding.virtualKey] = binding.control;
+        }
+    }
 }
 
 void WindowsControlCatalog::AbortActivation() noexcept
@@ -261,12 +332,41 @@ const WindowsControlBinding* WindowsControlCatalog::Binding(
 }
 
 std::optional<ControlRefId> WindowsControlCatalog::Normalize(
-    const InputEvent& event) const noexcept
+    const WindowsNativeInputEvent& event) const noexcept
 {
-    for (const WindowsControlBinding& binding : committed_) {
-        if (RequiresInput(binding.requiredUses) && Matches(binding, event)) {
-            return binding.control;
-        }
+#ifdef INPUTWEAVER_TESTING
+    lastNormalizeVisitCount_ = 0U;
+#endif
+    if (event.virtualKey > 0xffU || event.scanCode > 0xffU) {
+        return std::nullopt;
+    }
+    if (event.device == DeviceKind::Mouse) {
+#ifdef INPUTWEAVER_TESTING
+        ++lastNormalizeVisitCount_;
+#endif
+        const ControlRefId control = mouseVirtualKeyIndex_[event.virtualKey];
+        return control.IsValid()
+            ? std::optional<ControlRefId>{control}
+            : std::nullopt;
+    }
+    if (event.device != DeviceKind::Keyboard) {
+        return std::nullopt;
+    }
+    const std::uint32_t qualifier = NativeScanQualifier(event);
+#ifdef INPUTWEAVER_TESTING
+    ++lastNormalizeVisitCount_;
+#endif
+    const ControlRefId scanControl = scanCodeIndex_[qualifier][event.scanCode];
+    if (scanControl.IsValid()) {
+        return scanControl;
+    }
+#ifdef INPUTWEAVER_TESTING
+    ++lastNormalizeVisitCount_;
+#endif
+    const ControlRefId virtualKeyControl =
+        keyboardVirtualKeyIndex_[event.virtualKey];
+    if (virtualKeyControl.IsValid()) {
+        return virtualKeyControl;
     }
     return std::nullopt;
 }
@@ -275,6 +375,13 @@ std::size_t WindowsControlCatalog::BindingCount() const noexcept
 {
     return committed_.size();
 }
+
+#ifdef INPUTWEAVER_TESTING
+std::size_t WindowsControlCatalog::LastNormalizeVisitCountForTesting() const noexcept
+{
+    return lastNormalizeVisitCount_;
+}
+#endif
 
 bool WindowsControlCatalog::Resolve(
     ControlRefId controlId,
@@ -285,15 +392,17 @@ bool WindowsControlCatalog::Resolve(
     if (control.namespaceId == kControlNamespaceUsbHid
         && control.qualifier == kControlQualifierNone) {
         if (control.familyId == 0x07U) {
-            const ControlCode virtualKey = KeyboardUsageToVirtualKey(control.code);
+            const WindowsVirtualKey virtualKey = KeyboardUsageToVirtualKey(
+                control.code);
             if (virtualKey == 0U) {
                 return false;
             }
-            FillKeyboardRecipe(binding, virtualKey);
+            FillKeyboardRecipe(binding, virtualKey, false);
             return true;
         }
         if (control.familyId == 0x09U) {
-            const ControlCode virtualKey = MouseUsageToVirtualKey(control.code);
+            const WindowsVirtualKey virtualKey = MouseUsageToVirtualKey(
+                control.code);
             if (virtualKey == 0U) {
                 return false;
             }
@@ -301,11 +410,12 @@ bool WindowsControlCatalog::Resolve(
             return true;
         }
         if (control.familyId == 0x0cU) {
-            const ControlCode virtualKey = ConsumerUsageToVirtualKey(control.code);
+            const WindowsVirtualKey virtualKey = ConsumerUsageToVirtualKey(
+                control.code);
             if (virtualKey == 0U) {
                 return false;
             }
-            FillKeyboardRecipe(binding, virtualKey);
+            FillKeyboardRecipe(binding, virtualKey, false);
             return true;
         }
         return false;
@@ -320,7 +430,7 @@ bool WindowsControlCatalog::Resolve(
         if (IsMouseVirtualKey(control.code)) {
             FillMouseRecipe(binding, control.code);
         } else {
-            FillKeyboardRecipe(binding, control.code);
+            FillKeyboardRecipe(binding, control.code, true);
         }
         return true;
     }
@@ -334,8 +444,6 @@ bool WindowsControlCatalog::Resolve(
     binding.scanCode = control.code;
     binding.scanQualifier = control.qualifier;
     binding.matchByScanCode = true;
-    binding.exceptionalSequence = control.qualifier
-        == kWindowsScanCodeQualifierE1;
     const UINT prefix = control.qualifier == kWindowsScanCodeQualifierE0
         ? 0xe000U
         : control.qualifier == kWindowsScanCodeQualifierE1
@@ -354,7 +462,11 @@ bool WindowsControlCatalog::Resolve(
     if (!binding.initialStateQueryable) {
         binding.capabilities = ToControlUseBits(ControlUse::EventSource);
     }
-    if (binding.virtualKey != 0U) {
+    if (control.qualifier != kWindowsScanCodeQualifierE1) {
+        binding.outputRecipe.kind = WindowsOutputKind::KeyboardScanCode;
+        binding.outputRecipe.scanCode = control.code;
+        binding.outputRecipe.extendedScanCode = control.qualifier
+            == kWindowsScanCodeQualifierE0;
         binding.capabilities = static_cast<std::uint8_t>(
             binding.capabilities | kOutputCapabilities);
     }
@@ -371,6 +483,10 @@ bool WindowsControlCatalog::InputOverlaps(
     if (left.kind == WindowsControlKind::MouseButton) {
         return left.virtualKey == right.virtualKey;
     }
+    if (left.matchByScanCode && right.matchByScanCode) {
+        return left.scanCode == right.scanCode
+            && left.scanQualifier == right.scanQualifier;
+    }
     if (left.virtualKey != 0U && left.virtualKey == right.virtualKey) {
         return true;
     }
@@ -379,30 +495,8 @@ bool WindowsControlCatalog::InputOverlaps(
         && left.scanQualifier == right.scanQualifier;
 }
 
-bool WindowsControlCatalog::Matches(
-    const WindowsControlBinding& binding,
-    const InputEvent& event) noexcept
-{
-    if (binding.kind == WindowsControlKind::MouseButton) {
-        return event.device == DeviceKind::Mouse
-            && event.code == binding.virtualKey;
-    }
-    if (event.device != DeviceKind::Keyboard) {
-        return false;
-    }
-    if (!binding.matchByScanCode) {
-        return event.code == binding.virtualKey;
-    }
-    const std::uint32_t qualifier = (event.flags & LLKHF_EXTENDED) != 0U
-        ? kWindowsScanCodeQualifierE0
-        : event.code == VK_PAUSE && event.scanCode == 0x45U
-            ? kWindowsScanCodeQualifierE1
-            : kControlQualifierNone;
-    return event.scanCode == binding.scanCode
-        && qualifier == binding.scanQualifier;
-}
-
-bool WindowsForceStopRecognizer::Observe(const InputEvent& event) noexcept
+bool WindowsForceStopRecognizer::Observe(
+    const WindowsNativeInputEvent& event) noexcept
 {
     if (event.origin != InputOrigin::PhysicalCandidate
         || event.device != DeviceKind::Keyboard
@@ -411,7 +505,7 @@ bool WindowsForceStopRecognizer::Observe(const InputEvent& event) noexcept
         return false;
     }
     const bool down = event.transition == Transition::Down;
-    switch (event.code) {
+    switch (event.virtualKey) {
     case VK_LCONTROL:
         leftControl_ = down;
         return false;
@@ -449,7 +543,7 @@ WindowsRuntimeInputAdapter::WindowsRuntimeInputAdapter(
 }
 
 RuntimeInputEvent WindowsRuntimeInputAdapter::Normalize(
-    const InputEvent& event) noexcept
+    const WindowsNativeInputEvent& event) noexcept
 {
     RuntimeInputEvent normalized{};
     normalized.device = event.device;
@@ -466,27 +560,12 @@ RuntimeInputEvent WindowsRuntimeInputAdapter::Normalize(
 
 WindowsRuntimeOutputPort::WindowsRuntimeOutputPort(
     const WindowsControlCatalog& catalog,
-    ProcessId targetPid,
     void* publishContext,
-    ActionBatchPublishFunction publish) noexcept
+    WindowsOutputPublishFunction publish) noexcept
     : catalog_(catalog),
-      targetPid_(targetPid),
       publishContext_(publishContext),
       publish_(publish)
 {
-}
-
-RuntimeOutputResult PublishRuntimeBatchToActionQueue(
-    void* context,
-    const ActionBatch& batch) noexcept
-{
-    if (context == nullptr) {
-        return RuntimeOutputResult::Failed;
-    }
-    auto& queue = *static_cast<ActionQueue*>(context);
-    return queue.TryPush(batch)
-        ? RuntimeOutputResult::Accepted
-        : RuntimeOutputResult::CapacityRejected;
 }
 
 RuntimeOutputResult WindowsRuntimeOutputPort::Publish(
@@ -494,27 +573,21 @@ RuntimeOutputResult WindowsRuntimeOutputPort::Publish(
 {
     const WindowsControlBinding* const binding = catalog_.Binding(
         request.activated.backendToken);
-    if (binding == nullptr || publish_ == nullptr) {
+    if (binding == nullptr
+        || binding->outputRecipe.kind == WindowsOutputKind::None
+        || publish_ == nullptr) {
         return RuntimeOutputResult::Failed;
     }
-    ActionBatch batch{};
-    batch.sourceSequence = request.sequence;
-    batch.outputStateGeneration = request.generation;
-    batch.targetPid = targetPid_;
-    batch.outputDevice = request.activated.device;
-    batch.outputCode = binding->virtualKey;
-    batch.requiresPointerTarget = request.activated.requiresPointerTarget;
-    const Transition transition = request.transition == RuntimeOutputTransition::Up
-        ? Transition::Up
-        : Transition::Down;
-    batch.actions[0] = {
-        request.activated.device,
-        transition,
-        binding->virtualKey,
-        0,
-        0};
-    batch.actionCount = 1U;
-    return publish_(publishContext_, batch);
+    WindowsOutputItem item{};
+    item.sourceSequence = request.sequence;
+    item.outputStateGeneration = request.generation;
+    item.outputCode = binding->virtualKey;
+    item.requiresPointerTarget = request.activated.requiresPointerTarget;
+    item.recipe = binding->outputRecipe;
+    item.transition = request.transition == RuntimeOutputTransition::Up
+        ? WindowsOutputTransition::Up
+        : WindowsOutputTransition::Down;
+    return publish_(publishContext_, item);
 }
 
 } // namespace inputweaver::win32

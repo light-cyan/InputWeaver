@@ -8,32 +8,32 @@
 #endif
 #include <windows.h>
 
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 
 namespace inputweaver {
 
 [[nodiscard]] inline InputOrigin ClassifyKeyboard(
     const KBDLLHOOKSTRUCT& event,
-    SelfTag selfTag) noexcept
+    WindowsSelfTag selfTag) noexcept
 {
     if ((event.flags & LLKHF_INJECTED) == 0) {
         return InputOrigin::PhysicalCandidate;
     }
 
-    return static_cast<SelfTag>(event.dwExtraInfo) == selfTag
+    return static_cast<WindowsSelfTag>(event.dwExtraInfo) == selfTag
         ? InputOrigin::SelfInjected
         : InputOrigin::ExternalInjected;
 }
 
 [[nodiscard]] inline InputOrigin ClassifyMouse(
     const MSLLHOOKSTRUCT& event,
-    SelfTag selfTag) noexcept
+    WindowsSelfTag selfTag) noexcept
 {
     if ((event.flags & LLMHF_INJECTED) == 0) {
         return InputOrigin::PhysicalCandidate;
     }
 
-    return static_cast<SelfTag>(event.dwExtraInfo) == selfTag
+    return static_cast<WindowsSelfTag>(event.dwExtraInfo) == selfTag
         ? InputOrigin::SelfInjected
         : InputOrigin::ExternalInjected;
 }

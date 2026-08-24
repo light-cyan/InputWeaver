@@ -54,19 +54,13 @@ public:
         CreateProcessWFunction createProcess = &::CreateProcessW) noexcept;
 
     [[nodiscard]] bool Permitted() const noexcept override;
-    [[nodiscard]] RuntimeLaunchResult Launch(
+    [[nodiscard]] RuntimeLaunchOutcome Launch(
         std::string_view command,
         RuntimeCancellationProbe cancellation) noexcept override;
-
-    [[nodiscard]] ExecutableResolutionError LastResolutionError() const noexcept;
-    [[nodiscard]] DWORD LastWin32Error() const noexcept;
 
 private:
     bool permitted_;
     CreateProcessWFunction createProcess_;
-    ExecutableResolutionError lastResolutionError_{
-        ExecutableResolutionError::None};
-    DWORD lastWin32Error_{ERROR_SUCCESS};
 };
 
 } // namespace inputweaver::win32

@@ -3,6 +3,7 @@
 #include "artifact_file.hpp"
 #include "frontend.hpp"
 #include "lowering.hpp"
+#include "path.hpp"
 #include "semantics.hpp"
 #include "source.hpp"
 
@@ -26,9 +27,17 @@
 namespace inputweaver::compiler {
 namespace {
 
+enum class RequestedProduct : std::uint8_t {
+    None,
+    Artifact,
+    Dump,
+    All,
+};
+
 [[nodiscard]] CompileOutput CompileValidatedSource(
     SourceFile source,
-    const CompilerLimits& limits)
+    const CompilerLimits& limits,
+    RequestedProduct products)
 {
     DiagnosticSink diagnostics(&source);
     const std::vector<Token> tokens = LexSource(source, limits, diagnostics);
@@ -66,16 +75,16 @@ namespace {
         return {{}, {}, std::move(diagnostics).Take()};
     }
     CompileOutput output;
-    output.dump = DumpCompiledProgram(*finalized.program);
-    output.artifact = EncodeWeavec(*finalized.program);
+    if (products == RequestedProduct::Dump
+        || products == RequestedProduct::All) {
+        output.dump = DumpCompiledProgram(*finalized.program);
+    }
+    if (products == RequestedProduct::Artifact
+        || products == RequestedProduct::All) {
+        output.artifact = EncodeWeavec(*finalized.program);
+    }
     output.diagnostics = std::move(diagnostics).Take();
     return output;
-}
-
-[[nodiscard]] std::string PathToUtf8(const std::filesystem::path& path)
-{
-    const std::u8string value = path.u8string();
-    return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
 void AddCommandError(
@@ -160,7 +169,8 @@ struct LoadedCompileResult final {
 
 [[nodiscard]] LoadedCompileResult CompileLoadedFile(
     const std::filesystem::path& sourcePath,
-    const CompilerLimits& limits)
+    const CompilerLimits& limits,
+    RequestedProduct products)
 {
     DiagnosticSink loadDiagnostics;
     std::optional<SourceFile> source = LoadSourceFile(
@@ -172,7 +182,10 @@ struct LoadedCompileResult final {
         result.command.diagnostics = std::move(loadDiagnostics).Take();
         return result;
     }
-    CompileOutput output = CompileValidatedSource(std::move(*source), limits);
+    CompileOutput output = CompileValidatedSource(
+        std::move(*source),
+        limits,
+        products);
     LoadedCompileResult result;
     result.command.succeeded = output.Succeeded();
     result.command.artifactByteLength = static_cast<std::uint64_t>(
@@ -187,7 +200,7 @@ struct LoadedCompileResult final {
 
 bool CompileOutput::Succeeded() const noexcept
 {
-    return diagnostics.empty() && !artifact.empty();
+    return diagnostics.empty();
 }
 
 std::string_view CompileDiagnosticCodeName(CompileDiagnosticCode code) noexcept
@@ -275,7 +288,10 @@ CompileOutput CompileSource(
     if (!source.has_value()) {
         return {{}, {}, std::move(diagnostics).Take()};
     }
-    return CompileValidatedSource(std::move(*source), limits);
+    return CompileValidatedSource(
+        std::move(*source),
+        limits,
+        RequestedProduct::All);
 }
 
 CompilerCommandResult CompileFile(
@@ -283,7 +299,10 @@ CompilerCommandResult CompileFile(
     const std::filesystem::path& destinationPath,
     const CompilerLimits& limits)
 {
-    LoadedCompileResult loaded = CompileLoadedFile(sourcePath, limits);
+    LoadedCompileResult loaded = CompileLoadedFile(
+        sourcePath,
+        limits,
+        RequestedProduct::Artifact);
     if (!loaded.command.succeeded) {
         return std::move(loaded.command);
     }
@@ -298,8 +317,10 @@ CompilerCommandResult ValidateFile(
     const std::filesystem::path& sourcePath,
     const CompilerLimits& limits)
 {
-    LoadedCompileResult loaded = CompileLoadedFile(sourcePath, limits);
-    loaded.command.dump.clear();
+    LoadedCompileResult loaded = CompileLoadedFile(
+        sourcePath,
+        limits,
+        RequestedProduct::None);
     return std::move(loaded.command);
 }
 
@@ -307,7 +328,10 @@ CompilerCommandResult DumpFile(
     const std::filesystem::path& sourcePath,
     const CompilerLimits& limits)
 {
-    LoadedCompileResult loaded = CompileLoadedFile(sourcePath, limits);
+    LoadedCompileResult loaded = CompileLoadedFile(
+        sourcePath,
+        limits,
+        RequestedProduct::Dump);
     return std::move(loaded.command);
 }
 

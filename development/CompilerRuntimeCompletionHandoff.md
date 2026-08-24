@@ -40,7 +40,7 @@ InputWeaver.exe --program <file.weavec> [--target <exe-name-or-absolute-path> | 
 - A target may be an executable name or an absolute executable path. Target-scoped execution waits for one matching process and becomes active only while that process owns the foreground window.
 - `TARGET = GLOBAL` selects global execution in source. When neither the compiled program nor the command line supplies a target, mapping execution is rejected before input hooks are installed.
 - `--allow-exec` grants process-launch authority for the current compiled-program invocation. Programs requiring that authority are rejected during activation when it is not granted.
-- `--log` writes bounded operational diagnostics as JSONL. `--trace-input` additionally includes physical input records and requires `--log`.
+- `--log` writes bounded operational diagnostics as JSONL. Launch failures expose both a portable `launch_result` and the captured numeric `platform_error`. `--trace-input` additionally includes physical input records and requires `--log`.
 - Physical Ctrl+Shift+F12 stops the active executor.
 
 ## Weave interface
@@ -55,6 +55,7 @@ The implemented language supports target declarations, constants, typed user var
 - A source held across foreground return must be released before a new physical press can create another mapping.
 - Activated keyboard state is initialized when execution starts so a key already held at startup does not create a new mapping; physical force stop remains available from startup-held modifiers.
 - Dispatch, task progress, scheduling, output publication, and diagnostic transport are bounded so input processing remains responsive under accepted programs.
+- Raw Windows outputs preserve their authored virtual-key, scan-code, extended-scan, or mouse identity; unsupported output identities are rejected during activation.
 - Keyboard and mouse output is published through the Windows input system. The active keyboard layout, IME, Caps Lock, and physically held modifiers therefore affect the receiving application.
 - Process launch is denied by default and becomes available only through the explicit executor authority described above.
 - Current fixed capacities, task budgets, logging limits, and observable console statistics are recorded in `docs/runtime-boundaries.md`.
@@ -64,22 +65,14 @@ The implemented language supports target declarations, constants, typed user var
 - The delivered executor runs on Windows.
 - InputWeaver and its target should run at the same Windows integrity level so hooks and generated input are permitted.
 - A target selector should resolve to one process; the executor reports candidates while the selector is ambiguous.
-- Example capture commands overwrite their own JSONL and console evidence files when the same mode is run again.
 
 ## Canonical workflow
 
 Run commands from the repository root in `cmd.exe`.
 
 ```bat
-script\build_compiler_tests.bat
-script\build.bat
-example\notepad-showcase\compile.bat
-example\notepad-showcase\run.bat
+bin\InputWeaverCompiler.exe compile path\program.weave path\program.weavec
+bin\InputWeaver.exe --program path\program.weavec --target target.exe
 ```
 
-The showcase procedure is `example/notepad-showcase/ManualTest.md`. Keyboard-safety operation guidance is `docs/safety-guide.md`, runtime limits are recorded in `docs/runtime-boundaries.md`, and the retained physical Windows procedure and evidence are under `example/phase-4-safety/`.
-
-## Verification interface
-
-- `script/verify_phase4.bat` is the current combined build, test, analysis, dependency, command-line authority, example reproducibility, retained-evidence validation, documentation, and diff gate.
-- `example/phase-4-safety/verify.bat` verifies the retained physical Windows JSONL and console evidence after the operator completes the visible-window procedure.
+Keyboard-safety operation guidance is `docs/safety-guide.md`, and current runtime limits and console fields are recorded in `docs/runtime-boundaries.md`.

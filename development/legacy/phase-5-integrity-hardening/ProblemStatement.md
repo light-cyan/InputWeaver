@@ -86,7 +86,7 @@ Required property: validation builds only the finalized in-memory program, compi
 
 The public `ProgramRuntime` facade is cohesive and should remain the runtime entry point. The problem is that private responsibilities cannot be tested or changed independently, invariants are distributed across distant functions, and a small ownership or scheduling change requires reasoning about most of the file.
 
-Required property: private components must expose narrow invariants for dispatch transactions, task scheduling, output ownership and rate limiting, mutable program state, and diagnostics while the public facade preserves behavior.
+Required property: private state must be grouped by dispatch, scheduling, output ownership, mutable values, diagnostics, and metrics while the public facade and one implementation control flow preserve behavior.
 
 ## Redundancy Problems
 
@@ -123,12 +123,6 @@ The runtime analyzer omits `low_level_hooks.cpp`, `process_context.cpp`, and `pr
 
 Required property: every tracked C++ implementation belongs to exactly one analyzer set and one dependency policy, and the gate fails when a new implementation is unclassified.
 
-### P5-VER-002: Retained Evidence Is Not Bound to an Artifact
-
-The archived acceptance records identify a path and a program serial but not the source hash, `.weavec` hash, compiler hash, or validation manifest. A path match cannot prove which bytes were executed.
-
-Required property: a retained physical validation run records cryptographic identities for the source, compiled artifact, compiler, and executor, and the verifier rejects evidence whose manifest differs from current tracked assets.
-
 ### P5-DOC-001: Runtime Boundary Documentation Is Incomplete
 
 The runtime boundary guide does not include the 256-entry output queue or eight-action batch capacity and omits several console metrics already emitted by the executor. Activation quantity semantics also overstate what the current implementation guarantees.
@@ -137,4 +131,4 @@ Required property: the guide enumerates every enforced fixed boundary and every 
 
 ## Completion Standard
 
-Phase 5 is complete only when the input transport boundary is platform-correct, the critical identity and diagnostic races have regression tests, native normalization has constant-time behavior, the input and runtime internals have explicit ownership, redundant surfaces are removed, all current C++ sources are covered by analysis and dependency policy, current documentation matches implementation, and a new hash-bound Windows validation record passes the authoritative Phase 5 gate.
+Phase 5 is complete only when the input transport boundary is platform-correct, the critical identity and diagnostic races have regression tests, native normalization has constant-time behavior, the input and runtime internals have explicit ownership, redundant surfaces are removed, all current C++ sources are covered by analysis and dependency policy, current documentation matches implementation, and the repository verification gate passes.

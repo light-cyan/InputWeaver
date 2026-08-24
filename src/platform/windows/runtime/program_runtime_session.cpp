@@ -1,15 +1,14 @@
 #include "program_runtime_session.hpp"
 
 #include "platform/windows/diagnostics/diagnostic_log.hpp"
-#include "input/input_types.hpp"
 #include "platform/windows/runtime/input_injector.hpp"
 #include "platform/windows/runtime/low_level_hooks.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/runtime_control_catalog.hpp"
 #include "platform/windows/runtime/runtime_process_launcher.hpp"
 #include "platform/windows/runtime/runtime_route_adapter.hpp"
+#include "platform/windows/runtime/windows_output_queue.hpp"
 #include "program/compiled_program.hpp"
-#include "runtime/action_queue.hpp"
 #include "runtime/program_runtime.hpp"
 #include "support/stop_request.hpp"
 
@@ -31,7 +30,7 @@ namespace {
     return counter.QuadPart;
 }
 
-[[nodiscard]] ProcessId ForegroundProcessId() noexcept
+[[nodiscard]] WindowsProcessId ForegroundProcessId() noexcept
 {
     const HWND window = GetForegroundWindow();
     if (window == nullptr) {
@@ -39,27 +38,29 @@ namespace {
     }
     DWORD processId = 0U;
     GetWindowThreadProcessId(window, &processId);
-    return static_cast<ProcessId>(processId);
+    return static_cast<WindowsProcessId>(processId);
 }
 
 void PopulateInjectionIdentity(
-    const ActionBatch& batch,
+    const WindowsOutputItem& item,
+    WindowsProcessId targetPid,
     InjectionDiagnosticRecord& record) noexcept
 {
-    record.sourceSequence = batch.sourceSequence;
-    record.outputStateGeneration = batch.outputStateGeneration;
-    record.targetPid = batch.targetPid;
-    record.outputCode = batch.outputCode;
-    record.outputDevice = batch.outputDevice;
-    if (batch.actionCount != 0U) {
-        record.outputTransition = batch.actions[0].transition;
-    }
+    record.sourceSequence = item.sourceSequence;
+    record.outputStateGeneration = item.outputStateGeneration;
+    record.targetPid = targetPid;
+    record.outputCode = item.outputCode;
+    record.outputDevice = item.recipe.kind == WindowsOutputKind::MouseButton
+        ? DeviceKind::Mouse
+        : DeviceKind::Keyboard;
+    record.outputTransition = item.transition == WindowsOutputTransition::Up
+        ? Transition::Up
+        : Transition::Down;
 }
 
-[[nodiscard]] bool IsReleaseBatch(const ActionBatch& batch) noexcept
+[[nodiscard]] bool IsReleaseOutput(const WindowsOutputItem& item) noexcept
 {
-    return batch.actionCount != 0U
-        && batch.actions[0].transition == Transition::Up;
+    return item.transition == WindowsOutputTransition::Up;
 }
 
 [[nodiscard]] std::wstring FormatActivationError(
@@ -243,8 +244,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             result.runtime = runtime->Metrics();
         }
         result.hookEvents = hookEvents.load(std::memory_order_relaxed);
-        result.queuedBatches = queuedBatches.load(std::memory_order_relaxed);
-        result.cancelledBatches = cancelledBatches.load(std::memory_order_relaxed);
+        result.queuedOutputs = queuedOutputs.load(std::memory_order_relaxed);
+        result.cancelledOutputs = cancelledOutputs.load(std::memory_order_relaxed);
         result.injectionFailures = injectionFailures.load(std::memory_order_relaxed);
         result.maximumHookMicroseconds = maximumHookMicroseconds.load(std::memory_order_relaxed);
         result.forwardedOutsideTarget = forwardedOutsideTarget.load(std::memory_order_relaxed);
@@ -253,7 +254,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     }
 
     InputDecision HandleInput(
-        const InputEvent& event,
+        const WindowsNativeInputEvent& event,
         bool lowerIntegrityInjected,
         std::int64_t startCounter) noexcept override
     {
@@ -261,8 +262,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         record.sequence = nextHookSequence.fetch_add(1U, std::memory_order_relaxed);
         record.qpcTimestamp = startCounter;
         record.foregroundPid = ForegroundProcessId();
-        record.rawFlags = event.flags;
-        record.code = event.code;
+        record.rawFlags = event.hookFlags;
+        record.code = event.virtualKey;
         record.scanCode = event.scanCode;
         record.mouseData = event.mouseData;
         record.device = event.device;
@@ -301,14 +302,14 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     void SeedPhysicalState(
         DeviceKind device,
-        ControlCode code,
+        WindowsVirtualKey virtualKey,
         bool down) noexcept override
     {
-        InputEvent event{};
+        WindowsNativeInputEvent event{};
         event.device = device;
         event.origin = InputOrigin::PhysicalCandidate;
         event.transition = down ? Transition::Down : Transition::Up;
-        event.code = code;
+        event.virtualKey = virtualKey;
         const RuntimeInputEvent normalized = inputAdapter->Normalize(event);
         if (normalized.control.IsValid()) {
             (void)runtime->SeedPhysicalState(normalized.control, down);
@@ -347,9 +348,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             && (runtime->HasActiveMappings() || runtime->HasOwnedOutputs());
     }
 
-    void FlushDiagnostics(std::int64_t startCounter) noexcept override
+    void FlushDiagnostics() noexcept override
     {
-        (void)startCounter;
         DrainRuntimeDiagnostics();
     }
 
@@ -362,17 +362,17 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     static RuntimeOutputResult PublishThunk(
         void* context,
-        const ActionBatch& batch) noexcept
+        const WindowsOutputItem& item) noexcept
     {
         if (context == nullptr) {
             return RuntimeOutputResult::Failed;
         }
         Impl& session = *static_cast<Impl*>(context);
-        if (!session.actionQueue.TryPush(batch)) {
+        if (!session.outputQueue.TryPush(item)) {
             session.SignalStopOnly();
             return RuntimeOutputResult::CapacityRejected;
         }
-        session.queuedBatches.fetch_add(1U, std::memory_order_relaxed);
+        session.queuedOutputs.fetch_add(1U, std::memory_order_relaxed);
         SetEvent(session.outputWakeEvent);
         return RuntimeOutputResult::Accepted;
     }
@@ -476,7 +476,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             clock = std::make_unique<SteadyRuntimeClock>();
             outputPort = std::make_unique<win32::WindowsRuntimeOutputPort>(
                 *controlCatalog,
-                targetContext == nullptr ? 0U : targetContext->TargetPid(),
                 this,
                 &Impl::PublishThunk);
             RuntimeCapacities capacities{};
@@ -535,7 +534,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         for (;;) {
             DrainOutputQueue();
             if (WaitForSingleObject(outputProducerDoneEvent, 0U) == WAIT_OBJECT_0
-                && actionQueue.Empty()) {
+                && outputQueue.Empty()) {
                 break;
             }
             (void)WaitForMultipleObjects(2U, waitHandles, FALSE, INFINITE);
@@ -545,18 +544,21 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     void DrainOutputQueue() noexcept
     {
-        ActionBatch batch{};
-        while (actionQueue.TryPop(batch)) {
-            ProcessOutputBatch(batch);
+        WindowsOutputItem item{};
+        while (outputQueue.TryPop(item)) {
+            ProcessOutput(item);
         }
     }
 
-    void ProcessOutputBatch(const ActionBatch& batch) noexcept
+    void ProcessOutput(const WindowsOutputItem& item) noexcept
     {
         InjectionDiagnosticRecord record{};
-        PopulateInjectionIdentity(batch, record);
+        PopulateInjectionIdentity(
+            item,
+            targetContext == nullptr ? 0U : targetContext->TargetPid(),
+            record);
         record.qpcTimestamp = ReadPerformanceCounter();
-        const bool release = IsReleaseBatch(batch);
+        const bool release = IsReleaseOutput(item);
         const std::uint64_t liveGeneration = runtime == nullptr
             ? currentGeneration.load(std::memory_order_acquire)
             : runtime->Generation();
@@ -566,10 +568,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         } else if (!release && circuitBreakerOpen.load(std::memory_order_acquire)) {
             record.cancelledForCircuitBreaker = true;
         } else if (!release
-            && batch.outputStateGeneration
+            && item.outputStateGeneration
                 != liveGeneration) {
             record.cancelledForGeneration = true;
-        } else if (!release && !TargetRouteAllows(batch)) {
+        } else if (!release && !TargetRouteAllows(item)) {
             record.cancelledForTarget = true;
             if (targetContext != nullptr && !targetContext->IsTargetAlive()) {
                 NotifyTargetLostFromOutput();
@@ -579,40 +581,37 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 SetTargetEligible(false);
             }
         } else if (!release && runtime != nullptr
-            && batch.outputStateGeneration != runtime->Generation()) {
+            && item.outputStateGeneration != runtime->Generation()) {
             record.cancelledForGeneration = true;
         } else {
-            ExecuteOutputBatch(batch, record);
+            ExecuteOutput(item, record);
             return;
         }
-        cancelledBatches.fetch_add(1U, std::memory_order_relaxed);
+        cancelledOutputs.fetch_add(1U, std::memory_order_relaxed);
         record.circuitBreakerOpen = circuitBreakerOpen.load(std::memory_order_acquire);
         (void)diagnosticLog.TryPushInjection(record);
     }
 
-    [[nodiscard]] bool TargetRouteAllows(const ActionBatch& batch) const noexcept
+    [[nodiscard]] bool TargetRouteAllows(
+        const WindowsOutputItem& item) const noexcept
     {
         if (targetContext == nullptr) {
             return true;
         }
-        return batch.targetPid == targetContext->TargetPid()
-            && targetContext->IsTargetAlive()
+        return targetContext->IsTargetAlive()
             && targetContext->IsTargetForeground()
-            && (!batch.requiresPointerTarget
+            && (!item.requiresPointerTarget
                 || targetContext->IsTargetPointerTargetAtCursor());
     }
 
-    void ExecuteOutputBatch(
-        const ActionBatch& batch,
+    void ExecuteOutput(
+        const WindowsOutputItem& item,
         InjectionDiagnosticRecord& record) noexcept
     {
-        const InjectionResult result = injector.Inject(batch);
+        const InjectionResult result = injector.Inject(item);
         record.requested = result.requested;
         record.sent = result.sent;
         record.win32Error = result.error;
-        record.cleanupRequested = result.cleanupRequested;
-        record.cleanupSent = result.cleanupSent;
-        record.cleanupError = result.cleanupError;
         if (result.Succeeded()) {
             injectionCircuitBreaker.RecordSuccess();
         } else {
@@ -670,8 +669,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     void CaptureSessionMetrics() noexcept
     {
         metricsSnapshot.hookEvents = hookEvents.load(std::memory_order_relaxed);
-        metricsSnapshot.queuedBatches = queuedBatches.load(std::memory_order_relaxed);
-        metricsSnapshot.cancelledBatches = cancelledBatches.load(std::memory_order_relaxed);
+        metricsSnapshot.queuedOutputs = queuedOutputs.load(std::memory_order_relaxed);
+        metricsSnapshot.cancelledOutputs = cancelledOutputs.load(std::memory_order_relaxed);
         metricsSnapshot.injectionFailures = injectionFailures.load(std::memory_order_relaxed);
         metricsSnapshot.maximumHookMicroseconds = maximumHookMicroseconds.load(std::memory_order_relaxed);
         metricsSnapshot.forwardedOutsideTarget = forwardedOutsideTarget.load(std::memory_order_relaxed);
@@ -695,15 +694,15 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::atomic<std::uint64_t> currentGeneration{0U};
     std::atomic<std::uint64_t> nextHookSequence{1U};
     std::atomic<std::uint64_t> hookEvents{0U};
-    std::atomic<std::uint64_t> queuedBatches{0U};
-    std::atomic<std::uint64_t> cancelledBatches{0U};
+    std::atomic<std::uint64_t> queuedOutputs{0U};
+    std::atomic<std::uint64_t> cancelledOutputs{0U};
     std::atomic<std::uint64_t> injectionFailures{0U};
     std::atomic<std::uint64_t> maximumHookMicroseconds{0U};
     std::atomic<std::uint64_t> forwardedOutsideTarget{0U};
     std::atomic<bool> circuitBreakerOpen{false};
     std::int64_t performanceFrequency{1};
     WindowsProgramRuntimeSessionMetrics metricsSnapshot{};
-    ActionQueue actionQueue;
+    WindowsOutputQueue outputQueue;
     InputInjector injector;
     InjectionCircuitBreaker injectionCircuitBreaker;
     std::thread outputThread;

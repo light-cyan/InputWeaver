@@ -56,11 +56,9 @@ public:
 
     [[nodiscard]] RuntimeEvaluationResult EvaluateExpression(
         ExpressionId expression) noexcept;
-    [[nodiscard]] bool ReadUserState(std::uint32_t index, bool& value) const noexcept;
-    [[nodiscard]] bool ReadUserNumber(std::uint32_t index, double& value) const noexcept;
-    [[nodiscard]] bool ReadUserDuration(
+    [[nodiscard]] bool ReadUserState(
         std::uint32_t index,
-        DurationValue& value) const noexcept;
+        bool& value) const noexcept;
 
     [[nodiscard]] bool TryPopDiagnostic(
         RuntimeDiagnosticRecord& record) noexcept;

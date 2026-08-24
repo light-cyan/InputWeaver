@@ -8,44 +8,34 @@
 #endif
 #include <windows.h>
 
-#include <array>
-
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 
 namespace inputweaver {
-
-inline constexpr std::size_t kMaximumPreparedInputs = kMaxActionsPerBatch;
 
 using SendInputFunction = UINT(WINAPI*)(UINT, LPINPUT, int);
 
 enum class InjectionOutcome : unsigned char {
     Succeeded,
     InvalidSelfTag,
-    InvalidBatch,
+    InvalidOutput,
     ConversionFailed,
-    SendFailed,
-    SendPartial
+    SendFailed
 };
 
-struct PreparedInputBatch {
-    std::array<INPUT, kMaximumPreparedInputs> inputs{};
-    UINT count{0};
-    DWORD error{ERROR_SUCCESS};
+struct PreparedInput {
+    INPUT input{};
+    DWORD error{ERROR_INVALID_DATA};
 
     [[nodiscard]] bool Succeeded() const noexcept {
-        return error == ERROR_SUCCESS && count != 0;
+        return error == ERROR_SUCCESS;
     }
 };
 
 struct InjectionResult {
-    InjectionOutcome outcome{InjectionOutcome::InvalidBatch};
+    InjectionOutcome outcome{InjectionOutcome::InvalidOutput};
     UINT requested{0};
     UINT sent{0};
     DWORD error{ERROR_SUCCESS};
-    bool cleanupAttempted{false};
-    UINT cleanupRequested{0};
-    UINT cleanupSent{0};
-    DWORD cleanupError{ERROR_SUCCESS};
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return outcome == InjectionOutcome::Succeeded;
@@ -71,14 +61,6 @@ public:
         return open_;
     }
 
-    [[nodiscard]] unsigned int ConsecutiveFailures() const noexcept {
-        return consecutiveFailures_;
-    }
-
-    [[nodiscard]] bool IsOpen() const noexcept {
-        return open_;
-    }
-
 private:
     unsigned int failureThreshold_;
     unsigned int consecutiveFailures_{0};
@@ -88,17 +70,16 @@ private:
 class InputInjector final {
 public:
     explicit InputInjector(
-        inputweaver::SelfTag selfTag,
+        WindowsSelfTag selfTag,
         SendInputFunction sendInput = &::SendInput) noexcept;
 
-    [[nodiscard]] inputweaver::SelfTag Tag() const noexcept;
-    [[nodiscard]] PreparedInputBatch Prepare(
-        const ActionBatch& batch) const noexcept;
+    [[nodiscard]] PreparedInput Prepare(
+        const WindowsOutputItem& item) const noexcept;
     [[nodiscard]] InjectionResult Inject(
-        const ActionBatch& batch) const noexcept;
+        const WindowsOutputItem& item) const noexcept;
 
 private:
-    inputweaver::SelfTag selfTag_;
+    WindowsSelfTag selfTag_;
     SendInputFunction sendInput_;
 };
 

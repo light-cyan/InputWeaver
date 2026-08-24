@@ -47,7 +47,7 @@ Exit criterion: every accepted control in the Stage 1 matrix preserves its autho
 1. Add nonblocking producer admission around the existing runtime SPSC ring or replace it with a proven bounded MPSC representation; the selected design must never wait on the low-level hook thread.
 2. Count producer contention as a dropped runtime record when a nonblocking admission guard is used.
 3. Document producer and consumer ownership beside the ring declarations.
-4. Verify shutdown, target-loss, foreground-loss, hook, output, and log-worker interleavings under the concurrent test.
+4. Verify two simultaneous runtime producers and one consumer with unique accepted records and exact rejection accounting.
 
 Exit criterion: no accepted record is overwritten, every rejected record is counted, and ThreadSanitizer-independent deterministic tests cover the critical interleaving.
 
@@ -55,7 +55,7 @@ Exit criterion: no accepted record is overwritten, every rejected record is coun
 
 1. Replace the launcher result-only return with a platform-neutral result record containing category and numeric platform detail, or add a diagnostic callback owned by the platform adapter.
 2. Serialize both fields in runtime JSONL and include stable names for portable categories.
-3. Cover executable resolution, invalid command, access denial, allocation failure, cancellation, and `CreateProcessW` failure.
+3. Cover executable resolution, invalid command, access denial, cancellation, and `CreateProcessW` failure.
 
 Exit criterion: the observable failure contains the same Win32 error captured by the launcher without adding Windows dependencies to `src/runtime/`.
 
@@ -63,14 +63,14 @@ Exit criterion: the observable failure contains the same Win32 error captured by
 
 ### 3.1 Decompose `ProgramRuntime::Impl`
 
-1. Extract a private active-program state owner for immutable program data, mutable values, physical state, cancellation generation, and lifecycle flags.
-2. Extract dispatch-transaction planning and commit so all-or-nothing task and mapping reservation has one invariant boundary.
-3. Extract task scheduling and task-slot lifecycle, including deadlines, backoff, instruction budgets, and output budgets.
-4. Extract output ownership and rate limiting, including press, repeat, release, cancellation cleanup, and generation checks.
-5. Keep diagnostic publication and metrics aggregation behind narrow interfaces that do not expose storage internals.
-6. Preserve `ProgramRuntime` as the public facade and avoid introducing cross-module public classes solely to reduce file length.
+1. Keep immutable program data and lifecycle flags in the active-program state owner.
+2. Group mutable values and physical synchronization in one private state record.
+3. Group dispatch transaction scratch, mapping ownership, and the work queue in one private state record.
+4. Group task slots, scheduling order, backoff state, and expression scratch in one private state record.
+5. Group output ownership, sequence, and rate-window state in one private state record, and group metrics separately.
+6. Preserve `ProgramRuntime` as the only facade and keep behavior in the existing implementation instead of adding forwarding component classes.
 
-Exit criterion: each private component has focused tests, ownership is acyclic, and no component needs unrestricted access to the entire previous `State` structure.
+Exit criterion: private state ownership is explicit, the facade behavior tests pass unchanged, and the decomposition adds no public type or duplicate control-flow layer.
 
 ### 3.2 Correct Activation Error Quantities
 
@@ -99,7 +99,7 @@ Exit criterion: normalization performs a bounded number of table accesses indepe
 3. Encode `.weavec` only for compile and format the deterministic dump only for dump.
 4. Preserve existing diagnostics, exit codes, deterministic dump text, and artifact bytes.
 
-Exit criterion: instrumentation tests prove that validate calls neither encoder nor dump formatter, compile calls only the encoder, and dump calls only the formatter.
+Exit criterion: the product-selection branches call neither unrequested materializer, and command tests verify that validate returns no product, compile returns only artifact size, and dump returns only text.
 
 ## Stage 5: Remove Redundancy and Narrow Public Surfaces
 
@@ -122,21 +122,18 @@ Exit criterion: repository-wide symbol search finds no declared product surface 
 1. Extend static analysis to every tracked `.cpp` under `src/program/`, `src/compiler/`, `src/runtime/`, `src/ui/cli/`, and `src/platform/windows/`.
 2. Make the analyzer gate fail when a new implementation file is not classified rather than relying on a silently incomplete fixed list.
 3. Make the existing dependency audit enforce the documented ownership of `src/program/`, `src/input/`, Windows-native transport, and the new private runtime components.
-4. Add a current `script/verify_phase5.bat` that runs builds, all tests, complete analyzers, dependency audits, CLI checks, validation self-tests, documentation checks, and `git diff --check`.
+4. Update the existing `script/verify_phase3.bat` to run the complete analyzer and dependency audit once each, together with builds, tests, and `git diff --check`.
 
-### 6.2 Current Windows Validation
+### 6.2 Current Windows Behavioral Coverage
 
-1. Create current assets under `validation/` outside `validation/legacy/` only after the correctness and structure stages stabilize.
-2. Compile the tracked source during the gate and compare it with the retained artifact when retaining an artifact remains necessary.
-3. Generate a validation manifest containing SHA-256 hashes for the `.weave` source, `.weavec` artifact, compiler executable, executor executable, JSONL evidence, console evidence, and verifier.
-4. Make the verifier recompute every hash and reject a path-only match.
-5. Repeat the visible Windows acceptance procedure for scan-code identity, foreground loss, startup-held inputs, cancellation cleanup, process launch diagnostics, log-drop accounting, and physical force stop.
+1. Keep exact native output identity, foreground loss, startup-held input, cancellation cleanup, process launch diagnostics, diagnostic drop accounting, and physical force-stop behavior covered by the existing focused Windows suites.
+2. Keep operator safety procedures in the current product guides and keep archived validation snapshots outside current acceptance authority.
 
 ### 6.3 Documentation
 
 1. Update `docs/runtime-boundaries.md` with the output queue, batch size, corrected activation quantity semantics, and every emitted console metric.
-2. Record the internal requested-product behavior and unchanged public CLI in the Phase 5 completion record.
-3. Update `AGENTS.md` to name `script/verify_phase5.bat` only after that command exists and passes.
+2. Keep the compiler/runtime handoff limited to delivered commands, observable behavior, and App/UI integration facts.
+3. Keep `AGENTS.md` pointed at the existing combined verification command.
 4. Move this phase directory to `development/legacy/` as a content-preserving snapshot only after every completion criterion is met.
 
 ## Final Acceptance Criteria
@@ -147,8 +144,8 @@ Exit criterion: repository-wide symbol search finds no declared product surface 
 - Native control lookup is independent of activated-control count.
 - Validate, compile, and dump materialize only their requested products.
 - `src/input/`, `src/runtime/`, and `src/platform/windows/` have explicit non-overlapping ownership, and `src/input/` contains no Windows-native transport representation.
-- `ProgramRuntime` retains one public facade with independently testable private components.
+- `ProgramRuntime` retains one public facade with responsibility-owned private state.
 - Duplicate helpers and unowned product surfaces identified in the problem statement are removed.
 - Static analysis and dependency checks cover every tracked implementation file.
 - Current documentation matches all enforced capacities and emitted metrics.
-- The hash-bound Phase 5 Windows validation manifest and evidence pass `script/verify_phase5.bat`.
+- The existing combined repository verification command passes with complete analysis and dependency coverage.

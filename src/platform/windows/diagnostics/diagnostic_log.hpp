@@ -47,30 +47,20 @@ enum class ExtraInfoCategory : std::uint8_t {
     OtherNonzero
 };
 
-enum class QueueResult : std::uint8_t {
-    NotAttempted,
-    Accepted,
-    Rejected,
-    CommitRejected
-};
-
 struct HookDiagnosticRecord {
     std::uint64_t sequence{};
     std::int64_t qpcTimestamp{};
     std::uint32_t processingMicroseconds{};
-    std::uint32_t aggregateCount{1};
-    ProcessId foregroundPid{};
-    RawInputFlags rawFlags{};
-    ControlCode code{};
-    ScanCode scanCode{};
-    MouseData mouseData{};
+    std::uint32_t foregroundPid{};
+    std::uint32_t rawFlags{};
+    std::uint32_t code{};
+    std::uint32_t scanCode{};
+    std::uint32_t mouseData{};
     DeviceKind device{DeviceKind::Keyboard};
     InputOrigin origin{InputOrigin::PhysicalCandidate};
     Transition transition{Transition::Down};
     DiagnosticControl control{DiagnosticControl::OtherKeyboard};
     ExtraInfoCategory extraInfo{ExtraInfoCategory::Zero};
-    QueueResult queueResult{QueueResult::NotAttempted};
-    std::uint32_t ruleId{};
     bool lowerIntegrityInjected{};
     bool suppressed{};
 };
@@ -79,18 +69,14 @@ struct InjectionDiagnosticRecord {
     std::uint64_t sourceSequence{};
     std::uint64_t outputStateGeneration{};
     std::int64_t qpcTimestamp{};
-    ProcessId targetPid{};
-    ControlCode outputCode{};
+    std::uint32_t targetPid{};
+    std::uint32_t outputCode{};
     DeviceKind outputDevice{DeviceKind::Keyboard};
     Transition outputTransition{Transition::Down};
     DWORD win32Error{};
-    DWORD cleanupError{};
     std::uint32_t requested{};
     std::uint32_t sent{};
-    std::uint32_t cleanupRequested{};
-    std::uint32_t cleanupSent{};
     bool cancelledForTarget{};
-    bool cancelledForPhysicalState{};
     bool cancelledForCircuitBreaker{};
     bool cancelledForShutdown{};
     bool cancelledForGeneration{};
@@ -100,8 +86,10 @@ struct InjectionDiagnosticRecord {
 DiagnosticControl ClassifyDiagnosticControl(
     DeviceKind device,
     Transition transition,
-    ControlCode code) noexcept;
-ExtraInfoCategory CategorizeExtraInfo(InputExtraInfo extraInfo, SelfTag selfTag) noexcept;
+    std::uint32_t code) noexcept;
+ExtraInfoCategory CategorizeExtraInfo(
+    std::uintptr_t extraInfo,
+    std::uintptr_t selfTag) noexcept;
 void ApplyPrivacyRedaction(HookDiagnosticRecord& record) noexcept;
 [[nodiscard]] bool ShouldPublishHookDiagnostic(
     const HookDiagnosticRecord& record,
@@ -159,6 +147,39 @@ private:
     alignas(64) std::atomic<std::uint64_t> readIndex_{0};
 };
 
+class RuntimeDiagnosticRing final {
+public:
+    bool TryPush(const RuntimeDiagnosticRecord& value) noexcept {
+        if (producerAdmission_.test_and_set(std::memory_order_acquire)) {
+            rejectedPushCount_.fetch_add(1U, std::memory_order_relaxed);
+            return false;
+        }
+        const bool accepted = ring_.TryPush(value);
+        producerAdmission_.clear(std::memory_order_release);
+        if (!accepted) {
+            rejectedPushCount_.fetch_add(1U, std::memory_order_relaxed);
+        }
+        return accepted;
+    }
+
+    bool TryPop(RuntimeDiagnosticRecord& value) noexcept {
+        return ring_.TryPop(value);
+    }
+
+    bool Empty() const noexcept {
+        return ring_.Empty();
+    }
+
+    std::uint64_t RejectedPushCount() const noexcept {
+        return rejectedPushCount_.load(std::memory_order_relaxed);
+    }
+
+private:
+    std::atomic_flag producerAdmission_ = ATOMIC_FLAG_INIT;
+    SpscDiagnosticRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> ring_;
+    std::atomic<std::uint64_t> rejectedPushCount_{0U};
+};
+
 class DiagnosticLog final {
 public:
     DiagnosticLog() = default;
@@ -188,12 +209,13 @@ private:
     void DrainRecords() noexcept;
     void EmitLine(const std::string& line);
 
+    // The hook and injection rings each have one owning producer thread.
     SpscDiagnosticRing<HookDiagnosticRecord, kHookDiagnosticCapacity> hookRing_;
     SpscDiagnosticRing<InjectionDiagnosticRecord, kInjectionDiagnosticCapacity> injectionRing_;
-    SpscDiagnosticRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> runtimeRing_;
+    // Hook and output paths can both drain runtime records; producer admission is nonblocking.
+    RuntimeDiagnosticRing runtimeRing_;
     std::atomic<std::uint64_t> droppedHookRecords_{0};
     std::atomic<std::uint64_t> droppedInjectionRecords_{0};
-    std::atomic<std::uint64_t> droppedRuntimeRecords_{0};
     std::atomic<std::uint64_t> jsonlBytesWritten_{0};
     std::atomic<bool> jsonlTruncated_{false};
     std::atomic<bool> enabled_{false};

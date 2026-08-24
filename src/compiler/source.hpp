@@ -43,8 +43,6 @@ private:
     std::vector<CompileDiagnostic> diagnostics_;
 };
 
-[[nodiscard]] bool IsValidUtf8(std::string_view text) noexcept;
-
 [[nodiscard]] std::optional<SourceFile> MakeSourceFile(
     std::string displayPath,
     std::string bytes,

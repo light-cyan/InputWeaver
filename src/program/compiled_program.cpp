@@ -430,19 +430,9 @@ CompiledProgramStorage& CompiledProgramBuilder::Storage() noexcept
     return storage_;
 }
 
-const CompiledProgramStorage& CompiledProgramBuilder::Storage() const noexcept
-{
-    return storage_;
-}
-
 void CompiledProgramBuilder::DeriveRequirements()
 {
     storage_.requirements = ComputeProgramRequirements(storage_);
-}
-
-CompiledProgramStorage CompiledProgramBuilder::TakeStorage() && noexcept
-{
-    return std::move(storage_);
 }
 
 FinalizeResult CompiledProgramBuilder::Finalize() &&

@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 #include "support/stop_request.hpp"
 #include "process_context.hpp"
 
@@ -57,10 +57,13 @@ class LowLevelInputSink {
 public:
     virtual ~LowLevelInputSink() = default;
     virtual InputDecision HandleInput(
-        const InputEvent& event,
+        const WindowsNativeInputEvent& event,
         bool lowerIntegrityInjected,
         std::int64_t startCounter) noexcept = 0;
-    virtual void SeedPhysicalState(DeviceKind device, ControlCode code, bool down) noexcept = 0;
+    virtual void SeedPhysicalState(
+        DeviceKind device,
+        WindowsVirtualKey virtualKey,
+        bool down) noexcept = 0;
     [[nodiscard]] virtual bool SeedActivatedPhysicalState() noexcept
     {
         return true;
@@ -74,13 +77,13 @@ public:
         return false;
     }
     virtual bool HasCapturedInputs() const noexcept = 0;
-    virtual void FlushDiagnostics(std::int64_t startCounter) noexcept = 0;
+    virtual void FlushDiagnostics() noexcept = 0;
 };
 
 class LowLevelHooks final {
 public:
     LowLevelHooks(
-        SelfTag selfTag,
+        WindowsSelfTag selfTag,
         LowLevelInputSink& sink,
         TargetProcessContext* targetContext,
         StopRequest stopRequest,
@@ -118,7 +121,7 @@ private:
     bool CreateEvents(std::wstring& errorMessage) noexcept;
     void CloseEvents() noexcept;
 
-    SelfTag selfTag_;
+    WindowsSelfTag selfTag_;
     LowLevelInputSink& sink_;
     TargetProcessContext* targetContext_;
     StopRequest stopRequest_;

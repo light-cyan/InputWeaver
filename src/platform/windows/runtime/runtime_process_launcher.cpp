@@ -443,24 +443,21 @@ bool WindowsProcessLauncher::Permitted() const noexcept
     return permitted_;
 }
 
-RuntimeLaunchResult WindowsProcessLauncher::Launch(
+RuntimeLaunchOutcome WindowsProcessLauncher::Launch(
     std::string_view command,
     RuntimeCancellationProbe cancellation) noexcept
 {
-    lastResolutionError_ = ExecutableResolutionError::None;
-    lastWin32Error_ = ERROR_SUCCESS;
     if (!permitted_ || createProcess_ == nullptr) {
-        lastWin32Error_ = ERROR_ACCESS_DISABLED_BY_POLICY;
-        return RuntimeLaunchResult::CreationFailed;
+        return {
+            RuntimeLaunchResult::CreationFailed,
+            ERROR_ACCESS_DISABLED_BY_POLICY};
     }
     if (cancellation.Cancelled()) {
-        return RuntimeLaunchResult::Cancelled;
+        return {RuntimeLaunchResult::Cancelled, ERROR_SUCCESS};
     }
     ExecutableResolutionResult resolved = ResolveExecutableCommand(command);
-    lastResolutionError_ = resolved.error;
-    lastWin32Error_ = resolved.win32Error;
     if (!resolved.Succeeded()) {
-        return resolved.error == ExecutableResolutionError::InvalidUtf8
+        const RuntimeLaunchResult result = resolved.error == ExecutableResolutionError::InvalidUtf8
                 || resolved.error == ExecutableResolutionError::EmptyCommand
                 || resolved.error == ExecutableResolutionError::UnterminatedQuote
                 || resolved.error == ExecutableResolutionError::InvalidTokenBoundary
@@ -468,6 +465,7 @@ RuntimeLaunchResult WindowsProcessLauncher::Launch(
                 || resolved.error == ExecutableResolutionError::CommandTooLong
             ? RuntimeLaunchResult::InvalidCommand
             : RuntimeLaunchResult::ResolutionFailed;
+        return {result, resolved.win32Error};
     }
 
     std::vector<wchar_t> mutableCommand;
@@ -477,11 +475,12 @@ RuntimeLaunchResult WindowsProcessLauncher::Launch(
             resolved.commandLine.end());
         mutableCommand.push_back(L'\0');
     } catch (...) {
-        lastWin32Error_ = ERROR_NOT_ENOUGH_MEMORY;
-        return RuntimeLaunchResult::CreationFailed;
+        return {
+            RuntimeLaunchResult::CreationFailed,
+            ERROR_NOT_ENOUGH_MEMORY};
     }
     if (cancellation.Cancelled()) {
-        return RuntimeLaunchResult::Cancelled;
+        return {RuntimeLaunchResult::Cancelled, ERROR_SUCCESS};
     }
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -499,23 +498,11 @@ RuntimeLaunchResult WindowsProcessLauncher::Launch(
         &startup,
         &process);
     if (created == FALSE) {
-        lastWin32Error_ = GetLastError();
-        return RuntimeLaunchResult::CreationFailed;
+        return {RuntimeLaunchResult::CreationFailed, GetLastError()};
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    lastWin32Error_ = ERROR_SUCCESS;
-    return RuntimeLaunchResult::Launched;
-}
-
-ExecutableResolutionError WindowsProcessLauncher::LastResolutionError() const noexcept
-{
-    return lastResolutionError_;
-}
-
-DWORD WindowsProcessLauncher::LastWin32Error() const noexcept
-{
-    return lastWin32Error_;
+    return {RuntimeLaunchResult::Launched, ERROR_SUCCESS};
 }
 
 } // namespace inputweaver::win32

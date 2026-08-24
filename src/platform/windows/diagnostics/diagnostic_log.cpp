@@ -82,20 +82,6 @@ const char* ExtraInfoName(ExtraInfoCategory value) noexcept {
     return "Unknown";
 }
 
-const char* QueueResultName(QueueResult value) noexcept {
-    switch (value) {
-        case QueueResult::NotAttempted:
-            return "NotAttempted";
-        case QueueResult::Accepted:
-            return "Accepted";
-        case QueueResult::Rejected:
-            return "Rejected";
-        case QueueResult::CommitRejected:
-            return "CommitRejected";
-    }
-    return "Unknown";
-}
-
 const char* RuntimeDiagnosticName(RuntimeDiagnosticKind value) noexcept {
     switch (value) {
         case RuntimeDiagnosticKind::ActivationFailure:
@@ -130,6 +116,22 @@ const char* RuntimeDiagnosticName(RuntimeDiagnosticKind value) noexcept {
     return "Unknown";
 }
 
+const char* RuntimeLaunchResultName(RuntimeLaunchResult value) noexcept {
+    switch (value) {
+        case RuntimeLaunchResult::Launched:
+            return "Launched";
+        case RuntimeLaunchResult::Cancelled:
+            return "Cancelled";
+        case RuntimeLaunchResult::InvalidCommand:
+            return "InvalidCommand";
+        case RuntimeLaunchResult::ResolutionFailed:
+            return "ResolutionFailed";
+        case RuntimeLaunchResult::CreationFailed:
+            return "CreationFailed";
+    }
+    return "Unknown";
+}
+
 bool IsExactControl(DiagnosticControl value) noexcept {
     return value != DiagnosticControl::OtherKeyboard && value != DiagnosticControl::OtherMouse &&
            value != DiagnosticControl::MouseMove && value != DiagnosticControl::MouseWheel;
@@ -140,7 +142,7 @@ bool IsExactControl(DiagnosticControl value) noexcept {
 DiagnosticControl ClassifyDiagnosticControl(
     DeviceKind device,
     Transition transition,
-    ControlCode code) noexcept {
+    std::uint32_t code) noexcept {
     if (device == DeviceKind::Mouse) {
         if (transition == Transition::Move) {
             return DiagnosticControl::MouseMove;
@@ -148,42 +150,44 @@ DiagnosticControl ClassifyDiagnosticControl(
         if (transition == Transition::VerticalWheel || transition == Transition::HorizontalWheel) {
             return DiagnosticControl::MouseWheel;
         }
-        return code == control::kMouseMiddle
+        return code == VK_MBUTTON
             ? DiagnosticControl::MiddleButton
             : DiagnosticControl::OtherMouse;
     }
 
     switch (code) {
-        case control::kF6:
+        case VK_F6:
             return DiagnosticControl::F6;
-        case control::kF7:
+        case VK_F7:
             return DiagnosticControl::F7;
-        case control::kF8:
+        case VK_F8:
             return DiagnosticControl::F8;
-        case control::kF9:
+        case VK_F9:
             return DiagnosticControl::F9;
-        case control::kF10:
+        case VK_F10:
             return DiagnosticControl::F10;
-        case control::kF12:
+        case VK_F12:
             return DiagnosticControl::F12;
-        case control::kControl:
-        case control::kLeftControl:
-        case control::kRightControl:
+        case VK_CONTROL:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
             return DiagnosticControl::Control;
-        case control::kShift:
-        case control::kLeftShift:
-        case control::kRightShift:
+        case VK_SHIFT:
+        case VK_LSHIFT:
+        case VK_RSHIFT:
             return DiagnosticControl::Shift;
         default:
             return DiagnosticControl::OtherKeyboard;
     }
 }
 
-ExtraInfoCategory CategorizeExtraInfo(InputExtraInfo extraInfo, SelfTag selfTag) noexcept {
+ExtraInfoCategory CategorizeExtraInfo(
+    std::uintptr_t extraInfo,
+    std::uintptr_t selfTag) noexcept {
     if (extraInfo == 0) {
         return ExtraInfoCategory::Zero;
     }
-    return static_cast<SelfTag>(extraInfo) == selfTag
+    return extraInfo == selfTag
         ? ExtraInfoCategory::OwnTag
         : ExtraInfoCategory::OtherNonzero;
 }
@@ -204,10 +208,8 @@ bool ShouldPublishHookDiagnostic(
     bool traceInput) noexcept {
     return traceInput ||
            record.origin == InputOrigin::SelfInjected ||
-           record.ruleId != 0 ||
-           record.queueResult != QueueResult::NotAttempted ||
            record.suppressed ||
-           (record.device == DeviceKind::Keyboard && record.code == control::kF12);
+        (record.device == DeviceKind::Keyboard && record.code == VK_F12);
 }
 
 bool ShouldPublishProgramHookDiagnostic(
@@ -220,15 +222,14 @@ bool ShouldPublishProgramHookDiagnostic(
 std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record) {
     std::ostringstream stream;
     stream << "{\"kind\":\"hook\",\"seq\":" << record.sequence << ",\"qpc\":" << record.qpcTimestamp
-           << ",\"duration_us\":" << record.processingMicroseconds << ",\"aggregate_count\":" << record.aggregateCount
+           << ",\"duration_us\":" << record.processingMicroseconds
            << ",\"device\":\"" << DeviceName(record.device)
            << "\",\"transition\":\"" << TransitionName(record.transition) << "\",\"control\":\""
            << ControlName(record.control) << "\",\"code\":" << record.code << ",\"scan\":" << record.scanCode
            << ",\"flags\":" << record.rawFlags << ",\"mouse_data\":" << record.mouseData << ",\"origin\":\""
            << OriginName(record.origin) << "\",\"lower_il\":" << (record.lowerIntegrityInjected ? "true" : "false")
            << ",\"extra\":\"" << ExtraInfoName(record.extraInfo) << "\",\"foreground_pid\":" << record.foregroundPid
-           << ",\"rule\":" << record.ruleId << ",\"queue\":\"" << QueueResultName(record.queueResult)
-           << "\",\"suppressed\":" << (record.suppressed ? "true" : "false") << "}";
+           << ",\"suppressed\":" << (record.suppressed ? "true" : "false") << "}";
     return stream.str();
 }
 
@@ -239,11 +240,8 @@ std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& recor
            << ",\"target_pid\":" << record.targetPid << ",\"device\":\"" << DeviceName(record.outputDevice)
            << "\",\"transition\":\"" << TransitionName(record.outputTransition) << "\",\"code\":"
            << record.outputCode << ",\"requested\":" << record.requested << ",\"sent\":"
-           << record.sent << ",\"error\":" << record.win32Error << ",\"cleanup_requested\":" << record.cleanupRequested
-           << ",\"cleanup_sent\":" << record.cleanupSent << ",\"cleanup_error\":" << record.cleanupError
-           << ",\"cancelled_target\":"
-           << (record.cancelledForTarget ? "true" : "false") << ",\"cancelled_physical\":"
-           << (record.cancelledForPhysicalState ? "true" : "false") << ",\"cancelled_circuit\":"
+           << record.sent << ",\"error\":" << record.win32Error << ",\"cancelled_target\":"
+           << (record.cancelledForTarget ? "true" : "false") << ",\"cancelled_circuit\":"
            << (record.cancelledForCircuitBreaker ? "true" : "false") << ",\"cancelled_shutdown\":"
            << (record.cancelledForShutdown ? "true" : "false") << ",\"cancelled_generation\":"
            << (record.cancelledForGeneration ? "true" : "false") << ",\"circuit_open\":"
@@ -258,7 +256,14 @@ std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record) {
            << ",\"sequence\":" << record.sequence << ",\"source_begin\":" << record.source.beginByte
            << ",\"source_length\":" << record.source.byteLength << ",\"subject\":" << record.subject
            << ",\"position\":" << record.position << ",\"deadline_ns\":" << record.deadlineNanoseconds
-           << ",\"detail\":" << record.detail << "}";
+           << ",\"detail\":" << record.detail;
+    if (record.kind == RuntimeDiagnosticKind::LaunchFailure) {
+        stream << ",\"launch_result\":\""
+               << RuntimeLaunchResultName(
+                      static_cast<RuntimeLaunchResult>(record.detail))
+               << "\",\"platform_error\":" << record.platformError;
+    }
+    stream << "}";
     return stream.str();
 }
 
@@ -374,7 +379,6 @@ bool DiagnosticLog::TryPushRuntime(const RuntimeDiagnosticRecord& record) noexce
         return true;
     }
     if (!runtimeRing_.TryPush(record)) {
-        droppedRuntimeRecords_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     SetEvent(wakeEvent_);
@@ -394,7 +398,7 @@ std::uint64_t DiagnosticLog::DroppedInjectionRecords() const noexcept {
 }
 
 std::uint64_t DiagnosticLog::DroppedRuntimeRecords() const noexcept {
-    return droppedRuntimeRecords_.load(std::memory_order_relaxed);
+    return runtimeRing_.RejectedPushCount();
 }
 
 std::uint64_t DiagnosticLog::JsonlBytesWritten() const noexcept {

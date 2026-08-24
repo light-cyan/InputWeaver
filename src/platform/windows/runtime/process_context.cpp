@@ -1,5 +1,7 @@
 #include "process_context.hpp"
 
+#include "windows_support.hpp"
+
 #include <array>
 #include <cstddef>
 #include <limits>
@@ -12,25 +14,10 @@ constexpr DWORD kTargetProcessAccess =
     PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
 constexpr DWORD kMaximumImagePathCharacters = 32768;
 
-class ScopedHandle final {
-public:
-    explicit ScopedHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-
-    ~ScopedHandle() {
-        if (handle_ != nullptr) {
-            CloseHandle(handle_);
-        }
-    }
-
-    ScopedHandle(const ScopedHandle&) = delete;
-    ScopedHandle& operator=(const ScopedHandle&) = delete;
-
-    [[nodiscard]] HANDLE Get() const noexcept {
-        return handle_;
-    }
-
-private:
-    HANDLE handle_;
+struct IntegrityLevelResult {
+    DWORD integrityRid{0};
+    DWORD win32Error{ERROR_SUCCESS};
+    bool succeeded{false};
 };
 
 [[nodiscard]] bool WindowBelongsToProcess(
@@ -89,36 +76,21 @@ struct ImagePathMatchResult {
     bool matches{false};
 };
 
-[[nodiscard]] bool EqualOrdinalIgnoreCase(
-    std::wstring_view left,
-    std::wstring_view right) noexcept {
-    if (left.size() != right.size() ||
-        left.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        return false;
-    }
-    return CompareStringOrdinal(
-               left.data(),
-               static_cast<int>(left.size()),
-               right.data(),
-               static_cast<int>(right.size()),
-               TRUE) == CSTR_EQUAL;
-}
-
 [[nodiscard]] bool EqualNormalizedImagePath(
     std::wstring_view actual,
     std::wstring_view expected) noexcept {
     constexpr std::wstring_view localPrefix = L"\\\\?\\";
     constexpr std::wstring_view uncPrefix = L"\\\\?\\UNC\\";
     if (actual.size() >= uncPrefix.size() &&
-        EqualOrdinalIgnoreCase(actual.substr(0, uncPrefix.size()), uncPrefix)) {
+        win32::EqualOrdinalIgnoreCase(actual.substr(0, uncPrefix.size()), uncPrefix)) {
         return expected.size() >= 2U && expected[0] == L'\\' && expected[1] == L'\\' &&
-               EqualOrdinalIgnoreCase(actual.substr(uncPrefix.size()), expected.substr(2U));
+               win32::EqualOrdinalIgnoreCase(actual.substr(uncPrefix.size()), expected.substr(2U));
     }
     if (actual.size() >= localPrefix.size() &&
-        EqualOrdinalIgnoreCase(actual.substr(0, localPrefix.size()), localPrefix)) {
+        win32::EqualOrdinalIgnoreCase(actual.substr(0, localPrefix.size()), localPrefix)) {
         actual.remove_prefix(localPrefix.size());
     }
-    return EqualOrdinalIgnoreCase(actual, expected);
+    return win32::EqualOrdinalIgnoreCase(actual, expected);
 }
 
 [[nodiscard]] ImagePathMatchResult ProcessImagePathMatches(
@@ -171,29 +143,13 @@ const char* ProcessContextErrorName(ProcessContextError error) noexcept {
     return "unknown";
 }
 
-IntegrityLevelResult QueryProcessIntegrityLevel(HANDLE process) noexcept {
-    // GetCurrentProcess returns the valid pseudo handle value -1, which is
-    // numerically equal to INVALID_HANDLE_VALUE.
-    if (process == nullptr) {
-        return {0, ERROR_INVALID_HANDLE, false};
-    }
-
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(process, TOKEN_QUERY, &token)) {
-        return {0, GetLastError(), false};
-    }
-
-    const ScopedHandle scopedToken(token);
-    return QueryTokenIntegrityLevel(scopedToken.Get());
-}
-
 bool IsTargetIntegrityCompatible(
     DWORD currentIntegrityRid,
     DWORD targetIntegrityRid) noexcept {
     return targetIntegrityRid <= currentIntegrityRid;
 }
 
-bool IsProcessForeground(ProcessId processId) noexcept {
+bool IsProcessForeground(WindowsProcessId processId) noexcept {
     if (processId == 0) {
         return false;
     }
@@ -208,8 +164,8 @@ bool IsProcessForeground(ProcessId processId) noexcept {
     return foregroundProcessId == processId;
 }
 
-bool IsProcessPointerTarget(
-    ProcessId processId,
+[[nodiscard]] static bool IsProcessPointerTarget(
+    WindowsProcessId processId,
     ScreenPoint screenPoint) noexcept {
     if (processId == 0) {
         return false;
@@ -246,9 +202,7 @@ TargetProcessContext::~TargetProcessContext() {
 TargetProcessContext::TargetProcessContext(
     TargetProcessContext&& other) noexcept
     : targetHandle_(std::exchange(other.targetHandle_, nullptr)),
-      targetPid_(std::exchange(other.targetPid_, 0)),
-      currentIntegrityRid_(std::exchange(other.currentIntegrityRid_, 0)),
-      targetIntegrityRid_(std::exchange(other.targetIntegrityRid_, 0)) {}
+      targetPid_(std::exchange(other.targetPid_, 0)) {}
 
 TargetProcessContext& TargetProcessContext::operator=(
     TargetProcessContext&& other) noexcept {
@@ -256,19 +210,17 @@ TargetProcessContext& TargetProcessContext::operator=(
         Reset();
         targetHandle_ = std::exchange(other.targetHandle_, nullptr);
         targetPid_ = std::exchange(other.targetPid_, 0);
-        currentIntegrityRid_ =
-            std::exchange(other.currentIntegrityRid_, 0);
-        targetIntegrityRid_ = std::exchange(other.targetIntegrityRid_, 0);
     }
     return *this;
 }
 
-ProcessContextResult TargetProcessContext::Initialize(ProcessId targetPid) noexcept {
+ProcessContextResult TargetProcessContext::Initialize(
+    WindowsProcessId targetPid) noexcept {
     return Initialize(targetPid, {});
 }
 
 ProcessContextResult TargetProcessContext::Initialize(
-    ProcessId targetPid,
+    WindowsProcessId targetPid,
     std::wstring_view expectedImagePath) noexcept {
     Reset();
 
@@ -329,7 +281,7 @@ ProcessContextResult TargetProcessContext::Initialize(
         Reset();
         return result;
     }
-    const ScopedHandle scopedCurrentToken(currentToken);
+    const win32::UniqueHandle scopedCurrentToken(currentToken);
     const IntegrityLevelResult currentIntegrity =
         QueryTokenIntegrityLevel(scopedCurrentToken.Get());
     if (!currentIntegrity.succeeded) {
@@ -338,8 +290,6 @@ ProcessContextResult TargetProcessContext::Initialize(
         Reset();
         return result;
     }
-    result.currentIntegrityRid = currentIntegrity.integrityRid;
-
     HANDLE targetToken = nullptr;
     if (!OpenProcessToken(targetHandle_, TOKEN_QUERY, &targetToken)) {
         result.error = ProcessContextError::TargetTokenOpenFailed;
@@ -347,7 +297,7 @@ ProcessContextResult TargetProcessContext::Initialize(
         Reset();
         return result;
     }
-    const ScopedHandle scopedTargetToken(targetToken);
+    const win32::UniqueHandle scopedTargetToken(targetToken);
     const IntegrityLevelResult targetIntegrity =
         QueryTokenIntegrityLevel(scopedTargetToken.Get());
     if (!targetIntegrity.succeeded) {
@@ -356,8 +306,6 @@ ProcessContextResult TargetProcessContext::Initialize(
         Reset();
         return result;
     }
-    result.targetIntegrityRid = targetIntegrity.integrityRid;
-
     if (!IsTargetIntegrityCompatible(
             currentIntegrity.integrityRid,
             targetIntegrity.integrityRid)) {
@@ -376,8 +324,6 @@ ProcessContextResult TargetProcessContext::Initialize(
         return result;
     }
 
-    currentIntegrityRid_ = currentIntegrity.integrityRid;
-    targetIntegrityRid_ = targetIntegrity.integrityRid;
     return result;
 }
 
@@ -387,8 +333,6 @@ void TargetProcessContext::Reset() noexcept {
     }
     targetHandle_ = nullptr;
     targetPid_ = 0;
-    currentIntegrityRid_ = 0;
-    targetIntegrityRid_ = 0;
 }
 
 bool TargetProcessContext::IsValid() const noexcept {
@@ -445,20 +389,12 @@ bool TargetProcessContext::IsTargetPointerTargetAtCursor() const noexcept {
         static_cast<InputCoordinate>(cursor.y)});
 }
 
-ProcessId TargetProcessContext::TargetPid() const noexcept {
+WindowsProcessId TargetProcessContext::TargetPid() const noexcept {
     return targetPid_;
 }
 
 HANDLE TargetProcessContext::TargetHandle() const noexcept {
     return targetHandle_;
-}
-
-DWORD TargetProcessContext::CurrentIntegrityRid() const noexcept {
-    return currentIntegrityRid_;
-}
-
-DWORD TargetProcessContext::TargetIntegrityRid() const noexcept {
-    return targetIntegrityRid_;
 }
 
 }  // namespace inputweaver

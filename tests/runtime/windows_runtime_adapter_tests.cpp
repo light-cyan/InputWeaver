@@ -4,9 +4,9 @@
 #include "platform/windows/runtime/runtime_control_catalog.hpp"
 #include "platform/windows/runtime/runtime_process_launcher.hpp"
 #include "platform/windows/runtime/runtime_route_adapter.hpp"
+#include "platform/windows/runtime/windows_output_queue.hpp"
 #include "program/compiled_program.hpp"
 #include "program/program_validator.hpp"
-#include "runtime/action_queue.hpp"
 #include "runtime/program_runtime.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 
@@ -175,15 +175,15 @@ public:
         return true;
     }
 
-    [[nodiscard]] inputweaver::RuntimeLaunchResult Launch(
+    [[nodiscard]] inputweaver::RuntimeLaunchOutcome Launch(
         std::string_view command,
         inputweaver::RuntimeCancellationProbe cancellation) noexcept override
     {
         (void)command;
         if (cancellation.Cancelled()) {
-            return inputweaver::RuntimeLaunchResult::Cancelled;
+            return {inputweaver::RuntimeLaunchResult::Cancelled, 0U};
         }
-        return inputweaver::RuntimeLaunchResult::Launched;
+        return {inputweaver::RuntimeLaunchResult::Launched, 0U};
     }
 };
 
@@ -196,68 +196,112 @@ public:
     return std::move(result.program);
 }
 
+[[nodiscard]] inputweaver::RuntimeOutputResult PublishToQueue(
+    void* context,
+    const inputweaver::WindowsOutputItem& item) noexcept
+{
+    if (context == nullptr) {
+        return inputweaver::RuntimeOutputResult::Failed;
+    }
+    auto& queue = *static_cast<inputweaver::WindowsOutputQueue*>(context);
+    return queue.TryPush(item)
+        ? inputweaver::RuntimeOutputResult::Accepted
+        : inputweaver::RuntimeOutputResult::CapacityRejected;
+}
+
 void CheckSingleCatalogBinding(
     const inputweaver::ControlRef& control,
     std::uint8_t uses,
     std::string_view name)
 {
-    inputweaver::win32::WindowsControlCatalog catalog;
+    using namespace inputweaver;
+    win32::WindowsControlCatalog catalog;
     catalog.BeginActivation();
-    inputweaver::ActivatedControl activated{};
+    ActivatedControl activated{};
     const auto result = catalog.BindControl(
-        inputweaver::ControlRefId{0U},
+        ControlRefId{0U},
         control,
         uses,
         activated);
-    Check(
-        result == inputweaver::RuntimeControlBindResult::Bound,
-        name);
+    Check(result == RuntimeControlBindResult::Bound, name);
+    if (result != RuntimeControlBindResult::Bound) {
+        catalog.AbortActivation();
+        return;
+    }
     catalog.CommitActivation();
     Check(
         catalog.BindingCount() == 1U
             && catalog.Binding(activated.backendToken) != nullptr,
         "committed catalog token resolves to one recipe");
-    const inputweaver::win32::WindowsControlBinding* const binding =
+    const win32::WindowsControlBinding* const binding =
         catalog.Binding(activated.backendToken);
     if (binding == nullptr) {
         return;
     }
-    if (activated.device == inputweaver::DeviceKind::Keyboard) {
+    if (activated.device == DeviceKind::Keyboard) {
         Check(
             activated.initialStateQueryable && binding->initialStateQueryable,
             "keyboard binding exposes initial-state query support");
     }
-    inputweaver::InputEvent native{};
+    WindowsNativeInputEvent native{};
     native.device = activated.device;
-    native.origin = inputweaver::InputOrigin::PhysicalCandidate;
-    native.transition = inputweaver::Transition::Down;
-    native.code = binding->virtualKey;
+    native.origin = InputOrigin::PhysicalCandidate;
+    native.transition = Transition::Down;
+    native.virtualKey = binding->virtualKey;
     native.scanCode = binding->scanCode;
-    native.flags = binding->scanQualifier
-            == inputweaver::kWindowsScanCodeQualifierE0
+    native.hookFlags = binding->scanQualifier
+            == kWindowsScanCodeQualifierE0
         ? LLKHF_EXTENDED
         : 0U;
-    const std::optional<inputweaver::ControlRefId> normalized =
-        catalog.Normalize(native);
+    const std::optional<ControlRefId> normalized = catalog.Normalize(native);
     Check(
         normalized.has_value() && normalized->value == 0U,
         "catalog input recipe normalizes to its strong ID");
 
-    inputweaver::ActionBatch output{};
-    output.actions[0] = {
-        activated.device,
-        inputweaver::Transition::Down,
-        binding->virtualKey,
-        0,
-        0};
-    output.actions[1] = output.actions[0];
-    output.actions[1].transition = inputweaver::Transition::Up;
-    output.actionCount = 2U;
-    const inputweaver::InputInjector injector(0x49575254U);
-    const inputweaver::PreparedInputBatch prepared = injector.Prepare(output);
-    Check(
-        prepared.Succeeded() && prepared.count == 2U,
-        "catalog output recipe converts to native down and up inputs");
+    if ((uses & ToControlUseBits(ControlUse::OutputDownUp)) == 0U) {
+        return;
+    }
+
+    WindowsOutputQueue queue;
+    win32::WindowsRuntimeOutputPort outputPort(
+        catalog,
+        &queue,
+        &PublishToQueue);
+    RuntimeOutputRequest request{};
+    request.control = ControlRefId{0U};
+    request.identity = control;
+    request.activated = activated;
+    request.transition = RuntimeOutputTransition::Down;
+    const RuntimeOutputResult publishResult = outputPort.Publish(request);
+    WindowsOutputItem output{};
+    const bool popped = queue.TryPop(output);
+    const PreparedInput prepared = popped
+        ? InputInjector(0x49575254U).Prepare(output)
+        : PreparedInput{};
+    bool exact = publishResult == RuntimeOutputResult::Accepted
+        && prepared.Succeeded();
+    if (exact && control.namespaceId == kControlNamespaceWindows) {
+        const INPUT& input = prepared.input;
+        if (control.familyId == kWindowsScanCodeFamily) {
+            exact = input.type == INPUT_KEYBOARD
+                && input.ki.wVk == 0U
+                && input.ki.wScan == control.code
+                && (input.ki.dwFlags & KEYEVENTF_SCANCODE) != 0U
+                && ((input.ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0U)
+                    == (control.qualifier == kWindowsScanCodeQualifierE0);
+        } else if (binding->kind == win32::WindowsControlKind::MouseButton) {
+            exact = input.type == INPUT_MOUSE
+                && (control.code != VK_XBUTTON1
+                    || ((input.mi.dwFlags & MOUSEEVENTF_XDOWN) != 0U
+                        && input.mi.mouseData == XBUTTON1));
+        } else {
+            exact = input.type == INPUT_KEYBOARD
+                && input.ki.wVk == control.code
+                && input.ki.wScan == 0U
+                && (input.ki.dwFlags & KEYEVENTF_SCANCODE) == 0U;
+        }
+    }
+    Check(exact, "catalog preserves exact output identity through publication");
 }
 
 void TestWindowsControlCatalogCoverage()
@@ -268,6 +312,9 @@ void TestWindowsControlCatalogCoverage()
         | ToControlUseBits(ControlUse::PhysicalState)
         | ToControlUseBits(ControlUse::OutputDownUp)
         | ToControlUseBits(ControlUse::OutputRepeat);
+    constexpr std::uint8_t inputUses =
+        ToControlUseBits(ControlUse::EventSource)
+        | ToControlUseBits(ControlUse::PhysicalState);
     for (std::uint32_t usage = 0x04U; usage <= 0x1dU; ++usage) {
         CheckSingleCatalogBinding(
             {kControlNamespaceUsbHid, 0x07U, usage, 0U},
@@ -332,6 +379,14 @@ void TestWindowsControlCatalogCoverage()
         allUses,
         "layout-sensitive Windows virtual key binds");
     CheckSingleCatalogBinding(
+        {kControlNamespaceWindows, kWindowsVirtualKeyFamily, VK_F7, 0U},
+        allUses,
+        "Windows function virtual key retains virtual-key output");
+    CheckSingleCatalogBinding(
+        {kControlNamespaceWindows, kWindowsVirtualKeyFamily, VK_XBUTTON1, 0U},
+        allUses,
+        "Windows extended mouse button retains native output");
+    CheckSingleCatalogBinding(
         {kControlNamespaceWindows, kWindowsScanCodeFamily, 0x1eU, 0U},
         allUses,
         "normal Windows scan code binds");
@@ -343,8 +398,8 @@ void TestWindowsControlCatalogCoverage()
     CheckSingleCatalogBinding(
         {kControlNamespaceWindows, kWindowsScanCodeFamily, 0x45U,
             kWindowsScanCodeQualifierE1},
-        allUses,
-        "E1 exceptional Windows scan code binds");
+        inputUses,
+        "E1 exceptional Windows scan code binds for input");
 
     win32::WindowsControlCatalog unsupportedCatalog;
     unsupportedCatalog.BeginActivation();
@@ -361,58 +416,15 @@ void TestWindowsControlCatalogCoverage()
             allUses,
             unsupported) == RuntimeControlBindResult::UnsupportedIdentity,
         "Windows activation rejects scan-code zero after structural validation");
-    unsupportedCatalog.AbortActivation();
-
-    win32::WindowsControlCatalog recipeCatalog;
-    recipeCatalog.BeginActivation();
-    ActivatedControl normal{};
-    ActivatedControl extended{};
-    ActivatedControl exceptional{};
-    ActivatedControl layout{};
-    Check(
-        recipeCatalog.BindControl(
-            ControlRefId{0U},
-            {kControlNamespaceWindows, kWindowsScanCodeFamily, 0x1eU, 0U},
-            allUses,
-            normal) == RuntimeControlBindResult::Bound,
-        "normal recipe stages");
-    Check(
-        recipeCatalog.BindControl(
-            ControlRefId{1U},
-            {kControlNamespaceWindows, kWindowsScanCodeFamily, 0x1dU,
-                kWindowsScanCodeQualifierE0},
-            allUses,
-            extended) == RuntimeControlBindResult::Bound,
-        "E0 recipe stages");
-    Check(
-        recipeCatalog.BindControl(
+    Check(unsupportedCatalog.BindControl(
             ControlRefId{2U},
             {kControlNamespaceWindows, kWindowsScanCodeFamily, 0x45U,
                 kWindowsScanCodeQualifierE1},
             allUses,
-            exceptional) == RuntimeControlBindResult::Bound,
-        "E1 recipe stages");
-    Check(
-        recipeCatalog.BindControl(
-            ControlRefId{3U},
-            {kControlNamespaceWindows, kWindowsVirtualKeyFamily, VK_OEM_1, 0U},
-            allUses,
-            layout) == RuntimeControlBindResult::Bound,
-        "layout-sensitive recipe stages");
-    recipeCatalog.CommitActivation();
-    Check(
-        recipeCatalog.Binding(normal.backendToken)->scanQualifier == 0U,
-        "normal recipe retains no prefix");
-    Check(
-        recipeCatalog.Binding(extended.backendToken)->scanQualifier
-            == kWindowsScanCodeQualifierE0,
-        "E0 recipe retains its prefix");
-    Check(
-        recipeCatalog.Binding(exceptional.backendToken)->exceptionalSequence,
-        "E1 recipe is marked exceptional");
-    Check(
-        recipeCatalog.Binding(layout.backendToken)->layoutSensitive,
-        "OEM virtual key records layout sensitivity");
+            unsupported) == RuntimeControlBindResult::MissingCapability,
+        "Windows activation rejects unsupported E1 output capability");
+    unsupportedCatalog.AbortActivation();
+
 }
 
 void TestCatalogAmbiguityAndNormalization()
@@ -449,15 +461,60 @@ void TestCatalogAmbiguityAndNormalization()
             portable) == RuntimeControlBindResult::Bound,
         "portable F6 binding stages");
     catalog.CommitActivation();
-    InputEvent input{};
+    WindowsNativeInputEvent input{};
     input.device = DeviceKind::Keyboard;
     input.origin = InputOrigin::PhysicalCandidate;
     input.transition = Transition::Down;
-    input.code = VK_F6;
+    input.virtualKey = VK_F6;
     const std::optional<ControlRefId> normalized = catalog.Normalize(input);
     Check(
         normalized.has_value() && normalized->value == 7U,
         "native F6 normalizes to its activated strong ID");
+}
+
+void TestMaximumCatalogNormalizationCost()
+{
+    using namespace inputweaver;
+    constexpr std::uint32_t maximumControls = 4096U;
+    constexpr std::uint8_t outputUse = ToControlUseBits(ControlUse::OutputDownUp);
+    constexpr std::uint8_t inputUse = ToControlUseBits(ControlUse::EventSource);
+    win32::WindowsControlCatalog catalog;
+    catalog.BeginActivation();
+    bool outputBindingsBound = true;
+    for (std::uint32_t index = 0U; index + 1U < maximumControls; ++index) {
+        ActivatedControl output{};
+        const std::uint32_t virtualKey = VK_F1 + index % 12U;
+        outputBindingsBound = catalog.BindControl(
+                ControlRefId{index},
+                {kControlNamespaceWindows, kWindowsVirtualKeyFamily, virtualKey, 0U},
+                outputUse,
+                output) == RuntimeControlBindResult::Bound
+            && outputBindingsBound;
+    }
+    ActivatedControl inputBinding{};
+    Check(
+        outputBindingsBound
+            && catalog.BindControl(
+                ControlRefId{maximumControls - 1U},
+                {kControlNamespaceWindows, kWindowsVirtualKeyFamily, VK_F12, 0U},
+                inputUse,
+                inputBinding) == RuntimeControlBindResult::Bound,
+        "maximum catalog stages every binding");
+    catalog.CommitActivation();
+
+    WindowsNativeInputEvent input{};
+    input.device = DeviceKind::Keyboard;
+    input.origin = InputOrigin::PhysicalCandidate;
+    input.transition = Transition::Down;
+    input.virtualKey = VK_F12;
+    const std::optional<ControlRefId> normalized = catalog.Normalize(input);
+    Check(
+        normalized.has_value()
+            && normalized->value == maximumControls - 1U,
+        "maximum catalog normalizes the final input binding");
+    Check(
+        catalog.LastNormalizeVisitCountForTesting() <= 4U,
+        "native normalization work is independent of activated-control count");
 }
 
 void TestKeyboardInitialStateCapabilities()
@@ -569,12 +626,11 @@ void TestModifierStateSeeding()
     storage.requirements = ComputeProgramRequirements(storage);
     const auto program = Finalize(std::move(storage));
     win32::WindowsControlCatalog catalog;
-    ActionQueue queue;
+    WindowsOutputQueue queue;
     win32::WindowsRuntimeOutputPort output(
         catalog,
-        0U,
         &queue,
-        &win32::PublishRuntimeBatchToActionQueue);
+        &PublishToQueue);
     win32::WindowsRuntimeRoutePort route(nullptr);
     FakeClock clock;
     NoLaunch launcher;
@@ -668,12 +724,11 @@ void TestRuntimeAdaptersAndForceStop()
 {
     using namespace inputweaver;
     win32::WindowsControlCatalog catalog;
-    ActionQueue queue;
+    WindowsOutputQueue queue;
     win32::WindowsRuntimeOutputPort output(
         catalog,
-        0U,
         &queue,
-        &win32::PublishRuntimeBatchToActionQueue);
+        &PublishToQueue);
     win32::WindowsRuntimeRoutePort route(nullptr);
     FakeClock clock;
     NoLaunch launcher;
@@ -681,32 +736,33 @@ void TestRuntimeAdaptersAndForceStop()
     const auto program = Finalize(test::MakeTapFixtureStorage());
     Check(runtime.Activate(program).activated, "Windows runtime adapters activate tap fixture");
     win32::WindowsRuntimeInputAdapter inputAdapter(catalog);
-    InputEvent f6{};
+    WindowsNativeInputEvent f6{};
     f6.device = DeviceKind::Keyboard;
     f6.origin = InputOrigin::PhysicalCandidate;
     f6.transition = Transition::Down;
-    f6.code = VK_F6;
+    f6.virtualKey = VK_F6;
     Check(
         runtime.HandleInput(inputAdapter.Normalize(f6)) == InputDecision::Suppress,
         "Windows native F6 reaches the compiled event bucket");
     (void)runtime.Pump();
-    ActionBatch batch{};
+    WindowsOutputItem item{};
     Check(
-        queue.TryPop(batch)
-            && batch.actionCount == 1U
-            && batch.actions[0].transition == Transition::Down
-            && batch.actions[0].code == VK_F7,
-        "runtime output enters the existing bounded ActionBatch queue");
+        queue.TryPop(item)
+            && item.transition == WindowsOutputTransition::Down
+            && item.outputCode == VK_F7
+            && item.recipe.kind
+                == WindowsOutputKind::KeyboardScanCode,
+        "runtime output enters the bounded Windows output queue");
 
-    InputEvent control{};
+    WindowsNativeInputEvent control{};
     control.device = DeviceKind::Keyboard;
     control.origin = InputOrigin::PhysicalCandidate;
     control.transition = Transition::Down;
-    control.code = VK_LCONTROL;
-    InputEvent shift = control;
-    shift.code = VK_RSHIFT;
-    InputEvent f12 = control;
-    f12.code = VK_F12;
+    control.virtualKey = VK_LCONTROL;
+    WindowsNativeInputEvent shift = control;
+    shift.virtualKey = VK_RSHIFT;
+    WindowsNativeInputEvent f12 = control;
+    f12.virtualKey = VK_F12;
     win32::WindowsRuntimeInputAdapter startupSeedAdapter(catalog);
     (void)startupSeedAdapter.Normalize(control);
     (void)startupSeedAdapter.Normalize(shift);
@@ -765,17 +821,33 @@ void TestExecutableResolutionAndCreateContract()
 
     g_createProcess = {};
     WindowsProcessLauncher deniedLauncher(false, &FakeCreateProcessW);
+    const inputweaver::RuntimeLaunchOutcome deniedOutcome =
+        deniedLauncher.Launch("cmd.exe /d /c echo denied", {});
     Check(
         !deniedLauncher.Permitted()
-            && deniedLauncher.Launch("cmd.exe /d /c echo denied", {})
+            && deniedOutcome.result
                 == inputweaver::RuntimeLaunchResult::CreationFailed
-            && deniedLauncher.LastWin32Error() == ERROR_ACCESS_DISABLED_BY_POLICY
+            && deniedOutcome.platformError == ERROR_ACCESS_DISABLED_BY_POLICY
             && g_createProcess.calls == 0U,
         "denied process launcher never reaches native process creation");
     WindowsProcessLauncher fakeLauncher(true, &FakeCreateProcessW);
+    const inputweaver::RuntimeLaunchOutcome invalidOutcome =
+        fakeLauncher.Launch("\"C:\\missing.exe --arg", {});
     Check(
-        fakeLauncher.Launch("cmd.exe /d /c echo ready", {})
-            == inputweaver::RuntimeLaunchResult::Launched,
+        invalidOutcome.result == inputweaver::RuntimeLaunchResult::InvalidCommand
+            && invalidOutcome.platformError == ERROR_INVALID_DATA,
+        "invalid authored command preserves its portable and Win32 errors");
+    const inputweaver::RuntimeLaunchOutcome resolutionOutcome =
+        fakeLauncher.Launch("InputWeaver.NoSuchExecutable.exe --arg", {});
+    Check(
+        resolutionOutcome.result
+                == inputweaver::RuntimeLaunchResult::ResolutionFailed
+            && resolutionOutcome.platformError == ERROR_FILE_NOT_FOUND,
+        "executable resolution failure preserves its portable and Win32 errors");
+    const inputweaver::RuntimeLaunchOutcome successOutcome =
+        fakeLauncher.Launch("cmd.exe /d /c echo ready", {});
+    Check(
+        successOutcome.Succeeded() && successOutcome.platformError == ERROR_SUCCESS,
         "explicit cmd invocation launches without an implicit shell");
     Check(
         g_createProcess.calls == 1U
@@ -793,20 +865,24 @@ void TestExecutableResolutionAndCreateContract()
         "CreateProcess inherits environment without inheriting handles or adding flags");
     const std::size_t successfulCreateCalls = g_createProcess.calls;
     CancellationProbeState cancellation{};
-    Check(
+    const inputweaver::RuntimeLaunchOutcome cancelledOutcome =
         fakeLauncher.Launch(
             "cmd.exe /d /c echo cancelled",
-            {&cancellation, &CancelOnSecondProbe})
-                == inputweaver::RuntimeLaunchResult::Cancelled
+            {&cancellation, &CancelOnSecondProbe});
+    Check(
+        cancelledOutcome.result == inputweaver::RuntimeLaunchResult::Cancelled
+            && cancelledOutcome.platformError == ERROR_SUCCESS
             && cancellation.calls == 2U
             && g_createProcess.calls == successfulCreateCalls,
         "cancellation after resolution prevents native process creation");
     g_createProcess = {};
     g_createProcess.succeed = false;
+    const inputweaver::RuntimeLaunchOutcome creationOutcome =
+        fakeLauncher.Launch("cmd.exe /d /c exit 0", {});
     Check(
-        fakeLauncher.Launch("cmd.exe /d /c exit 0", {})
+        creationOutcome.result
                 == inputweaver::RuntimeLaunchResult::CreationFailed
-            && fakeLauncher.LastWin32Error() == ERROR_ACCESS_DENIED,
+            && creationOutcome.platformError == ERROR_ACCESS_DENIED,
         "native creation failure is returned to the current task");
 
     fileError.clear();
@@ -826,7 +902,7 @@ void TestChildWorkingDirectoryAndImmediateReturn()
         + " --write-cwd "
         + Quote(marker.wstring());
     Check(
-        launcher.Launch(command, {}) == inputweaver::RuntimeLaunchResult::Launched,
+        launcher.Launch(command, {}).Succeeded(),
         "working-directory observation child launches");
     for (std::size_t attempt = 0U;
          attempt < 200U && !std::filesystem::exists(marker);
@@ -845,8 +921,7 @@ void TestChildWorkingDirectoryAndImmediateReturn()
 
     const ULONGLONG start = GetTickCount64();
     Check(
-        launcher.Launch(Quote(module) + " --hold", {})
-            == inputweaver::RuntimeLaunchResult::Launched,
+        launcher.Launch(Quote(module) + " --hold", {}).Succeeded(),
         "long-running child launches");
     const ULONGLONG elapsed = GetTickCount64() - start;
     Check(elapsed < 500U, "successful launch returns without waiting for child exit");
@@ -877,6 +952,7 @@ int main(int argc, char** argv)
 
     TestWindowsControlCatalogCoverage();
     TestCatalogAmbiguityAndNormalization();
+    TestMaximumCatalogNormalizationCost();
     TestKeyboardInitialStateCapabilities();
     TestModifierStateSeeding();
     TestCompiledTargetResolution();

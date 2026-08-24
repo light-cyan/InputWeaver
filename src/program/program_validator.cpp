@@ -1,5 +1,7 @@
 #include "program_validator.hpp"
 
+#include "support/utf8.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -71,54 +73,6 @@ template <typename Id>
     const std::uint64_t end = static_cast<std::uint64_t>(span.beginByte)
         + span.byteLength;
     return span.beginByte <= sourceLength && end <= sourceLength;
-}
-
-[[nodiscard]] bool IsValidUtf8(const std::string& text) noexcept
-{
-    std::size_t index = 0;
-    while (index < text.size()) {
-        const auto first = static_cast<std::uint8_t>(text[index]);
-        if (first <= 0x7fU) {
-            ++index;
-            continue;
-        }
-
-        std::size_t continuationCount = 0;
-        std::uint32_t codePoint = 0;
-        std::uint32_t minimum = 0;
-        if ((first & 0xe0U) == 0xc0U) {
-            continuationCount = 1;
-            codePoint = first & 0x1fU;
-            minimum = 0x80U;
-        } else if ((first & 0xf0U) == 0xe0U) {
-            continuationCount = 2;
-            codePoint = first & 0x0fU;
-            minimum = 0x800U;
-        } else if ((first & 0xf8U) == 0xf0U) {
-            continuationCount = 3;
-            codePoint = first & 0x07U;
-            minimum = 0x10000U;
-        } else {
-            return false;
-        }
-        if (index + continuationCount >= text.size()) {
-            return false;
-        }
-        for (std::size_t offset = 1; offset <= continuationCount; ++offset) {
-            const auto byte = static_cast<std::uint8_t>(text[index + offset]);
-            if ((byte & 0xc0U) != 0x80U) {
-                return false;
-            }
-            codePoint = (codePoint << 6U) | (byte & 0x3fU);
-        }
-        if (codePoint < minimum
-            || codePoint > 0x10ffffU
-            || (codePoint >= 0xd800U && codePoint <= 0xdfffU)) {
-            return false;
-        }
-        index += continuationCount + 1U;
-    }
-    return true;
 }
 
 [[nodiscard]] bool HasEmbeddedNul(
@@ -1017,7 +971,7 @@ void ValidateCanonicalPools(
                 At("strings", index),
                 "string byte length exceeds its 32-bit encoding");
         }
-        if (!IsValidUtf8(storage.strings[index])) {
+        if (!support::IsValidUtf8(storage.strings[index])) {
             context.Add(
                 ProgramValidationErrorCode::String,
                 At("strings", index),

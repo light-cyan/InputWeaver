@@ -9,15 +9,15 @@
 #include <windows.h>
 
 #include "runtime/runtime_types.hpp"
+#include "windows_input_types.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
 
 namespace inputweaver::win32 {
-
-class WindowsRuntimeOutputPort;
 
 enum class WindowsControlKind : std::uint8_t {
     Keyboard,
@@ -27,14 +27,13 @@ enum class WindowsControlKind : std::uint8_t {
 struct WindowsControlBinding final {
     ControlRefId control{};
     WindowsControlKind kind{WindowsControlKind::Keyboard};
-    ControlCode virtualKey{};
-    ScanCode scanCode{};
+    WindowsVirtualKey virtualKey{};
+    WindowsScanCode scanCode{};
     std::uint32_t scanQualifier{};
+    WindowsOutputRecipe outputRecipe{};
     std::uint8_t capabilities{};
     std::uint8_t requiredUses{};
     bool matchByScanCode{};
-    bool layoutSensitive{};
-    bool exceptionalSequence{};
     bool initialStateQueryable{};
 };
 
@@ -52,8 +51,11 @@ public:
     [[nodiscard]] const WindowsControlBinding* Binding(
         std::uintptr_t token) const noexcept;
     [[nodiscard]] std::optional<ControlRefId> Normalize(
-        const InputEvent& event) const noexcept;
+        const WindowsNativeInputEvent& event) const noexcept;
     [[nodiscard]] std::size_t BindingCount() const noexcept;
+#ifdef INPUTWEAVER_TESTING
+    [[nodiscard]] std::size_t LastNormalizeVisitCountForTesting() const noexcept;
+#endif
 
 private:
     [[nodiscard]] static bool Resolve(
@@ -63,17 +65,19 @@ private:
     [[nodiscard]] static bool InputOverlaps(
         const WindowsControlBinding& left,
         const WindowsControlBinding& right) noexcept;
-    [[nodiscard]] static bool Matches(
-        const WindowsControlBinding& binding,
-        const InputEvent& event) noexcept;
-
     std::vector<WindowsControlBinding> staged_;
     std::vector<WindowsControlBinding> committed_;
+    std::array<ControlRefId, 256U> keyboardVirtualKeyIndex_{};
+    std::array<ControlRefId, 256U> mouseVirtualKeyIndex_{};
+    std::array<std::array<ControlRefId, 256U>, 3U> scanCodeIndex_{};
+#ifdef INPUTWEAVER_TESTING
+    mutable std::size_t lastNormalizeVisitCount_{};
+#endif
 };
 
 class WindowsForceStopRecognizer final {
 public:
-    [[nodiscard]] bool Observe(const InputEvent& event) noexcept;
+    [[nodiscard]] bool Observe(const WindowsNativeInputEvent& event) noexcept;
 
 private:
     bool leftControl_{};
@@ -91,37 +95,31 @@ public:
         const WindowsControlCatalog& catalog) noexcept;
 
     [[nodiscard]] RuntimeInputEvent Normalize(
-        const InputEvent& event) noexcept;
+        const WindowsNativeInputEvent& event) noexcept;
 
 private:
     const WindowsControlCatalog& catalog_;
     WindowsForceStopRecognizer forceStop_;
 };
 
-using ActionBatchPublishFunction = RuntimeOutputResult (*)(
+using WindowsOutputPublishFunction = RuntimeOutputResult (*)(
     void* context,
-    const ActionBatch& batch) noexcept;
-
-[[nodiscard]] RuntimeOutputResult PublishRuntimeBatchToActionQueue(
-    void* context,
-    const ActionBatch& batch) noexcept;
+    const WindowsOutputItem& item) noexcept;
 
 class WindowsRuntimeOutputPort final : public RuntimeOutputPort {
 public:
     WindowsRuntimeOutputPort(
         const WindowsControlCatalog& catalog,
-        ProcessId targetPid,
         void* publishContext,
-        ActionBatchPublishFunction publish) noexcept;
+        WindowsOutputPublishFunction publish) noexcept;
 
     [[nodiscard]] RuntimeOutputResult Publish(
         const RuntimeOutputRequest& request) noexcept override;
 
 private:
     const WindowsControlCatalog& catalog_;
-    ProcessId targetPid_;
     void* publishContext_;
-    ActionBatchPublishFunction publish_;
+    WindowsOutputPublishFunction publish_;
 };
 
 } // namespace inputweaver::win32

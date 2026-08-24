@@ -133,6 +133,15 @@ enum class RuntimeLaunchResult : std::uint8_t {
     CreationFailed,
 };
 
+struct RuntimeLaunchOutcome final {
+    RuntimeLaunchResult result{RuntimeLaunchResult::Launched};
+    std::uint32_t platformError{};
+
+    [[nodiscard]] bool Succeeded() const noexcept {
+        return result == RuntimeLaunchResult::Launched;
+    }
+};
+
 struct RuntimeCancellationProbe final {
     void* context{};
     bool (*invoke)(void*) noexcept{};
@@ -146,7 +155,7 @@ class RuntimeProcessLauncher {
 public:
     virtual ~RuntimeProcessLauncher() = default;
     [[nodiscard]] virtual bool Permitted() const noexcept = 0;
-    [[nodiscard]] virtual RuntimeLaunchResult Launch(
+    [[nodiscard]] virtual RuntimeLaunchOutcome Launch(
         std::string_view command,
         RuntimeCancellationProbe cancellation) noexcept = 0;
 };
@@ -205,8 +214,8 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     OwnershipCapacity,
     TaskInstructionCapacity,
     TaskOutputCapacity,
-    SchedulerCapacity,
-    OutputRateCapacity,
+    InvalidSchedulerConfiguration,
+    InvalidOutputRateConfiguration,
     TaskCapacity,
     TransactionCapacity,
     DiagnosticCapacity,
@@ -216,6 +225,17 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     InvalidTarget,
     CleanupFailure,
     AllocationFailure,
+};
+
+enum class RuntimeActivationSubject : std::uint32_t {
+    None,
+    StateSlots,
+    NumberSlots,
+    DurationSlots,
+    MaximumContinuouslyReadyQuanta,
+    ContinuouslyReadyBackoffNanoseconds,
+    MaximumOutputTransitionsPerInterval,
+    OutputRateIntervalNanoseconds,
 };
 
 struct RuntimeActivationError final {
@@ -267,6 +287,7 @@ struct RuntimeDiagnosticRecord final {
     std::uint32_t position{kInvalidProgramIndex};
     std::int64_t deadlineNanoseconds{};
     std::uint32_t detail{};
+    std::uint32_t platformError{};
 };
 
 struct RuntimeMetrics final {

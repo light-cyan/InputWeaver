@@ -1,9 +1,10 @@
 #include "process_locator.hpp"
 
+#include "windows_support.hpp"
+
 #include <tlhelp32.h>
 
 #include <algorithm>
-#include <limits>
 #include <new>
 
 namespace inputweaver::win32 {
@@ -13,27 +14,6 @@ constexpr DWORD kProcessAccess =
     PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
 constexpr DWORD kInitialPathCapacity = 512;
 constexpr DWORD kMaximumPathCapacity = 32768;
-
-class ScopedHandle final {
-public:
-    explicit ScopedHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-
-    ~ScopedHandle() {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(handle_);
-        }
-    }
-
-    ScopedHandle(const ScopedHandle&) = delete;
-    ScopedHandle& operator=(const ScopedHandle&) = delete;
-
-    [[nodiscard]] HANDLE Get() const noexcept {
-        return handle_;
-    }
-
-private:
-    HANDLE handle_;
-};
 
 enum class SelectorKind : std::uint8_t {
     Basename,
@@ -57,22 +37,6 @@ struct QueryPathResult {
     DWORD win32Error{ERROR_SUCCESS};
     bool succeeded{false};
 };
-
-[[nodiscard]] bool EqualOrdinalIgnoreCase(
-    std::wstring_view left,
-    std::wstring_view right) noexcept {
-    if (left.size() != right.size() ||
-        left.size() > static_cast<std::size_t>(
-            std::numeric_limits<int>::max())) {
-        return false;
-    }
-    return CompareStringOrdinal(
-               left.data(),
-               static_cast<int>(left.size()),
-               right.data(),
-               static_cast<int>(right.size()),
-               TRUE) == CSTR_EQUAL;
-}
 
 [[nodiscard]] bool IsSeparator(wchar_t character) noexcept {
     return character == L'\\' || character == L'/';
@@ -273,7 +237,7 @@ enum class Liveness : std::uint8_t {
         return ErrorResult(parsed.win32Error);
     }
 
-    const ScopedHandle snapshot(
+    const UniqueHandle snapshot(
         CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
     if (snapshot.Get() == INVALID_HANDLE_VALUE) {
         return ErrorResult(GetLastError());
@@ -290,7 +254,7 @@ enum class Liveness : std::uint8_t {
     for (;;) {
         if (entry.th32ProcessID != 0 && EqualOrdinalIgnoreCase(
                 entry.szExeFile, parsed.selector.basename)) {
-            const ScopedHandle process(OpenProcess(
+            const UniqueHandle process(OpenProcess(
                 kProcessAccess, FALSE, entry.th32ProcessID));
             if (process.Get() == nullptr) {
                 const DWORD error = GetLastError();
@@ -362,20 +326,6 @@ enum class Liveness : std::uint8_t {
 }
 
 }  // namespace
-
-const char* LocateStatusName(LocateStatus status) noexcept {
-    switch (status) {
-        case LocateStatus::None:
-            return "none";
-        case LocateStatus::One:
-            return "one";
-        case LocateStatus::Ambiguous:
-            return "ambiguous";
-        case LocateStatus::Error:
-            return "error";
-    }
-    return "unknown";
-}
 
 LocateResult LocateExecutable(std::wstring_view selector) noexcept {
     try {

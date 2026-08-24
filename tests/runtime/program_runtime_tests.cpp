@@ -167,8 +167,7 @@ public:
 class FakeLauncher final : public inputweaver::RuntimeProcessLauncher {
 public:
     bool permitted{true};
-    inputweaver::RuntimeLaunchResult result{
-        inputweaver::RuntimeLaunchResult::Launched};
+    inputweaver::RuntimeLaunchOutcome outcome{};
     std::vector<std::string> commands;
 
     [[nodiscard]] bool Permitted() const noexcept override
@@ -176,19 +175,19 @@ public:
         return permitted;
     }
 
-    [[nodiscard]] inputweaver::RuntimeLaunchResult Launch(
+    [[nodiscard]] inputweaver::RuntimeLaunchOutcome Launch(
         std::string_view command,
         inputweaver::RuntimeCancellationProbe cancellation) noexcept override
     {
         if (cancellation.Cancelled()) {
-            return inputweaver::RuntimeLaunchResult::Cancelled;
+            return {inputweaver::RuntimeLaunchResult::Cancelled, 0U};
         }
         try {
             commands.emplace_back(command);
         } catch (...) {
-            return inputweaver::RuntimeLaunchResult::CreationFailed;
+            return {inputweaver::RuntimeLaunchResult::CreationFailed, 0U};
         }
-        return result;
+        return outcome;
     }
 };
 
@@ -1503,7 +1502,9 @@ void TestExecCancellationBoundaries()
         "cancellation after creation does not acquire or terminate child ownership");
 
     RuntimeHarness failedLaunch(ProcessLaunchCapacities());
-    failedLaunch.launcher.result = inputweaver::RuntimeLaunchResult::CreationFailed;
+    failedLaunch.launcher.outcome = {
+        inputweaver::RuntimeLaunchResult::CreationFailed,
+        1234U};
     Check(
         failedLaunch.runtime.Activate(program).activated,
         "failed launch fixture activates");
@@ -1520,6 +1521,17 @@ void TestExecCancellationBoundaries()
             && failedLaunch.runtime.ActiveTaskCount() == 0U
             && !failedLaunch.runtime.FatalShutdownRequested(),
         "native launch failure ends only the current task");
+    inputweaver::RuntimeDiagnosticRecord launchDiagnostic{};
+    bool foundLaunchFailure = false;
+    while (failedLaunch.runtime.TryPopDiagnostic(launchDiagnostic)) {
+        foundLaunchFailure = foundLaunchFailure
+            || (launchDiagnostic.kind
+                    == inputweaver::RuntimeDiagnosticKind::LaunchFailure
+                && launchDiagnostic.detail == static_cast<std::uint32_t>(
+                    inputweaver::RuntimeLaunchResult::CreationFailed)
+                && launchDiagnostic.platformError == 1234U);
+    }
+    Check(foundLaunchFailure, "launch diagnostics retain the platform error");
 }
 
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeTaskExpressionFaultStorage()
@@ -1819,6 +1831,7 @@ void TestActivationAndTransientCapacity()
     const auto mapping = Finalize(inputweaver::test::MakeMappingFixtureStorage());
     const auto repeat = Finalize(
         inputweaver::test::MakeConditionalRepeatFixtureStorage());
+    const auto values = Finalize(MakeExpressionFixtureStorage());
     const auto pause = Finalize(
         inputweaver::test::MakePauseControlFixtureStorage());
     const auto actions = Finalize(MakeActionFixtureStorage());
@@ -1831,6 +1844,21 @@ void TestActivationAndTransientCapacity()
         const auto result = harness.runtime.Activate(program);
         Check(!result.activated && result.error.code == expected, name);
     };
+    const auto checkExactRejection = [](
+                                         inputweaver::RuntimeCapacities capacities,
+                                         const std::shared_ptr<const inputweaver::CompiledProgram>& program,
+                                         inputweaver::RuntimeActivationError expected,
+                                         std::string_view name) {
+        RuntimeHarness harness(capacities);
+        const auto result = harness.runtime.Activate(program);
+        Check(
+            !result.activated
+                && result.error.code == expected.code
+                && result.error.subject == expected.subject
+                && result.error.required == expected.required
+                && result.error.available == expected.available,
+            name);
+    };
 
     inputweaver::RuntimeCapacities controlCapacity{};
     controlCapacity.maximumControls = 1U;
@@ -1839,13 +1867,25 @@ void TestActivationAndTransientCapacity()
         tap,
         inputweaver::RuntimeActivationErrorCode::ControlCapacity,
         "control capacity rejects activation before publication");
-    inputweaver::RuntimeCapacities valueCapacity{};
-    valueCapacity.maximumStateSlots = 0U;
-    checkCapacityRejection(
-        valueCapacity,
-        repeat,
-        inputweaver::RuntimeActivationErrorCode::ValueCapacity,
-        "value capacity rejects activation before publication");
+    for (const auto subject : {
+             inputweaver::RuntimeActivationSubject::StateSlots,
+             inputweaver::RuntimeActivationSubject::NumberSlots,
+             inputweaver::RuntimeActivationSubject::DurationSlots}) {
+        inputweaver::RuntimeCapacities valueCapacity{};
+        if (subject == inputweaver::RuntimeActivationSubject::StateSlots) {
+            valueCapacity.maximumStateSlots = 0U;
+        } else if (subject == inputweaver::RuntimeActivationSubject::NumberSlots) {
+            valueCapacity.maximumNumberSlots = 0U;
+        } else {
+            valueCapacity.maximumDurationSlots = 0U;
+        }
+        checkExactRejection(
+            valueCapacity,
+            values,
+            {inputweaver::RuntimeActivationErrorCode::ValueCapacity,
+             static_cast<std::uint32_t>(subject), 1U, 0U},
+            "value capacity identifies one exact slot domain");
+    }
     inputweaver::RuntimeCapacities mappingCapacity{};
     mappingCapacity.maximumMappingSlots = 0U;
     checkCapacityRejection(
@@ -1943,31 +1983,35 @@ void TestActivationAndTransientCapacity()
         "zero task output budget rejects activation");
     inputweaver::RuntimeCapacities schedulerCapacity{};
     schedulerCapacity.maximumContinuouslyReadyQuanta = 0U;
-    checkCapacityRejection(
+    checkExactRejection(
         schedulerCapacity,
         tap,
-        inputweaver::RuntimeActivationErrorCode::SchedulerCapacity,
+        {inputweaver::RuntimeActivationErrorCode::InvalidSchedulerConfiguration,
+         static_cast<std::uint32_t>(inputweaver::RuntimeActivationSubject::MaximumContinuouslyReadyQuanta), 1U, 0U},
         "invalid scheduler backoff capacity rejects activation");
     inputweaver::RuntimeCapacities schedulerDurationCapacity{};
     schedulerDurationCapacity.continuouslyReadyBackoffNanoseconds = 0;
-    checkCapacityRejection(
+    checkExactRejection(
         schedulerDurationCapacity,
         tap,
-        inputweaver::RuntimeActivationErrorCode::SchedulerCapacity,
+        {inputweaver::RuntimeActivationErrorCode::InvalidSchedulerConfiguration,
+         static_cast<std::uint32_t>(inputweaver::RuntimeActivationSubject::ContinuouslyReadyBackoffNanoseconds), 1U, 0U},
         "nonpositive scheduler backoff duration rejects activation");
     inputweaver::RuntimeCapacities outputRateCapacity{};
     outputRateCapacity.maximumOutputTransitionsPerInterval = 0U;
-    checkCapacityRejection(
+    checkExactRejection(
         outputRateCapacity,
         tap,
-        inputweaver::RuntimeActivationErrorCode::OutputRateCapacity,
+        {inputweaver::RuntimeActivationErrorCode::InvalidOutputRateConfiguration,
+         static_cast<std::uint32_t>(inputweaver::RuntimeActivationSubject::MaximumOutputTransitionsPerInterval), 1U, 0U},
         "invalid output rate capacity rejects activation");
     inputweaver::RuntimeCapacities outputRateIntervalCapacity{};
     outputRateIntervalCapacity.outputRateIntervalNanoseconds = 0;
-    checkCapacityRejection(
+    checkExactRejection(
         outputRateIntervalCapacity,
         tap,
-        inputweaver::RuntimeActivationErrorCode::OutputRateCapacity,
+        {inputweaver::RuntimeActivationErrorCode::InvalidOutputRateConfiguration,
+         static_cast<std::uint32_t>(inputweaver::RuntimeActivationSubject::OutputRateIntervalNanoseconds), 1U, 0U},
         "nonpositive output-rate interval rejects activation");
     inputweaver::RuntimeCapacities launchPolicy{};
     launchPolicy.permitProcessLaunch = false;

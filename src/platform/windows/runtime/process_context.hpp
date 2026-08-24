@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 
 #include <string_view>
 
@@ -32,34 +32,20 @@ enum class ProcessContextError : unsigned char {
 struct ProcessContextResult {
     ProcessContextError error{ProcessContextError::None};
     DWORD win32Error{ERROR_SUCCESS};
-    DWORD currentIntegrityRid{0};
-    DWORD targetIntegrityRid{0};
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return error == ProcessContextError::None;
     }
 };
 
-struct IntegrityLevelResult {
-    DWORD integrityRid{0};
-    DWORD win32Error{ERROR_SUCCESS};
-    bool succeeded{false};
-};
-
 [[nodiscard]] const char* ProcessContextErrorName(
     ProcessContextError error) noexcept;
-
-[[nodiscard]] IntegrityLevelResult QueryProcessIntegrityLevel(
-    HANDLE process) noexcept;
 
 [[nodiscard]] bool IsTargetIntegrityCompatible(
     DWORD currentIntegrityRid,
     DWORD targetIntegrityRid) noexcept;
 
-[[nodiscard]] bool IsProcessForeground(ProcessId processId) noexcept;
-[[nodiscard]] bool IsProcessPointerTarget(
-    ProcessId processId,
-    ScreenPoint screenPoint) noexcept;
+[[nodiscard]] bool IsProcessForeground(WindowsProcessId processId) noexcept;
 
 class TargetProcessContext final {
 public:
@@ -72,9 +58,9 @@ public:
     TargetProcessContext(TargetProcessContext&& other) noexcept;
     TargetProcessContext& operator=(TargetProcessContext&& other) noexcept;
 
-    [[nodiscard]] ProcessContextResult Initialize(ProcessId targetPid) noexcept;
+    [[nodiscard]] ProcessContextResult Initialize(WindowsProcessId targetPid) noexcept;
     [[nodiscard]] ProcessContextResult Initialize(
-        ProcessId targetPid,
+        WindowsProcessId targetPid,
         std::wstring_view expectedImagePath) noexcept;
     void Reset() noexcept;
 
@@ -84,16 +70,12 @@ public:
     [[nodiscard]] bool IsTargetPointerTarget(ScreenPoint screenPoint) const noexcept;
     [[nodiscard]] bool IsTargetPointerTargetAtCursor() const noexcept;
 
-    [[nodiscard]] ProcessId TargetPid() const noexcept;
+    [[nodiscard]] WindowsProcessId TargetPid() const noexcept;
     [[nodiscard]] HANDLE TargetHandle() const noexcept;
-    [[nodiscard]] DWORD CurrentIntegrityRid() const noexcept;
-    [[nodiscard]] DWORD TargetIntegrityRid() const noexcept;
 
 private:
     HANDLE targetHandle_{nullptr};
-    ProcessId targetPid_{0};
-    DWORD currentIntegrityRid_{0};
-    DWORD targetIntegrityRid_{0};
+    WindowsProcessId targetPid_{0};
 };
 
 }  // namespace inputweaver

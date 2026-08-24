@@ -4,10 +4,11 @@
 #include "platform/windows/runtime/low_level_hooks.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/process_locator.hpp"
-#include "runtime/action_queue.hpp"
+#include "platform/windows/runtime/windows_output_queue.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -19,18 +20,11 @@ namespace {
 
 int g_failureCount = 0;
 
-enum class FakeSendMode {
-    Complete,
-    Fail,
-    PartialFirstCall,
-    PartialThenCleanupFail,
-};
-
 struct FakeSendState final {
-    FakeSendMode mode{FakeSendMode::Complete};
+    bool fail{};
     std::size_t callCount{};
-    std::array<UINT, 4> counts{};
-    std::array<std::array<INPUT, inputweaver::kMaximumPreparedInputs>, 4> inputs{};
+    UINT count{};
+    INPUT input{};
 };
 
 FakeSendState g_fakeSendState;
@@ -42,65 +36,52 @@ void Check(bool condition, std::string_view name) {
     }
 }
 
-void ResetFakeSend(FakeSendMode mode) {
+void ResetFakeSend(bool fail = false) {
     g_fakeSendState = {};
-    g_fakeSendState.mode = mode;
+    g_fakeSendState.fail = fail;
 }
 
 UINT WINAPI FakeSendInput(UINT count, LPINPUT inputs, int inputSize) {
-    const std::size_t callIndex = g_fakeSendState.callCount++;
-    if (callIndex < g_fakeSendState.counts.size()) {
-        g_fakeSendState.counts[callIndex] = count;
-        if (inputs != nullptr && inputSize == static_cast<int>(sizeof(INPUT))) {
-            const std::size_t copyCount = (std::min)(
-                static_cast<std::size_t>(count),
-                g_fakeSendState.inputs[callIndex].size());
-            std::copy_n(inputs, copyCount, g_fakeSendState.inputs[callIndex].begin());
-        }
+    ++g_fakeSendState.callCount;
+    g_fakeSendState.count = count;
+    if (inputs != nullptr && count != 0U
+        && inputSize == static_cast<int>(sizeof(INPUT))) {
+        g_fakeSendState.input = inputs[0];
     }
-    if (g_fakeSendState.mode == FakeSendMode::Fail
-        || (g_fakeSendState.mode == FakeSendMode::PartialThenCleanupFail && callIndex != 0U)) {
-        SetLastError(
-            g_fakeSendState.mode == FakeSendMode::PartialThenCleanupFail
-                ? ERROR_RETRY
-                : ERROR_ACCESS_DENIED);
+    if (g_fakeSendState.fail) {
+        SetLastError(ERROR_ACCESS_DENIED);
         return 0U;
-    }
-    if ((g_fakeSendState.mode == FakeSendMode::PartialFirstCall
-         || g_fakeSendState.mode == FakeSendMode::PartialThenCleanupFail)
-        && callIndex == 0U) {
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return count == 0U ? 0U : 1U;
     }
     SetLastError(ERROR_SUCCESS);
     return count;
 }
 
-inputweaver::ActionBatch MakeKeyboardTap(
-    inputweaver::ControlCode code,
-    std::uint64_t sourceSequence = 1U) {
-    inputweaver::ActionBatch batch{};
-    batch.sourceSequence = sourceSequence;
-    batch.outputDevice = inputweaver::DeviceKind::Keyboard;
-    batch.outputCode = code;
-    batch.actions[0] = {
-        inputweaver::DeviceKind::Keyboard,
-        inputweaver::Transition::Down,
-        code,
-        0,
-        0};
-    batch.actions[1] = {
-        inputweaver::DeviceKind::Keyboard,
-        inputweaver::Transition::Up,
-        code,
-        0,
-        0};
-    batch.actionCount = 2U;
-    return batch;
+inputweaver::WindowsOutputItem MakeVirtualKeyOutput(
+    inputweaver::WindowsVirtualKey virtualKey,
+    inputweaver::WindowsOutputTransition transition =
+        inputweaver::WindowsOutputTransition::Down) {
+    inputweaver::WindowsOutputItem item{};
+    item.outputCode = virtualKey;
+    item.recipe.kind =
+        inputweaver::WindowsOutputKind::KeyboardVirtualKey;
+    item.recipe.virtualKey = virtualKey;
+    item.transition = transition;
+    return item;
+}
+
+inputweaver::WindowsOutputItem MakeScanCodeOutput(
+    inputweaver::WindowsScanCode scanCode,
+    bool extended) {
+    inputweaver::WindowsOutputItem item{};
+    item.recipe.kind =
+        inputweaver::WindowsOutputKind::KeyboardScanCode;
+    item.recipe.scanCode = scanCode;
+    item.recipe.extendedScanCode = extended;
+    return item;
 }
 
 void TestOriginClassification() {
-    constexpr inputweaver::SelfTag selfTag = 0x51A7BEEFU;
+    constexpr inputweaver::WindowsSelfTag selfTag = 0x51A7BEEFU;
     KBDLLHOOKSTRUCT keyboard{};
     keyboard.dwExtraInfo = selfTag;
     Check(
@@ -127,55 +108,36 @@ void TestOriginClassification() {
         "tagged injected mouse input is self-injected");
 }
 
-void TestActionQueueBoundaries() {
-    inputweaver::ActionQueue queue;
-    for (std::size_t index = 0U; index < inputweaver::kActionQueueCapacity; ++index) {
-        inputweaver::ActionBatch batch{};
-        batch.sourceSequence = index;
-        Check(queue.TryPush(batch), "action queue accepts each capacity slot");
+void TestWindowsOutputQueueBoundaries() {
+    inputweaver::WindowsOutputQueue queue;
+    for (std::size_t index = 0U;
+         index < inputweaver::kWindowsOutputQueueCapacity;
+         ++index) {
+        inputweaver::WindowsOutputItem item{};
+        item.sourceSequence = index;
+        Check(queue.TryPush(item), "output queue accepts each capacity slot");
     }
-    Check(
-        queue.SizeApprox() == inputweaver::kActionQueueCapacity,
-        "action queue reports its bounded capacity");
-    Check(
-        !queue.TryPush({}) && queue.RejectedPushCount() == 1U,
-        "action queue rejects and counts overflow");
-    for (std::size_t index = 0U; index < inputweaver::kActionQueueCapacity; ++index) {
-        inputweaver::ActionBatch batch{};
+    Check(!queue.TryPush({}), "output queue rejects overflow");
+    for (std::size_t index = 0U;
+         index < inputweaver::kWindowsOutputQueueCapacity;
+         ++index) {
+        inputweaver::WindowsOutputItem item{};
         Check(
-            queue.TryPop(batch) && batch.sourceSequence == index,
-            "action queue preserves FIFO order");
+            queue.TryPop(item) && item.sourceSequence == index,
+            "output queue preserves FIFO order");
     }
-    Check(queue.Empty(), "action queue drains completely");
+    Check(queue.Empty(), "output queue drains completely");
 
-    inputweaver::ActionQueue pairQueue;
-    inputweaver::ActionBatch first{};
-    first.sourceSequence = 100U;
-    inputweaver::ActionBatch second{};
-    second.sourceSequence = 101U;
-    Check(pairQueue.TryPushPair(first, second), "action queue publishes a pair atomically");
-    inputweaver::ActionBatch popped{};
-    Check(
-        pairQueue.TryPop(popped) && popped.sourceSequence == 100U
-            && pairQueue.TryPop(popped) && popped.sourceSequence == 101U,
-        "action queue preserves pair order");
-
-    inputweaver::ActionQueue commitQueue;
-    Check(
-        commitQueue.TryPushWithCommit(first, []() noexcept { return false; })
-                == inputweaver::ActionQueuePushResult::CommitRejected
-            && commitQueue.Empty(),
-        "rejected commit publishes no action");
 }
 
-void TestActionQueueConcurrency() {
+void TestWindowsOutputQueueConcurrency() {
     constexpr std::size_t itemCount = 50'000U;
-    inputweaver::ActionQueue queue;
+    inputweaver::WindowsOutputQueue queue;
     std::thread producer([&queue]() {
         for (std::size_t index = 0U; index < itemCount; ++index) {
-            inputweaver::ActionBatch batch{};
-            batch.sourceSequence = index;
-            while (!queue.TryPush(batch)) {
+            inputweaver::WindowsOutputItem item{};
+            item.sourceSequence = index;
+            while (!queue.TryPush(item)) {
                 std::this_thread::yield();
             }
         }
@@ -183,96 +145,76 @@ void TestActionQueueConcurrency() {
     bool ordered = true;
     std::size_t consumed = 0U;
     while (consumed < itemCount) {
-        inputweaver::ActionBatch batch{};
-        if (!queue.TryPop(batch)) {
+        inputweaver::WindowsOutputItem item{};
+        if (!queue.TryPop(item)) {
             std::this_thread::yield();
             continue;
         }
-        ordered = ordered && batch.sourceSequence == consumed;
+        ordered = ordered && item.sourceSequence == consumed;
         ++consumed;
     }
     producer.join();
-    Check(ordered && queue.Empty(), "concurrent action queue remains ordered and drains");
+    Check(ordered && queue.Empty(), "concurrent output queue remains ordered and drains");
 }
 
 void TestInjectorSafety() {
-    constexpr inputweaver::SelfTag selfTag = 0x6B524D31U;
+    constexpr inputweaver::WindowsSelfTag selfTag = 0x6B524D31U;
     inputweaver::InputInjector injector(selfTag, &FakeSendInput);
-    const inputweaver::ActionBatch keyboardBatch = MakeKeyboardTap(VK_F7, 60U);
-    const inputweaver::PreparedInputBatch keyboard = injector.Prepare(keyboardBatch);
+    const inputweaver::WindowsOutputItem keyboardOutput =
+        MakeVirtualKeyOutput(VK_F7);
+    const inputweaver::PreparedInput keyboard = injector.Prepare(keyboardOutput);
     Check(
-        keyboard.Succeeded() && keyboard.count == 2U
-            && keyboard.inputs[0].type == INPUT_KEYBOARD
-            && keyboard.inputs[1].type == INPUT_KEYBOARD,
-        "injector prepares a paired keyboard tap");
+        keyboard.Succeeded() && keyboard.input.type == INPUT_KEYBOARD,
+        "injector prepares one keyboard output");
     Check(
-        keyboard.inputs[0].ki.dwExtraInfo == selfTag
-            && keyboard.inputs[1].ki.dwExtraInfo == selfTag
-            && (keyboard.inputs[0].ki.dwFlags & KEYEVENTF_SCANCODE) != 0U
-            && (keyboard.inputs[1].ki.dwFlags & KEYEVENTF_KEYUP) != 0U,
-        "prepared keyboard transitions carry the self tag and release");
+        keyboard.input.ki.dwExtraInfo == selfTag
+            && keyboard.input.ki.wVk == VK_F7
+            && (keyboard.input.ki.dwFlags & KEYEVENTF_SCANCODE) == 0U,
+        "prepared keyboard output carries its identity and self tag");
 
-    const inputweaver::PreparedInputBatch extended =
-        injector.Prepare(MakeKeyboardTap(VK_RIGHT));
+    const inputweaver::PreparedInput release = injector.Prepare(
+        MakeVirtualKeyOutput(
+            VK_F7,
+            inputweaver::WindowsOutputTransition::Up));
+    Check(
+        release.Succeeded()
+            && (release.input.ki.dwFlags & KEYEVENTF_KEYUP) != 0U,
+        "keyboard release retains its transition");
+
+    const inputweaver::PreparedInput extended =
+        injector.Prepare(MakeScanCodeOutput(0x4dU, true));
     Check(
         extended.Succeeded()
-            && (extended.inputs[0].ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0U
-            && (extended.inputs[1].ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0U,
-        "extended keyboard transitions retain their native flag");
+            && (extended.input.ki.dwFlags & KEYEVENTF_EXTENDEDKEY) != 0U,
+        "extended keyboard output retains its native flag");
 
-    ResetFakeSend(FakeSendMode::Complete);
+    ResetFakeSend();
     Check(
-        injector.Inject(keyboardBatch).Succeeded()
+        injector.Inject(keyboardOutput).Succeeded()
             && g_fakeSendState.callCount == 1U
-            && g_fakeSendState.counts[0] == 2U,
-        "complete SendInput batch succeeds in one call");
+            && g_fakeSendState.count == 1U,
+        "one output uses one SendInput call");
 
-    ResetFakeSend(FakeSendMode::PartialFirstCall);
-    const inputweaver::InjectionResult partial = injector.Inject(keyboardBatch);
-    Check(
-        partial.outcome == inputweaver::InjectionOutcome::SendPartial
-            && partial.sent == 1U
-            && partial.cleanupAttempted
-            && partial.cleanupRequested == 1U
-            && partial.cleanupSent == 1U
-            && g_fakeSendState.callCount == 2U,
-        "partial keyboard injection immediately releases inserted state");
-    Check(
-        (g_fakeSendState.inputs[1][0].ki.dwFlags & KEYEVENTF_KEYUP) != 0U
-            && g_fakeSendState.inputs[1][0].ki.dwExtraInfo == selfTag,
-        "cleanup release retains the self tag");
-
-    ResetFakeSend(FakeSendMode::PartialThenCleanupFail);
-    const inputweaver::InjectionResult unresolved = injector.Inject(keyboardBatch);
-    Check(
-        unresolved.outcome == inputweaver::InjectionOutcome::SendPartial
-            && unresolved.error == ERROR_NOT_ENOUGH_MEMORY
-            && unresolved.cleanupAttempted
-            && unresolved.cleanupSent == 0U
-            && unresolved.cleanupError == ERROR_RETRY,
-        "cleanup failure remains separately observable");
-
-    ResetFakeSend(FakeSendMode::Fail);
-    const inputweaver::InjectionResult failed = injector.Inject(keyboardBatch);
+    ResetFakeSend(true);
+    const inputweaver::InjectionResult failed = injector.Inject(keyboardOutput);
     Check(
         failed.outcome == inputweaver::InjectionOutcome::SendFailed
             && failed.sent == 0U
-            && failed.error == ERROR_ACCESS_DENIED
-            && !failed.cleanupAttempted,
-        "zero-insert failure preserves the native error without cleanup");
+            && failed.error == ERROR_ACCESS_DENIED,
+        "failed output preserves the native error");
     Check(
         !inputweaver::InputInjector(0U, &FakeSendInput)
-             .Prepare(keyboardBatch)
+             .Prepare(keyboardOutput)
              .Succeeded(),
         "zero self tag is rejected before injection");
 
-    inputweaver::ActionBatch invalid = keyboardBatch;
-    invalid.actions[0].transition = inputweaver::Transition::Move;
-    Check(!injector.Prepare(invalid).Succeeded(), "invalid keyboard movement is rejected");
+    inputweaver::WindowsOutputItem invalid = keyboardOutput;
+    invalid.recipe.kind = inputweaver::WindowsOutputKind::None;
+    Check(!injector.Prepare(invalid).Succeeded(), "missing output recipe is rejected");
 
     KBDLLHOOKSTRUCT hook{};
     hook.flags = LLKHF_INJECTED;
-    hook.dwExtraInfo = keyboard.inputs[0].ki.dwExtraInfo;
+    hook.dwExtraInfo = keyboard.input.ki.dwExtraInfo;
     Check(
         inputweaver::ClassifyKeyboard(hook, selfTag)
             == inputweaver::InputOrigin::SelfInjected,
@@ -284,14 +226,11 @@ void TestInjectionCircuitBreaker() {
     Check(!breaker.RecordFailure(), "first injection failure keeps circuit closed");
     Check(!breaker.RecordFailure(), "second injection failure keeps circuit closed");
     breaker.RecordSuccess();
-    Check(
-        breaker.ConsecutiveFailures() == 0U && !breaker.IsOpen(),
-        "successful injection resets a closed circuit");
+    Check(!breaker.RecordFailure(), "successful injection resets a closed circuit");
     Check(!breaker.RecordFailure(), "failure count restarts after success");
-    Check(!breaker.RecordFailure(), "second restarted failure keeps circuit closed");
-    Check(breaker.RecordFailure() && breaker.IsOpen(), "third failure opens the circuit");
+    Check(breaker.RecordFailure(), "third failure opens the circuit");
     breaker.RecordSuccess();
-    Check(breaker.IsOpen(), "opened injection circuit does not silently rearm");
+    Check(breaker.RecordFailure(), "opened injection circuit does not silently rearm");
 }
 
 void TestDiagnosticPrivacyAndBounds() {
@@ -310,7 +249,7 @@ void TestDiagnosticPrivacyAndBounds() {
             && json.find("\"scan\":30") == std::string::npos,
         "ordinary keyboard diagnostics cannot reconstruct typed content");
 
-    constexpr inputweaver::SelfTag selfTag = 0x7100U;
+    constexpr inputweaver::WindowsSelfTag selfTag = 0x7100U;
     Check(
         inputweaver::CategorizeExtraInfo(0U, selfTag)
                 == inputweaver::ExtraInfoCategory::Zero
@@ -338,6 +277,20 @@ void TestDiagnosticPrivacyAndBounds() {
         inputweaver::JsonlAppendFits(inputweaver::kMaximumJsonlBytes - 10U, 10U)
             && !inputweaver::JsonlAppendFits(inputweaver::kMaximumJsonlBytes - 10U, 11U),
         "JSONL size boundary accepts the limit and rejects overflow");
+
+    inputweaver::RuntimeDiagnosticRecord launchFailure{};
+    launchFailure.kind = inputweaver::RuntimeDiagnosticKind::LaunchFailure;
+    launchFailure.detail = static_cast<std::uint32_t>(
+        inputweaver::RuntimeLaunchResult::CreationFailed);
+    launchFailure.platformError = ERROR_ACCESS_DENIED;
+    const std::string launchJson =
+        inputweaver::FormatRuntimeDiagnosticJson(launchFailure);
+    Check(
+        launchJson.find("\"launch_result\":\"CreationFailed\"")
+                != std::string::npos
+            && launchJson.find("\"platform_error\":5")
+                != std::string::npos,
+        "runtime launch JSON preserves the portable category and platform error");
 
     inputweaver::DiagnosticLog disabledLog;
     std::wstring errorMessage;
@@ -394,6 +347,67 @@ void TestDiagnosticPrivacyAndBounds() {
     (void)DeleteFileW(temporaryFile);
 }
 
+void TestConcurrentRuntimeDiagnosticPublication() {
+    constexpr std::size_t producerCount = 2U;
+    constexpr std::uint64_t attemptsPerProducer = 10'000U;
+    constexpr std::size_t attemptCount = producerCount * attemptsPerProducer;
+    inputweaver::RuntimeDiagnosticRing ring;
+    std::atomic<unsigned int> ready{0U};
+    std::atomic<unsigned int> finished{0U};
+    std::atomic<std::uint64_t> accepted{0U};
+    std::atomic<bool> begin{false};
+    std::array<std::thread, producerCount> producers;
+    for (std::size_t producer = 0U; producer < producers.size(); ++producer) {
+        producers[producer] = std::thread([producer, &ring, &ready, &finished, &accepted, &begin]() {
+            ready.fetch_add(1U, std::memory_order_release);
+            while (!begin.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            const std::uint64_t base = producer * attemptsPerProducer;
+            for (std::uint64_t index = 1U; index <= attemptsPerProducer; ++index) {
+                inputweaver::RuntimeDiagnosticRecord record{};
+                record.kind = inputweaver::RuntimeDiagnosticKind::OwnershipChange;
+                record.sequence = base + index;
+                if (ring.TryPush(record)) {
+                    accepted.fetch_add(1U, std::memory_order_relaxed);
+                }
+            }
+            finished.fetch_add(1U, std::memory_order_release);
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != producers.size()) {
+        std::this_thread::yield();
+    }
+    begin.store(true, std::memory_order_release);
+    std::array<std::uint8_t, attemptCount> observed{};
+    std::size_t observedCount = 0U;
+    bool duplicateOrInvalid = false;
+    while (finished.load(std::memory_order_acquire) != producerCount
+        || !ring.Empty()) {
+        inputweaver::RuntimeDiagnosticRecord record{};
+        if (!ring.TryPop(record)) {
+            std::this_thread::yield();
+            continue;
+        }
+        if (record.sequence == 0U || record.sequence > attemptCount
+            || observed[record.sequence - 1U] != 0U) {
+            duplicateOrInvalid = true;
+            continue;
+        }
+        observed[record.sequence - 1U] = 1U;
+        ++observedCount;
+    }
+    for (auto& producer : producers) {
+        producer.join();
+    }
+    Check(
+        accepted.load(std::memory_order_relaxed) + ring.RejectedPushCount()
+                == attemptCount
+            && observedCount == accepted.load(std::memory_order_relaxed)
+            && !duplicateOrInvalid,
+        "concurrent diagnostic admission counts every rejection and loses no accepted record");
+}
+
 void TestProcessLocatorAndContext() {
     constexpr DWORD pathCapacity = 32768U;
     std::array<wchar_t, pathCapacity> modulePathBuffer{};
@@ -441,9 +455,6 @@ void TestProcessLocatorAndContext() {
     Check(
         context.Initialize(0U).error == inputweaver::ProcessContextError::InvalidPid,
         "zero target PID is rejected");
-    const inputweaver::IntegrityLevelResult integrity =
-        inputweaver::QueryProcessIntegrityLevel(GetCurrentProcess());
-    Check(integrity.succeeded, "current process integrity level is queryable");
     Check(
         inputweaver::IsTargetIntegrityCompatible(
             SECURITY_MANDATORY_MEDIUM_RID,
@@ -544,11 +555,12 @@ void TestShutdownGraceWindow() {
 
 int main() {
     TestOriginClassification();
-    TestActionQueueBoundaries();
-    TestActionQueueConcurrency();
+    TestWindowsOutputQueueBoundaries();
+    TestWindowsOutputQueueConcurrency();
     TestInjectorSafety();
     TestInjectionCircuitBreaker();
     TestDiagnosticPrivacyAndBounds();
+    TestConcurrentRuntimeDiagnosticPublication();
     TestProcessLocatorAndContext();
     TestTargetProcessLifecycle();
     TestShutdownGraceWindow();

@@ -47,7 +47,7 @@ std::uint64_t Mix64(std::uint64_t value) noexcept {
     return value;
 }
 
-inputweaver::SelfTag GenerateSelfTag() noexcept {
+inputweaver::WindowsSelfTag GenerateSelfTag() noexcept {
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
     std::uint64_t seed = static_cast<std::uint64_t>(counter.QuadPart);
@@ -55,9 +55,10 @@ inputweaver::SelfTag GenerateSelfTag() noexcept {
     seed ^= static_cast<std::uint64_t>(GetCurrentProcessId()) << 32U;
     seed ^= static_cast<std::uint64_t>(GetCurrentThreadId()) << 16U;
     const std::uint64_t mixed = Mix64(seed + 0x9E3779B97F4A7C15ULL);
-    const std::uint32_t folded = static_cast<std::uint32_t>(mixed) ^
-                                 static_cast<std::uint32_t>(mixed >> 32U);
-    return folded == 0 ? static_cast<inputweaver::SelfTag>(0x49575631U) : folded;
+    const auto tag = static_cast<inputweaver::WindowsSelfTag>(mixed);
+    return tag == 0U
+        ? static_cast<inputweaver::WindowsSelfTag>(0x49575631U)
+        : tag;
 }
 
 void PrintProgramMetrics(
@@ -73,8 +74,8 @@ void PrintProgramMetrics(
                << L" runtime_diagnostic_drops=" << metrics.runtime.droppedDiagnostics
                << L" output_transitions=" << metrics.runtime.outputTransitions
                << L" scheduler_backoffs=" << metrics.runtime.schedulerBackoffs
-               << L" queued=" << metrics.queuedBatches
-               << L" cancelled_batches=" << metrics.cancelledBatches
+               << L" queued_outputs=" << metrics.queuedOutputs
+               << L" cancelled_outputs=" << metrics.cancelledOutputs
                << L" injection_failures=" << metrics.injectionFailures
                << L" outside_target_forwarded=" << metrics.forwardedOutsideTarget
                << L" max_hook_us=" << metrics.maximumHookMicroseconds
@@ -157,7 +158,7 @@ bool SelectLocatedProcess(
 
 int RunCompiledInstance(
     const WindowsExecutorOptions& options,
-    inputweaver::SelfTag selfTag,
+    inputweaver::WindowsSelfTag selfTag,
     inputweaver::DiagnosticLog& diagnosticLog,
     const std::shared_ptr<const inputweaver::CompiledProgram>& program,
     inputweaver::TargetSelectorKind effectiveTargetKind,
@@ -197,7 +198,7 @@ int RunCompiledInstance(
 
 int RunCompiledProgram(
     const WindowsExecutorOptions& options,
-    inputweaver::SelfTag selfTag,
+    inputweaver::WindowsSelfTag selfTag,
     inputweaver::DiagnosticLog& diagnosticLog,
     const std::shared_ptr<const inputweaver::CompiledProgram>& program,
     inputweaver::TargetSelectorKind targetKind,
@@ -338,7 +339,7 @@ int inputweaver::win32::RunWindowsExecutor(const WindowsExecutorOptions& options
         return 5;
     }
 
-    const inputweaver::SelfTag selfTag = GenerateSelfTag();
+    const inputweaver::WindowsSelfTag selfTag = GenerateSelfTag();
     const int result = RunCompiledProgram(
         options,
         selfTag,

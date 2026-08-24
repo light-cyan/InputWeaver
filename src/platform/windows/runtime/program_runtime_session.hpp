@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 #include "runtime/runtime_types.hpp"
 
 #include <cstdint>
@@ -24,15 +24,15 @@ class TargetProcessContext;
 struct WindowsProgramRuntimeSessionOptions final {
     bool traceInput{};
     bool permitProcessLaunch{};
-    SelfTag selfTag{};
+    WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};
 };
 
 struct WindowsProgramRuntimeSessionMetrics final {
     RuntimeMetrics runtime{};
     std::uint64_t hookEvents{};
-    std::uint64_t queuedBatches{};
-    std::uint64_t cancelledBatches{};
+    std::uint64_t queuedOutputs{};
+    std::uint64_t cancelledOutputs{};
     std::uint64_t injectionFailures{};
     std::uint64_t maximumHookMicroseconds{};
     std::uint64_t forwardedOutsideTarget{};

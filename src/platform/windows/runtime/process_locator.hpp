@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "input/input_types.hpp"
+#include "windows_input_types.hpp"
 
 #include <cstdint>
 #include <string>
@@ -25,7 +25,7 @@ enum class LocateStatus : std::uint8_t {
 };
 
 struct LocatedProcess {
-    ProcessId processId{0};
+    WindowsProcessId processId{0};
     std::wstring imagePath;
 };
 
@@ -40,8 +40,6 @@ struct LocateResult {
             : nullptr;
     }
 };
-
-[[nodiscard]] const char* LocateStatusName(LocateStatus status) noexcept;
 
 // A selector is either a bare executable basename or an absolute executable path.
 [[nodiscard]] LocateResult LocateExecutable(

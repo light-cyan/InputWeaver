@@ -462,9 +462,7 @@ struct FinalizeResult final {
 class CompiledProgramBuilder final {
 public:
     [[nodiscard]] CompiledProgramStorage& Storage() noexcept;
-    [[nodiscard]] const CompiledProgramStorage& Storage() const noexcept;
     void DeriveRequirements();
-    [[nodiscard]] CompiledProgramStorage TakeStorage() && noexcept;
     [[nodiscard]] FinalizeResult Finalize() &&;
 
 private:

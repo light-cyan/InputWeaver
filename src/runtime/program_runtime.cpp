@@ -229,73 +229,53 @@ struct TaskCancellationContext final {
 } // namespace
 
 struct ProgramRuntime::Impl final {
-    struct State final {
-        State(
-            std::shared_ptr<const CompiledProgram> immutableProgram,
-            std::uint64_t serial,
-            std::atomic<std::uint64_t>& runtimeGeneration,
-            const RuntimeCapacities& capacities)
-            : program(std::move(immutableProgram)),
-              programSerial(serial),
-              activatedControls(program->Controls().size()),
-              userStates(program->UserValues().initialStates),
-              userNumbers(program->UserValues().initialNumbers),
-              userDurations(program->UserValues().initialDurations),
+    struct MutableState final {
+        explicit MutableState(const CompiledProgram& program)
+            : userStates(program.UserValues().initialStates),
+              userNumbers(program.UserValues().initialNumbers),
+              userDurations(program.UserValues().initialDurations),
               physicalHeld(std::make_unique<std::atomic<std::uint8_t>[]>(
-                  program->Controls().size())),
-              physicalSynchronized(std::make_unique<std::atomic<std::uint8_t>[]>(
-                  program->Controls().size())),
-              activeMappings(std::make_unique<std::atomic<std::uint32_t>[]>(
-                  program->MappingSlots().size())),
-              mappingOwners(program->MappingSlots().size()),
-              globalOwnership(program->Controls().size()),
-              tasks(capacities.taskSlotCount == 0U
-                  ? nullptr
-                  : std::make_unique<TaskInstance[]>(capacities.taskSlotCount)),
-              taskCount(capacities.taskSlotCount),
-              workQueue(capacities.transactionQueueItemCount),
-              transactionScratch((std::max)(
-                  std::size_t{1U},
-                  static_cast<std::size_t>(
-                      program->Requirements().maximumTransactionItemsPerEvent))),
-              reservedTaskScratch((std::max)(
-                  std::size_t{1U},
-                  static_cast<std::size_t>(
-                      program->Requirements().maximumTasksPerEvent))),
-              dispatchExpressionScratch((std::max)(
-                  std::size_t{1U},
-                  static_cast<std::size_t>(
-                      program->Requirements().maximumExpressionStackDepth))),
-              taskExpressionScratch((std::max)(
-                  std::size_t{1U},
-                  static_cast<std::size_t>(
-                      program->Requirements().maximumExpressionStackDepth))),
-              diagnostics(capacities.diagnosticRecordCount),
-              generation(runtimeGeneration)
+                  program.Controls().size())),
+              physicalSynchronized(
+                  std::make_unique<std::atomic<std::uint8_t>[]>(
+                      program.Controls().size()))
         {
-            for (std::size_t index = 0U; index < program->Controls().size(); ++index) {
+            for (std::size_t index = 0U; index < program.Controls().size(); ++index) {
                 physicalHeld[index].store(0U, std::memory_order_relaxed);
                 physicalSynchronized[index].store(1U, std::memory_order_relaxed);
             }
-            for (std::size_t index = 0U; index < program->MappingSlots().size(); ++index) {
-                activeMappings[index].store(
-                    kInvalidProgramIndex,
-                    std::memory_order_relaxed);
-            }
-            const std::size_t repeatCount =
-                program->Requirements().maximumRepeatFramesPerTask;
-            const std::size_t ownershipCount =
-                program->Requirements().maximumOwnedControlsPerTask;
-            for (std::size_t index = 0U; index < taskCount; ++index) {
-                tasks[index].repeatFrames.resize(repeatCount);
-                tasks[index].ownership.resize(ownershipCount);
-            }
         }
 
-        std::shared_ptr<const CompiledProgram> program;
-        std::uint64_t programSerial{};
-        TargetSelectorKind targetKind{TargetSelectorKind::Unspecified};
-        std::vector<ActivatedControl> activatedControls;
+        [[nodiscard]] RuntimeExpressionState ExpressionState(
+            const CompiledProgram& program) const noexcept
+        {
+            return {
+                userStates,
+                userNumbers,
+                userDurations,
+                {physicalHeld.get(), program.Controls().size()},
+                pauseOn,
+                program.Settings().tapDuration,
+                program.Settings().actionGap};
+        }
+
+        [[nodiscard]] bool PauseEnabled() const noexcept
+        {
+            std::shared_lock lock(pauseMutex);
+            return pauseOn;
+        }
+
+        [[nodiscard]] bool ReadUserState(
+            std::uint32_t index,
+            bool& value) const noexcept
+        {
+            std::shared_lock lock(variableMutex);
+            if (index >= userStates.size()) {
+                return false;
+            }
+            value = userStates[index] != 0U;
+            return true;
+        }
 
         mutable std::shared_mutex pauseMutex;
         mutable std::shared_mutex variableMutex;
@@ -305,31 +285,139 @@ struct ProgramRuntime::Impl final {
         std::vector<DurationValue> userDurations;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalHeld;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalSynchronized;
+    };
+
+    struct DispatchState final {
+        DispatchState(
+            const CompiledProgram& program,
+            const RuntimeCapacities& capacities)
+            : activeMappings(
+                  std::make_unique<std::atomic<std::uint32_t>[]>(
+                      program.MappingSlots().size())),
+              mappingOwners(program.MappingSlots().size()),
+              workQueue(capacities.transactionQueueItemCount),
+              transactionScratch((std::max)(
+                  std::size_t{1U},
+                  static_cast<std::size_t>(
+                      program.Requirements().maximumTransactionItemsPerEvent))),
+              reservedTaskScratch((std::max)(
+                  std::size_t{1U},
+                  static_cast<std::size_t>(
+                      program.Requirements().maximumTasksPerEvent))),
+              expressionScratch((std::max)(
+                  std::size_t{1U},
+                  static_cast<std::size_t>(
+                      program.Requirements().maximumExpressionStackDepth)))
+        {
+            for (std::size_t index = 0U;
+                 index < program.MappingSlots().size();
+                 ++index) {
+                activeMappings[index].store(
+                    kInvalidProgramIndex,
+                    std::memory_order_relaxed);
+            }
+        }
+
+        [[nodiscard]] bool HasActiveMappings() const noexcept
+        {
+            for (std::size_t index = 0U; index < mappingOwners.size(); ++index) {
+                if (activeMappings[index].load(std::memory_order_acquire)
+                    != kInvalidProgramIndex) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         std::unique_ptr<std::atomic<std::uint32_t>[]> activeMappings;
         std::vector<MappingOwner> mappingOwners;
-        mutable std::mutex ownershipMutex;
-        std::vector<std::uint64_t> globalOwnership;
-
-        std::unique_ptr<TaskInstance[]> tasks;
-        std::size_t taskCount{};
         WorkQueue workQueue;
         std::vector<WorkItem> transactionScratch;
         std::vector<std::uint32_t> reservedTaskScratch;
-        RuntimeExpressionScratch dispatchExpressionScratch;
-        RuntimeExpressionScratch taskExpressionScratch;
-        DiagnosticBuffer diagnostics;
+        RuntimeExpressionScratch expressionScratch;
+    };
 
-        std::atomic<std::uint64_t>& generation;
-        std::atomic<bool> accepting{true};
-        std::atomic<bool> targetEligible{true};
-        std::atomic<bool> fatalShutdownRequested{false};
-        std::atomic<bool> shutdownRequested{false};
-        std::atomic<std::uint64_t> nextOutputSequence{1U};
+    struct SchedulerState final {
+        SchedulerState(
+            const CompiledProgram& program,
+            const RuntimeCapacities& capacities)
+            : tasks(capacities.taskSlotCount == 0U
+                  ? nullptr
+                  : std::make_unique<TaskInstance[]>(capacities.taskSlotCount)),
+              taskCount(capacities.taskSlotCount),
+              expressionScratch((std::max)(
+                  std::size_t{1U},
+                  static_cast<std::size_t>(
+                      program.Requirements().maximumExpressionStackDepth)))
+        {
+            const std::size_t repeatCount =
+                program.Requirements().maximumRepeatFramesPerTask;
+            const std::size_t ownershipCount =
+                program.Requirements().maximumOwnedControlsPerTask;
+            for (std::size_t index = 0U; index < taskCount; ++index) {
+                tasks[index].repeatFrames.resize(repeatCount);
+                tasks[index].ownership.resize(ownershipCount);
+            }
+        }
+
+        [[nodiscard]] std::size_t ActiveTaskCount() const noexcept
+        {
+            std::size_t count = 0U;
+            for (std::size_t index = 0U; index < taskCount; ++index) {
+                if (tasks[index].status.load(std::memory_order_acquire)
+                    != TaskStatus::Free) {
+                    ++count;
+                }
+            }
+            return count;
+        }
+
+        std::unique_ptr<TaskInstance[]> tasks;
+        std::size_t taskCount{};
+        RuntimeExpressionScratch expressionScratch;
         std::uint64_t nextReadyOrder{1U};
         std::uint64_t nextTimedOrder{1U};
-        std::int64_t outputRateWindowStartNanoseconds{};
-        std::uint32_t outputRateWindowTransitions{};
         std::atomic<std::uint64_t> positiveSuspensions{0U};
+        std::atomic_flag pumpLock = ATOMIC_FLAG_INIT;
+    };
+
+    struct OutputState final {
+        explicit OutputState(std::size_t controlCount)
+            : globalOwnership(controlCount)
+        {
+        }
+
+        [[nodiscard]] bool HasOwnedOutputs() const noexcept
+        {
+            const std::lock_guard lock(mutex);
+            return std::any_of(
+                globalOwnership.begin(),
+                globalOwnership.end(),
+                [](std::uint64_t count) noexcept { return count != 0U; });
+        }
+
+        mutable std::mutex mutex;
+        std::vector<std::uint64_t> globalOwnership;
+        std::atomic<std::uint64_t> nextSequence{1U};
+        std::int64_t rateWindowStartNanoseconds{};
+        std::uint32_t rateWindowTransitions{};
+    };
+
+    struct MetricCounters final {
+        [[nodiscard]] RuntimeMetrics Snapshot(
+            std::uint64_t droppedDiagnostics) const noexcept
+        {
+            return {
+                dispatchedEvents.load(std::memory_order_relaxed),
+                suppressedEvents.load(std::memory_order_relaxed),
+                startedTasks.load(std::memory_order_relaxed),
+                completedTasks.load(std::memory_order_relaxed),
+                cancelledTasks.load(std::memory_order_relaxed),
+                transactionRejections.load(std::memory_order_relaxed),
+                droppedDiagnostics,
+                outputTransitions.load(std::memory_order_relaxed),
+                schedulerBackoffs.load(std::memory_order_relaxed)};
+        }
 
         std::atomic<std::uint64_t> dispatchedEvents{0U};
         std::atomic<std::uint64_t> suppressedEvents{0U};
@@ -339,7 +427,42 @@ struct ProgramRuntime::Impl final {
         std::atomic<std::uint64_t> transactionRejections{0U};
         std::atomic<std::uint64_t> outputTransitions{0U};
         std::atomic<std::uint64_t> schedulerBackoffs{0U};
-        std::atomic_flag pumpLock = ATOMIC_FLAG_INIT;
+    };
+
+    struct State final {
+        State(
+            std::shared_ptr<const CompiledProgram> immutableProgram,
+            std::uint64_t serial,
+            std::atomic<std::uint64_t>& runtimeGeneration,
+            const RuntimeCapacities& capacities)
+            : program(std::move(immutableProgram)),
+              programSerial(serial),
+              activatedControls(program->Controls().size()),
+              mutableState(*program),
+              dispatch(*program, capacities),
+              scheduler(*program, capacities),
+              output(program->Controls().size()),
+              diagnostics(capacities.diagnosticRecordCount),
+              generation(runtimeGeneration)
+        {
+        }
+
+        std::shared_ptr<const CompiledProgram> program;
+        std::uint64_t programSerial{};
+        TargetSelectorKind targetKind{TargetSelectorKind::Unspecified};
+        std::vector<ActivatedControl> activatedControls;
+
+        MutableState mutableState;
+        DispatchState dispatch;
+        SchedulerState scheduler;
+        OutputState output;
+        DiagnosticBuffer diagnostics;
+        MetricCounters metrics;
+
+        std::atomic<std::uint64_t>& generation;
+        std::atomic<bool> accepting{true};
+        std::atomic<bool> targetEligible{true};
+        std::atomic<bool> fatalShutdownRequested{false};
     };
 
     Impl(
@@ -400,8 +523,6 @@ struct ProgramRuntime::Impl final {
 
     [[nodiscard]] RuntimeActivationError ValidateCapacities(
         const CompiledProgram& program) const noexcept;
-    [[nodiscard]] RuntimeExpressionState ExpressionState(
-        const State& state) const noexcept;
     [[nodiscard]] RuntimeEvaluationResult Evaluate(
         State& state,
         ExpressionId expression,
@@ -446,7 +567,8 @@ struct ProgramRuntime::Impl final {
         std::uint32_t subject = kInvalidProgramIndex,
         std::uint32_t position = kInvalidProgramIndex,
         std::int64_t deadline = 0,
-        std::uint32_t detail = 0U) noexcept;
+        std::uint32_t detail = 0U,
+        std::uint32_t platformError = 0U) noexcept;
 
     void CleanupStale(State& state) noexcept;
     void CleanupAfterInvalidation(State& state) noexcept;
@@ -519,8 +641,14 @@ RuntimeActivationError ProgramRuntime::Impl::ValidateCapacities(
     const ProgramRequirements& required = program.Requirements();
     const auto capacityError = [](RuntimeActivationErrorCode code,
                                   std::uint64_t requirement,
-                                  std::uint64_t available) noexcept {
-        return RuntimeActivationError{code, 0U, requirement, available};
+                                  std::uint64_t available,
+                                  RuntimeActivationSubject subject =
+                                      RuntimeActivationSubject::None) noexcept {
+        return RuntimeActivationError{
+            code,
+            static_cast<std::uint32_t>(subject),
+            requirement,
+            available};
     };
     if (program.Controls().size() > capacities.maximumControls) {
         return capacityError(
@@ -528,17 +656,26 @@ RuntimeActivationError ProgramRuntime::Impl::ValidateCapacities(
             program.Controls().size(),
             capacities.maximumControls);
     }
-    if (required.stateSlotCount > capacities.maximumStateSlots
-        || required.numberSlotCount > capacities.maximumNumberSlots
-        || required.durationSlotCount > capacities.maximumDurationSlots) {
+    if (required.stateSlotCount > capacities.maximumStateSlots) {
         return capacityError(
             RuntimeActivationErrorCode::ValueCapacity,
-            (std::max)({required.stateSlotCount,
-                        required.numberSlotCount,
-                        required.durationSlotCount}),
-            (std::min)({capacities.maximumStateSlots,
-                        capacities.maximumNumberSlots,
-                        capacities.maximumDurationSlots}));
+            required.stateSlotCount,
+            capacities.maximumStateSlots,
+            RuntimeActivationSubject::StateSlots);
+    }
+    if (required.numberSlotCount > capacities.maximumNumberSlots) {
+        return capacityError(
+            RuntimeActivationErrorCode::ValueCapacity,
+            required.numberSlotCount,
+            capacities.maximumNumberSlots,
+            RuntimeActivationSubject::NumberSlots);
+    }
+    if (required.durationSlotCount > capacities.maximumDurationSlots) {
+        return capacityError(
+            RuntimeActivationErrorCode::ValueCapacity,
+            required.durationSlotCount,
+            capacities.maximumDurationSlots,
+            RuntimeActivationSubject::DurationSlots);
     }
     if (required.mappingSlotCount > capacities.maximumMappingSlots) {
         return capacityError(
@@ -606,19 +743,33 @@ RuntimeActivationError ProgramRuntime::Impl::ValidateCapacities(
             1U,
             0U);
     }
-    if (capacities.maximumContinuouslyReadyQuanta == 0U
-        || capacities.continuouslyReadyBackoffNanoseconds <= 0) {
+    if (capacities.maximumContinuouslyReadyQuanta == 0U) {
         return capacityError(
-            RuntimeActivationErrorCode::SchedulerCapacity,
+            RuntimeActivationErrorCode::InvalidSchedulerConfiguration,
             1U,
-            capacities.maximumContinuouslyReadyQuanta);
+            0U,
+            RuntimeActivationSubject::MaximumContinuouslyReadyQuanta);
     }
-    if (capacities.maximumOutputTransitionsPerInterval == 0U
-        || capacities.outputRateIntervalNanoseconds <= 0) {
+    if (capacities.continuouslyReadyBackoffNanoseconds <= 0) {
         return capacityError(
-            RuntimeActivationErrorCode::OutputRateCapacity,
+            RuntimeActivationErrorCode::InvalidSchedulerConfiguration,
             1U,
-            capacities.maximumOutputTransitionsPerInterval);
+            0U,
+            RuntimeActivationSubject::ContinuouslyReadyBackoffNanoseconds);
+    }
+    if (capacities.maximumOutputTransitionsPerInterval == 0U) {
+        return capacityError(
+            RuntimeActivationErrorCode::InvalidOutputRateConfiguration,
+            1U,
+            0U,
+            RuntimeActivationSubject::MaximumOutputTransitionsPerInterval);
+    }
+    if (capacities.outputRateIntervalNanoseconds <= 0) {
+        return capacityError(
+            RuntimeActivationErrorCode::InvalidOutputRateConfiguration,
+            1U,
+            0U,
+            RuntimeActivationSubject::OutputRateIntervalNanoseconds);
     }
     if (required.maximumTasksPerEvent > capacities.taskSlotCount) {
         return capacityError(
@@ -714,15 +865,7 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
     if (active) {
         Invalidate(*active, RuntimeCancellationReason::Reload);
         CleanupAfterInvalidation(*active);
-        bool cleanupPending = false;
-        {
-            const std::lock_guard ownershipLock(active->ownershipMutex);
-            cleanupPending = std::any_of(
-                active->globalOwnership.begin(),
-                active->globalOwnership.end(),
-                [](std::uint64_t count) noexcept { return count != 0U; });
-        }
-        if (cleanupPending) {
+        if (active->output.HasOwnedOutputs()) {
             controlPort.AbortActivation();
             if (restartWorker) {
                 (void)StartTaskThread();
@@ -755,19 +898,6 @@ void ProgramRuntime::Impl::Deactivate() noexcept
     active.reset();
 }
 
-RuntimeExpressionState ProgramRuntime::Impl::ExpressionState(
-    const State& state) const noexcept
-{
-    return {
-        state.userStates,
-        state.userNumbers,
-        state.userDurations,
-        {state.physicalHeld.get(), state.program->Controls().size()},
-        state.pauseOn,
-        state.program->Settings().tapDuration,
-        state.program->Settings().actionGap};
-}
-
 RuntimeEvaluationResult ProgramRuntime::Impl::Evaluate(
     State& state,
     ExpressionId expression,
@@ -776,7 +906,7 @@ RuntimeEvaluationResult ProgramRuntime::Impl::Evaluate(
     return EvaluateRuntimeExpression(
         *state.program,
         expression,
-        ExpressionState(state),
+        state.mutableState.ExpressionState(*state.program),
         scratch);
 }
 
@@ -793,7 +923,7 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
     const RuntimeEvaluationResult result = Evaluate(
         state,
         expression,
-        state.dispatchExpressionScratch);
+        state.dispatch.expressionScratch);
     if (!result.Succeeded() || result.value.type != ExpressionType::Boolean) {
         RequestFatal(
             state,
@@ -814,20 +944,15 @@ const PauseControlBucket* ProgramRuntime::Impl::FindPauseBucket(
     EventKey key) const noexcept
 {
     const auto buckets = state.program->PauseControlBuckets();
-    std::size_t first = 0U;
-    std::size_t count = buckets.size();
-    while (count != 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t index = first + step;
-        if (buckets[index].key < key) {
-            first = index + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first < buckets.size() && buckets[first].key == key
-        ? &buckets[first]
+    const auto found = std::lower_bound(
+        buckets.begin(),
+        buckets.end(),
+        key,
+        [](const PauseControlBucket& bucket, EventKey candidate) noexcept {
+            return bucket.key < candidate;
+        });
+    return found != buckets.end() && found->key == key
+        ? &*found
         : nullptr;
 }
 
@@ -836,20 +961,15 @@ const EventBucket* ProgramRuntime::Impl::FindEventBucket(
     EventKey key) const noexcept
 {
     const auto buckets = state.program->EventBuckets();
-    std::size_t first = 0U;
-    std::size_t count = buckets.size();
-    while (count != 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t index = first + step;
-        if (buckets[index].key < key) {
-            first = index + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first < buckets.size() && buckets[first].key == key
-        ? &buckets[first]
+    const auto found = std::lower_bound(
+        buckets.begin(),
+        buckets.end(),
+        key,
+        [](const EventBucket& bucket, EventKey candidate) noexcept {
+            return bucket.key < candidate;
+        });
+    return found != buckets.end() && found->key == key
+        ? &*found
         : nullptr;
 }
 
@@ -858,20 +978,15 @@ std::uint32_t ProgramRuntime::Impl::FindMappingSlot(
     ControlRefId source) const noexcept
 {
     const auto slots = state.program->MappingSlots();
-    std::size_t first = 0U;
-    std::size_t count = slots.size();
-    while (count != 0U) {
-        const std::size_t step = count / 2U;
-        const std::size_t index = first + step;
-        if (slots[index].source < source) {
-            first = index + 1U;
-            count -= step + 1U;
-        } else {
-            count = step;
-        }
-    }
-    return first < slots.size() && slots[first].source == source
-        ? static_cast<std::uint32_t>(first)
+    const auto found = std::lower_bound(
+        slots.begin(),
+        slots.end(),
+        source,
+        [](const MappingSlotDescriptor& slot, ControlRefId candidate) noexcept {
+            return slot.source < candidate;
+        });
+    return found != slots.end() && found->source == source
+        ? static_cast<std::uint32_t>(found - slots.begin())
         : kInvalidProgramIndex;
 }
 
@@ -882,18 +997,20 @@ void ProgramRuntime::Impl::PublishDiagnostic(
     std::uint32_t subject,
     std::uint32_t position,
     std::int64_t deadline,
-    std::uint32_t detail) noexcept
+    std::uint32_t detail,
+    std::uint32_t platformError) noexcept
 {
     state.diagnostics.TryPush({
         kind,
         state.programSerial,
         state.generation.load(std::memory_order_acquire),
-        state.nextOutputSequence.load(std::memory_order_relaxed),
+        state.output.nextSequence.load(std::memory_order_relaxed),
         source,
         subject,
         position,
         deadline,
-        detail});
+        detail,
+        platformError});
 }
 
 void ProgramRuntime::Impl::Invalidate(
@@ -919,7 +1036,7 @@ void ProgramRuntime::Impl::Invalidate(
     for (std::size_t index = 0U;
          index < state.program->MappingSlots().size();
          ++index) {
-        state.activeMappings[index].store(
+        state.dispatch.activeMappings[index].store(
             kInvalidProgramIndex,
             std::memory_order_release);
     }
@@ -963,17 +1080,19 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     if (!event.control.IsValid()
         || event.control.value >= state->program->Controls().size()) {
         if (event.forceStopRequested) {
-            state->shutdownRequested.store(true, std::memory_order_release);
             Invalidate(*state, RuntimeCancellationReason::ForceStop);
-            state->suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+            state->metrics.suppressedEvents.fetch_add(
+                1U,
+                std::memory_order_relaxed);
             return InputDecision::Suppress;
         }
         return InputDecision::Forward;
     }
     EventTransition transition{};
-    std::atomic<std::uint8_t>& held = state->physicalHeld[event.control.value];
+    std::atomic<std::uint8_t>& held =
+        state->mutableState.physicalHeld[event.control.value];
     std::atomic<std::uint8_t>& synchronized =
-        state->physicalSynchronized[event.control.value];
+        state->mutableState.physicalSynchronized[event.control.value];
     const bool wasSynchronized = synchronized.load(
         std::memory_order_acquire) != 0U;
     if (event.transition == Transition::Down) {
@@ -1000,9 +1119,10 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     }
 
     if (event.forceStopRequested) {
-        state->shutdownRequested.store(true, std::memory_order_release);
         Invalidate(*state, RuntimeCancellationReason::ForceStop);
-        state->suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+        state->metrics.suppressedEvents.fetch_add(
+            1U,
+            std::memory_order_relaxed);
         return InputDecision::Suppress;
     }
     const std::uint64_t transactionGeneration = state->generation.load(
@@ -1013,7 +1133,7 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         return InputDecision::Forward;
     }
 
-    state->dispatchedEvents.fetch_add(1U, std::memory_order_relaxed);
+    state->metrics.dispatchedEvents.fetch_add(1U, std::memory_order_relaxed);
     if (!routePort.TargetValid(state->targetKind)) {
         Invalidate(*state, RuntimeCancellationReason::TargetLoss);
         return InputDecision::Forward;
@@ -1029,11 +1149,15 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     const EventKey key{event.control, transition};
     const PauseControlBucket* const pauseBucket = FindPauseBucket(*state, key);
     if (pauseBucket != nullptr) {
-        std::unique_lock pauseLock(state->pauseMutex, std::try_to_lock);
+        std::unique_lock pauseLock(
+            state->mutableState.pauseMutex,
+            std::try_to_lock);
         if (!pauseLock.owns_lock()) {
             return InputDecision::Forward;
         }
-        std::shared_lock variableLock(state->variableMutex, std::try_to_lock);
+        std::shared_lock variableLock(
+            state->mutableState.variableMutex,
+            std::try_to_lock);
         if (!variableLock.owns_lock()) {
             return InputDecision::Forward;
         }
@@ -1054,24 +1178,26 @@ InputDecision ProgramRuntime::Impl::HandleInput(
                 || !state->targetEligible.load(std::memory_order_acquire)) {
                 return InputDecision::Forward;
             }
-            const bool before = state->pauseOn;
+            const bool before = state->mutableState.pauseOn;
             if (rule.effect == PauseEffect::On) {
-                state->pauseOn = true;
+                state->mutableState.pauseOn = true;
             } else if (rule.effect == PauseEffect::Off) {
-                state->pauseOn = false;
+                state->mutableState.pauseOn = false;
             } else {
-                state->pauseOn = !state->pauseOn;
+                state->mutableState.pauseOn = !state->mutableState.pauseOn;
             }
-            if (before != state->pauseOn) {
+            if (before != state->mutableState.pauseOn) {
                 Invalidate(*state, RuntimeCancellationReason::Pause);
             }
             if (rule.delivery == Delivery::Consume) {
-                state->suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+                state->metrics.suppressedEvents.fetch_add(
+                    1U,
+                    std::memory_order_relaxed);
                 return InputDecision::Suppress;
             }
             return InputDecision::Forward;
         }
-        if (!state->pauseOn) {
+        if (!state->mutableState.pauseOn) {
             return InputDecision::Forward;
         }
         const InputDecision decision = DispatchOrdinary(
@@ -1079,20 +1205,26 @@ InputDecision ProgramRuntime::Impl::HandleInput(
             key,
             transactionGeneration);
         if (decision == InputDecision::Suppress) {
-            state->suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+            state->metrics.suppressedEvents.fetch_add(
+                1U,
+                std::memory_order_relaxed);
         }
         return decision;
     }
 
-    std::shared_lock pauseLock(state->pauseMutex, std::try_to_lock);
+    std::shared_lock pauseLock(
+        state->mutableState.pauseMutex,
+        std::try_to_lock);
     if (!pauseLock.owns_lock()) {
         return InputDecision::Forward;
     }
-    std::shared_lock variableLock(state->variableMutex, std::try_to_lock);
+    std::shared_lock variableLock(
+        state->mutableState.variableMutex,
+        std::try_to_lock);
     if (!variableLock.owns_lock()) {
         return InputDecision::Forward;
     }
-    if (!state->pauseOn) {
+    if (!state->mutableState.pauseOn) {
         return InputDecision::Forward;
     }
     const InputDecision decision = DispatchOrdinary(
@@ -1100,7 +1232,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         key,
         transactionGeneration);
     if (decision == InputDecision::Suppress) {
-        state->suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+        state->metrics.suppressedEvents.fetch_add(
+            1U,
+            std::memory_order_relaxed);
     }
     return decision;
 }
@@ -1115,10 +1249,10 @@ bool ProgramRuntime::Impl::SeedPhysicalState(
         || control.value >= state->program->Controls().size()) {
         return false;
     }
-    state->physicalHeld[control.value].store(
+    state->mutableState.physicalHeld[control.value].store(
         down ? 1U : 0U,
         std::memory_order_release);
-    state->physicalSynchronized[control.value].store(
+    state->mutableState.physicalSynchronized[control.value].store(
         1U,
         std::memory_order_release);
     return true;
@@ -1133,8 +1267,12 @@ bool ProgramRuntime::Impl::MarkPhysicalStateUnsynchronized(
         || control.value >= state->program->Controls().size()) {
         return false;
     }
-    state->physicalHeld[control.value].store(0U, std::memory_order_release);
-    state->physicalSynchronized[control.value].store(0U, std::memory_order_release);
+    state->mutableState.physicalHeld[control.value].store(
+        0U,
+        std::memory_order_release);
+    state->mutableState.physicalSynchronized[control.value].store(
+        0U,
+        std::memory_order_release);
     PublishDiagnostic(
         *state,
         RuntimeDiagnosticKind::PhysicalStateSynchronization,
@@ -1209,10 +1347,10 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
     if (slot != kInvalidProgramIndex
         && (key.transition == EventTransition::Repeat
             || key.transition == EventTransition::Up)) {
-        const std::uint32_t mapping = state.activeMappings[slot].load(
+        const std::uint32_t mapping = state.dispatch.activeMappings[slot].load(
             std::memory_order_acquire);
         if (mapping != kInvalidProgramIndex) {
-            state.transactionScratch[scratchCount++] = {
+            state.dispatch.transactionScratch[scratchCount++] = {
                 key.transition == EventTransition::Repeat
                     ? WorkKind::MappingRepeat
                     : WorkKind::MappingRelease,
@@ -1246,9 +1384,9 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                 const MappingDescriptor& mapping =
                     state.program->Mappings()[rule.mapping.value];
                 const std::uint32_t mappingSlot = mapping.slot.value;
-                if (state.activeMappings[mappingSlot].load(
+                if (state.dispatch.activeMappings[mappingSlot].load(
                         std::memory_order_acquire) == kInvalidProgramIndex) {
-                    state.transactionScratch[scratchCount++] = {
+                    state.dispatch.transactionScratch[scratchCount++] = {
                         WorkKind::MappingAcquire,
                         transactionGeneration,
                         kInvalidTaskSlot,
@@ -1260,7 +1398,7 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                     mappingActivationId = rule.mapping.value;
                 }
             } else if (rule.action.IsValid()) {
-                state.transactionScratch[scratchCount++] = {
+                state.dispatch.transactionScratch[scratchCount++] = {
                     WorkKind::TaskStart,
                     transactionGeneration,
                     kInvalidTaskSlot,
@@ -1273,15 +1411,19 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
         }
     }
 
-    if (scratchCount > state.workQueue.Available()) {
-        state.transactionRejections.fetch_add(1U, std::memory_order_relaxed);
+    if (scratchCount > state.dispatch.workQueue.Available()) {
+        state.metrics.transactionRejections.fetch_add(
+            1U,
+            std::memory_order_relaxed);
         PublishDiagnostic(state, RuntimeDiagnosticKind::TransactionCapacity);
         return InputDecision::Forward;
     }
 
     std::size_t reservedCount = 0U;
     if (!ReserveTasks(state, scratchCount, reservedCount)) {
-        state.transactionRejections.fetch_add(1U, std::memory_order_relaxed);
+        state.metrics.transactionRejections.fetch_add(
+            1U,
+            std::memory_order_relaxed);
         PublishDiagnostic(state, RuntimeDiagnosticKind::TransactionCapacity);
         return InputDecision::Forward;
     }
@@ -1290,15 +1432,18 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
         return InputDecision::Forward;
     }
     if (scratchCount != 0U
-        && !state.workQueue.TryPush({state.transactionScratch.data(), scratchCount})) {
+        && !state.dispatch.workQueue.TryPush(
+            {state.dispatch.transactionScratch.data(), scratchCount})) {
         ReleaseReservedTasks(state, reservedCount);
-        state.transactionRejections.fetch_add(1U, std::memory_order_relaxed);
+        state.metrics.transactionRejections.fetch_add(
+            1U,
+            std::memory_order_relaxed);
         PublishDiagnostic(state, RuntimeDiagnosticKind::TransactionCapacity);
         return InputDecision::Forward;
     }
 
     if (mappingActivationSlot != kInvalidProgramIndex) {
-        state.activeMappings[mappingActivationSlot].store(
+        state.dispatch.activeMappings[mappingActivationSlot].store(
             mappingActivationId,
             std::memory_order_release);
         PublishDiagnostic(
@@ -1311,7 +1456,7 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
             1U);
     }
     if (mappingClearSlot != kInvalidProgramIndex) {
-        state.activeMappings[mappingClearSlot].store(
+        state.dispatch.activeMappings[mappingClearSlot].store(
             kInvalidProgramIndex,
             std::memory_order_release);
         PublishDiagnostic(
@@ -1329,7 +1474,7 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
     if (!transactionCurrent()) {
         if (mappingActivationSlot != kInvalidProgramIndex) {
             std::uint32_t expected = mappingActivationId;
-            (void)state.activeMappings[mappingActivationSlot]
+            (void)state.dispatch.activeMappings[mappingActivationSlot]
                 .compare_exchange_strong(
                     expected,
                     kInvalidProgramIndex,
@@ -1350,21 +1495,21 @@ bool ProgramRuntime::Impl::ReserveTasks(
     for (std::size_t itemIndex = 0U;
          itemIndex < scratchCount;
          ++itemIndex) {
-        WorkItem& item = state.transactionScratch[itemIndex];
+        WorkItem& item = state.dispatch.transactionScratch[itemIndex];
         if (item.kind != WorkKind::TaskStart) {
             continue;
         }
         bool reserved = false;
-        for (std::size_t slot = 0U; slot < state.taskCount; ++slot) {
+        for (std::size_t slot = 0U; slot < state.scheduler.taskCount; ++slot) {
             TaskStatus expected = TaskStatus::Free;
-            if (!state.tasks[slot].status.compare_exchange_strong(
+            if (!state.scheduler.tasks[slot].status.compare_exchange_strong(
                     expected,
                     TaskStatus::Initializing,
                     std::memory_order_acq_rel,
                     std::memory_order_acquire)) {
                 continue;
             }
-            TaskInstance& task = state.tasks[slot];
+            TaskInstance& task = state.scheduler.tasks[slot];
             task.action = item.action;
             task.position = 0U;
             task.generation = item.generation;
@@ -1384,7 +1529,7 @@ bool ProgramRuntime::Impl::ReserveTasks(
                 TaskOwnershipRecord{});
             task.status.store(TaskStatus::Reserved, std::memory_order_release);
             item.taskSlot = static_cast<std::uint32_t>(slot);
-            state.reservedTaskScratch[reservedCount++] = item.taskSlot;
+            state.dispatch.reservedTaskScratch[reservedCount++] = item.taskSlot;
             reserved = true;
             break;
         }
@@ -1402,7 +1547,7 @@ void ProgramRuntime::Impl::ReleaseReservedTasks(
     std::size_t reservedCount) noexcept
 {
     for (std::size_t index = 0U; index < reservedCount; ++index) {
-        state.tasks[state.reservedTaskScratch[index]].status.store(
+        state.scheduler.tasks[state.dispatch.reservedTaskScratch[index]].status.store(
             TaskStatus::Free,
             std::memory_order_release);
     }
@@ -1482,13 +1627,13 @@ bool ProgramRuntime::Impl::PublishOutput(
         const std::int64_t now = (std::max)(
             clock.NowNanoseconds(),
             std::int64_t{0});
-        if (now < state.outputRateWindowStartNanoseconds
-            || now - state.outputRateWindowStartNanoseconds
+        if (now < state.output.rateWindowStartNanoseconds
+            || now - state.output.rateWindowStartNanoseconds
                 >= capacities.outputRateIntervalNanoseconds) {
-            state.outputRateWindowStartNanoseconds = now;
-            state.outputRateWindowTransitions = 0U;
+            state.output.rateWindowStartNanoseconds = now;
+            state.output.rateWindowTransitions = 0U;
         }
-        if (state.outputRateWindowTransitions
+        if (state.output.rateWindowTransitions
             >= capacities.maximumOutputTransitionsPerInterval) {
             PublishDiagnostic(
                 state,
@@ -1511,19 +1656,19 @@ bool ProgramRuntime::Impl::PublishOutput(
         transition == RuntimeOutputTransition::Up
             ? currentGeneration
             : producerGeneration,
-        state.nextOutputSequence.fetch_add(1U, std::memory_order_relaxed),
+        state.output.nextSequence.fetch_add(1U, std::memory_order_relaxed),
         control,
         state.program->Controls()[control.value],
         activated,
         transition});
     if (result == RuntimeOutputResult::Accepted) {
         if (transition != RuntimeOutputTransition::Up) {
-            ++state.outputRateWindowTransitions;
+            ++state.output.rateWindowTransitions;
             if (producer != nullptr) {
                 ++producer->outputsWithoutSuspension;
             }
         }
-        state.outputTransitions.fetch_add(1U, std::memory_order_relaxed);
+        state.metrics.outputTransitions.fetch_add(1U, std::memory_order_relaxed);
         return true;
     }
     if (result == RuntimeOutputResult::RouteRejected) {
@@ -1552,12 +1697,12 @@ bool ProgramRuntime::Impl::AcquireGlobal(
     TaskInstance* producer,
     bool* rateExceeded) noexcept
 {
-    const std::lock_guard lock(state.ownershipMutex);
+    const std::lock_guard lock(state.output.mutex);
     if (producerGeneration
         != state.generation.load(std::memory_order_acquire)) {
         return false;
     }
-    std::uint64_t& count = state.globalOwnership[control.value];
+    std::uint64_t& count = state.output.globalOwnership[control.value];
     if (count == (std::numeric_limits<std::uint64_t>::max)()) {
         RequestFatal(
             state,
@@ -1595,8 +1740,8 @@ bool ProgramRuntime::Impl::ReleaseGlobal(
     ControlRefId control,
     std::uint64_t count) noexcept
 {
-    const std::lock_guard lock(state.ownershipMutex);
-    std::uint64_t& globalCount = state.globalOwnership[control.value];
+    const std::lock_guard lock(state.output.mutex);
+    std::uint64_t& globalCount = state.output.globalOwnership[control.value];
     if (count == 0U) {
         return true;
     }
@@ -1722,7 +1867,7 @@ void ProgramRuntime::Impl::ProcessMappingWork(
     const WorkItem& item) noexcept
 {
     if (!item.mappingSlot.IsValid()
-        || item.mappingSlot.value >= state.mappingOwners.size()) {
+        || item.mappingSlot.value >= state.dispatch.mappingOwners.size()) {
         RequestFatal(
             state,
             RuntimeDiagnosticKind::TaskActionFault,
@@ -1732,7 +1877,7 @@ void ProgramRuntime::Impl::ProcessMappingWork(
             5U);
         return;
     }
-    MappingOwner& owner = state.mappingOwners[item.mappingSlot.value];
+    MappingOwner& owner = state.dispatch.mappingOwners[item.mappingSlot.value];
     if (item.kind == WorkKind::MappingAcquire) {
         if (owner.owned) {
             if (owner.generation == item.generation) {
@@ -1762,7 +1907,7 @@ void ProgramRuntime::Impl::ProcessMappingWork(
             owner.mapping = item.mapping;
             owner.target = item.control;
         } else if (rateExceeded) {
-            state.activeMappings[item.mappingSlot.value].store(
+            state.dispatch.activeMappings[item.mappingSlot.value].store(
                 kInvalidProgramIndex,
                 std::memory_order_release);
             PublishDiagnostic(
@@ -1787,7 +1932,7 @@ void ProgramRuntime::Impl::ProcessMappingWork(
                 nullptr,
                 &rateExceeded);
             if (!published && rateExceeded) {
-                state.activeMappings[item.mappingSlot.value].store(
+                state.dispatch.activeMappings[item.mappingSlot.value].store(
                     kInvalidProgramIndex,
                     std::memory_order_release);
                 if (ReleaseGlobal(state, owner.target, 1U)) {
@@ -1814,7 +1959,7 @@ void ProgramRuntime::Impl::ProcessMappingWork(
 
 void ProgramRuntime::Impl::CleanupMappingOwners(State& state) noexcept
 {
-    for (MappingOwner& owner : state.mappingOwners) {
+    for (MappingOwner& owner : state.dispatch.mappingOwners) {
         if (!owner.owned) {
             continue;
         }
@@ -1829,7 +1974,7 @@ void ProgramRuntime::Impl::FinishTask(
     std::uint32_t slot,
     bool cancelled) noexcept
 {
-    TaskInstance& task = state.tasks[slot];
+    TaskInstance& task = state.scheduler.tasks[slot];
     const bool requestedCancelled = task.safetyCancelled || cancelled;
     if (!ReleaseTaskOwnership(state, task)) {
         task.cleanupCancelled = task.cleanupCancelled || requestedCancelled;
@@ -1847,17 +1992,17 @@ void ProgramRuntime::Impl::FinishTask(
     task.outputsWithoutSuspension = 0U;
     task.status.store(TaskStatus::Free, std::memory_order_release);
     if (finalCancelled) {
-        state.cancelledTasks.fetch_add(1U, std::memory_order_relaxed);
+        state.metrics.cancelledTasks.fetch_add(1U, std::memory_order_relaxed);
     } else {
-        state.completedTasks.fetch_add(1U, std::memory_order_relaxed);
+        state.metrics.completedTasks.fetch_add(1U, std::memory_order_relaxed);
     }
 }
 
 void ProgramRuntime::Impl::CleanupStale(State& state) noexcept
 {
     const std::uint64_t generation = state.generation.load(std::memory_order_acquire);
-    for (std::size_t index = 0U; index < state.taskCount; ++index) {
-        TaskInstance& task = state.tasks[index];
+    for (std::size_t index = 0U; index < state.scheduler.taskCount; ++index) {
+        TaskInstance& task = state.scheduler.tasks[index];
         const TaskStatus status = task.status.load(std::memory_order_acquire);
         if (status == TaskStatus::Free
             || status == TaskStatus::Initializing
@@ -1866,7 +2011,7 @@ void ProgramRuntime::Impl::CleanupStale(State& state) noexcept
         }
         FinishTask(state, static_cast<std::uint32_t>(index), true);
     }
-    for (MappingOwner& owner : state.mappingOwners) {
+    for (MappingOwner& owner : state.dispatch.mappingOwners) {
         if (!owner.owned || owner.generation == generation) {
             continue;
         }
@@ -1890,14 +2035,14 @@ void ProgramRuntime::Impl::CleanupAfterInvalidation(State& state) noexcept
 void ProgramRuntime::Impl::DrainWork(State& state) noexcept
 {
     WorkItem item{};
-    while (state.workQueue.TryPop(item)) {
+    while (state.dispatch.workQueue.TryPop(item)) {
         const std::uint64_t generation = state.generation.load(
             std::memory_order_acquire);
         const bool accepting = state.accepting.load(std::memory_order_acquire);
         const bool targetEligible = state.targetEligible.load(
             std::memory_order_acquire);
         if (item.kind == WorkKind::TaskStart) {
-            if (item.taskSlot >= state.taskCount) {
+            if (item.taskSlot >= state.scheduler.taskCount) {
                 RequestFatal(
                     state,
                     RuntimeDiagnosticKind::TaskActionFault,
@@ -1907,7 +2052,7 @@ void ProgramRuntime::Impl::DrainWork(State& state) noexcept
                     7U);
                 continue;
             }
-            TaskInstance& task = state.tasks[item.taskSlot];
+            TaskInstance& task = state.scheduler.tasks[item.taskSlot];
             if (task.status.load(std::memory_order_acquire) != TaskStatus::Reserved) {
                 continue;
             }
@@ -1915,12 +2060,14 @@ void ProgramRuntime::Impl::DrainWork(State& state) noexcept
                 || !accepting
                 || !targetEligible) {
                 task.status.store(TaskStatus::Free, std::memory_order_release);
-                state.cancelledTasks.fetch_add(1U, std::memory_order_relaxed);
+                state.metrics.cancelledTasks.fetch_add(
+                    1U,
+                    std::memory_order_relaxed);
                 continue;
             }
-            task.readyOrder = state.nextReadyOrder++;
+            task.readyOrder = state.scheduler.nextReadyOrder++;
             task.status.store(TaskStatus::Ready, std::memory_order_release);
-            state.startedTasks.fetch_add(1U, std::memory_order_relaxed);
+            state.metrics.startedTasks.fetch_add(1U, std::memory_order_relaxed);
             continue;
         }
         if (item.generation == generation
@@ -1938,8 +2085,10 @@ void ProgramRuntime::Impl::PromoteTimed(State& state) noexcept
         std::uint32_t selected = kInvalidTaskSlot;
         std::int64_t selectedDeadline = (std::numeric_limits<std::int64_t>::max)();
         std::uint64_t selectedOrder = (std::numeric_limits<std::uint64_t>::max)();
-        for (std::size_t index = 0U; index < state.taskCount; ++index) {
-            const TaskInstance& task = state.tasks[index];
+        for (std::size_t index = 0U;
+             index < state.scheduler.taskCount;
+             ++index) {
+            const TaskInstance& task = state.scheduler.tasks[index];
             if (task.status.load(std::memory_order_acquire) != TaskStatus::Timed
                 || task.deadlineNanoseconds > now) {
                 continue;
@@ -1955,8 +2104,8 @@ void ProgramRuntime::Impl::PromoteTimed(State& state) noexcept
         if (selected == kInvalidTaskSlot) {
             return;
         }
-        TaskInstance& task = state.tasks[selected];
-        task.readyOrder = state.nextReadyOrder++;
+        TaskInstance& task = state.scheduler.tasks[selected];
+        task.readyOrder = state.scheduler.nextReadyOrder++;
         task.status.store(TaskStatus::Ready, std::memory_order_release);
     }
 }
@@ -1965,8 +2114,10 @@ std::uint32_t ProgramRuntime::Impl::SelectReadyTask(State& state) noexcept
 {
     std::uint32_t selected = kInvalidTaskSlot;
     std::uint64_t selectedOrder = (std::numeric_limits<std::uint64_t>::max)();
-    for (std::size_t index = 0U; index < state.taskCount; ++index) {
-        const TaskInstance& task = state.tasks[index];
+    for (std::size_t index = 0U;
+         index < state.scheduler.taskCount;
+         ++index) {
+        const TaskInstance& task = state.scheduler.tasks[index];
         if (task.status.load(std::memory_order_acquire) == TaskStatus::Ready
             && task.readyOrder < selectedOrder) {
             selected = static_cast<std::uint32_t>(index);
@@ -1986,9 +2137,11 @@ void ProgramRuntime::Impl::ScheduleTimed(
     if (task.deadlineNanoseconds > now) {
         task.instructionsWithoutSuspension = 0U;
         task.outputsWithoutSuspension = 0U;
-        state.positiveSuspensions.fetch_add(1U, std::memory_order_relaxed);
+        state.scheduler.positiveSuspensions.fetch_add(
+            1U,
+            std::memory_order_relaxed);
     }
-    task.timedOrder = state.nextTimedOrder++;
+    task.timedOrder = state.scheduler.nextTimedOrder++;
     task.status.store(TaskStatus::Timed, std::memory_order_release);
     PublishDiagnostic(
         state,
@@ -2004,9 +2157,9 @@ RuntimeEvaluationResult ProgramRuntime::Impl::EvaluateTaskExpression(
     State& state,
     ExpressionId expression) noexcept
 {
-    std::shared_lock pauseLock(state.pauseMutex);
-    std::shared_lock variableLock(state.variableMutex);
-    return Evaluate(state, expression, state.taskExpressionScratch);
+    std::shared_lock pauseLock(state.mutableState.pauseMutex);
+    std::shared_lock variableLock(state.mutableState.variableMutex);
+    return Evaluate(state, expression, state.scheduler.expressionScratch);
 }
 
 SourceSpan ProgramRuntime::Impl::ActionSource(
@@ -2035,12 +2188,12 @@ bool ProgramRuntime::Impl::ExecuteSet(
     if (!IsUserDomain(target.domain)) {
         return false;
     }
-    std::shared_lock pauseLock(state.pauseMutex);
-    std::unique_lock variableLock(state.variableMutex);
+    std::shared_lock pauseLock(state.mutableState.pauseMutex);
+    std::unique_lock variableLock(state.mutableState.variableMutex);
     const RuntimeEvaluationResult result = Evaluate(
         state,
         ExpressionId{instruction.operand1},
-        state.taskExpressionScratch);
+        state.scheduler.expressionScratch);
     if (!result.Succeeded()) {
         RequestFatal(
             state,
@@ -2053,17 +2206,17 @@ bool ProgramRuntime::Impl::ExecuteSet(
     }
     if (target.domain == ValueDomain::UserState
         && result.value.type == ExpressionType::State) {
-        state.userStates[target.index] = result.value.stateValue;
+        state.mutableState.userStates[target.index] = result.value.stateValue;
         return true;
     }
     if (target.domain == ValueDomain::UserNumber
         && result.value.type == ExpressionType::Number) {
-        state.userNumbers[target.index] = result.value.numberValue;
+        state.mutableState.userNumbers[target.index] = result.value.numberValue;
         return true;
     }
     if (target.domain == ValueDomain::UserDuration
         && result.value.type == ExpressionType::Duration) {
-        state.userDurations[target.index] = result.value.durationValue;
+        state.mutableState.userDurations[target.index] = result.value.durationValue;
         return true;
     }
     return false;
@@ -2080,12 +2233,13 @@ bool ProgramRuntime::Impl::ExecuteToggle(
     }
     const ValueRef& target = refs[instruction.operand0];
     if (target.domain != ValueDomain::UserState
-        || target.index >= state.userStates.size()) {
+        || target.index >= state.mutableState.userStates.size()) {
         return false;
     }
-    std::shared_lock pauseLock(state.pauseMutex);
-    std::unique_lock variableLock(state.variableMutex);
-    state.userStates[target.index] = state.userStates[target.index] == 0U ? 1U : 0U;
+    std::shared_lock pauseLock(state.mutableState.pauseMutex);
+    std::unique_lock variableLock(state.mutableState.variableMutex);
+    std::uint8_t& value = state.mutableState.userStates[target.index];
+    value = value == 0U ? 1U : 0U;
     (void)instructionPosition;
     return true;
 }
@@ -2094,7 +2248,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
     State& state,
     std::uint32_t slot) noexcept
 {
-    TaskInstance& task = state.tasks[slot];
+    TaskInstance& task = state.scheduler.tasks[slot];
     TaskStatus expected = TaskStatus::Ready;
     if (!task.status.compare_exchange_strong(
             expected,
@@ -2261,12 +2415,12 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             TaskCancellationContext cancellationContext{
                 &state.generation,
                 task.generation};
-            const RuntimeLaunchResult result = processLauncher.Launch(
+            const RuntimeLaunchOutcome outcome = processLauncher.Launch(
                 state.program->Strings()[instruction.operand0],
                 RuntimeCancellationProbe{
                     &cancellationContext,
                     &TaskCancelled});
-            if (result != RuntimeLaunchResult::Launched) {
+            if (!outcome.Succeeded()) {
                 PublishDiagnostic(
                     state,
                     RuntimeDiagnosticKind::LaunchFailure,
@@ -2274,11 +2428,12 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     task.action.value,
                     position,
                     0,
-                    static_cast<std::uint32_t>(result));
+                    static_cast<std::uint32_t>(outcome.result),
+                    outcome.platformError);
                 FinishTask(
                     state,
                     slot,
-                    result == RuntimeLaunchResult::Cancelled);
+                    outcome.result == RuntimeLaunchResult::Cancelled);
                 return true;
             }
             ++task.position;
@@ -2356,7 +2511,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         }
         case ActionOpcode::Yield:
             ++task.position;
-            task.readyOrder = state.nextReadyOrder++;
+            task.readyOrder = state.scheduler.nextReadyOrder++;
             task.status.store(TaskStatus::Ready, std::memory_order_release);
             return true;
         case ActionOpcode::End:
@@ -2379,7 +2534,8 @@ bool ProgramRuntime::Impl::RunTaskSlice(
 RuntimePumpResult ProgramRuntime::Impl::Pump(std::size_t maximumSlices) noexcept
 {
     State* const state = active.get();
-    if (state == nullptr || state->pumpLock.test_and_set(std::memory_order_acquire)) {
+    if (state == nullptr
+        || state->scheduler.pumpLock.test_and_set(std::memory_order_acquire)) {
         return {};
     }
 
@@ -2404,21 +2560,25 @@ RuntimePumpResult ProgramRuntime::Impl::Pump(std::size_t maximumSlices) noexcept
 
     bool ready = false;
     bool timed = false;
-    for (std::size_t index = 0U; index < state->taskCount; ++index) {
-        const TaskStatus status = state->tasks[index].status.load(
+    for (std::size_t index = 0U;
+         index < state->scheduler.taskCount;
+         ++index) {
+        const TaskStatus status = state->scheduler.tasks[index].status.load(
             std::memory_order_acquire);
         ready = ready || status == TaskStatus::Ready;
         timed = timed || status == TaskStatus::Timed;
     }
-    state->pumpLock.clear(std::memory_order_release);
-    return {slices, ready || !state->workQueue.Empty(), timed};
+    state->scheduler.pumpLock.clear(std::memory_order_release);
+    return {slices, ready || !state->dispatch.workQueue.Empty(), timed};
 }
 
 std::int64_t ProgramRuntime::Impl::NextDeadline(const State& state) const noexcept
 {
     std::int64_t deadline = (std::numeric_limits<std::int64_t>::max)();
-    for (std::size_t index = 0U; index < state.taskCount; ++index) {
-        const TaskInstance& task = state.tasks[index];
+    for (std::size_t index = 0U;
+         index < state.scheduler.taskCount;
+         ++index) {
+        const TaskInstance& task = state.scheduler.tasks[index];
         if (task.status.load(std::memory_order_acquire) == TaskStatus::Timed) {
             deadline = (std::min)(deadline, task.deadlineNanoseconds);
         }
@@ -2474,11 +2634,13 @@ void ProgramRuntime::Impl::TaskThreadMain() noexcept
         const State* const pumpState = active.get();
         const std::uint64_t suspensionsBefore = pumpState == nullptr
             ? 0U
-            : pumpState->positiveSuspensions.load(std::memory_order_relaxed);
+            : pumpState->scheduler.positiveSuspensions.load(
+                  std::memory_order_relaxed);
         const RuntimePumpResult result = Pump(1024U);
         const std::uint64_t suspensionsAfter = pumpState == nullptr
             ? 0U
-            : pumpState->positiveSuspensions.load(std::memory_order_relaxed);
+            : pumpState->scheduler.positiveSuspensions.load(
+                  std::memory_order_relaxed);
         if (result.readyWorkRemaining) {
             if (suspensionsAfter != suspensionsBefore) {
                 continuouslyReadyQuanta = 0U;
@@ -2492,7 +2654,9 @@ void ProgramRuntime::Impl::TaskThreadMain() noexcept
             continuouslyReadyQuanta = 0U;
             State* const state = active.get();
             if (state != nullptr) {
-                state->schedulerBackoffs.fetch_add(1U, std::memory_order_relaxed);
+                state->metrics.schedulerBackoffs.fetch_add(
+                    1U,
+                    std::memory_order_relaxed);
             }
             std::int64_t backoffNanoseconds =
                 capacities.continuouslyReadyBackoffNanoseconds;
@@ -2616,7 +2780,6 @@ void ProgramRuntime::NotifyTargetLost() noexcept
 void ProgramRuntime::RequestShutdown() noexcept
 {
     if (impl_->active != nullptr) {
-        impl_->active->shutdownRequested.store(true, std::memory_order_release);
         impl_->Invalidate(
             *impl_->active,
             RuntimeCancellationReason::Shutdown);
@@ -2636,11 +2799,8 @@ bool ProgramRuntime::TargetEligible() const noexcept
 
 bool ProgramRuntime::PauseOn() const noexcept
 {
-    if (impl_->active == nullptr) {
-        return false;
-    }
-    std::shared_lock lock(impl_->active->pauseMutex);
-    return impl_->active->pauseOn;
+    return impl_->active != nullptr
+        && impl_->active->mutableState.PauseEnabled();
 }
 
 bool ProgramRuntime::FatalShutdownRequested() const noexcept
@@ -2656,45 +2816,21 @@ std::uint64_t ProgramRuntime::Generation() const noexcept
 
 std::size_t ProgramRuntime::ActiveTaskCount() const noexcept
 {
-    if (impl_->active == nullptr) {
-        return 0U;
-    }
-    std::size_t count = 0U;
-    for (std::size_t index = 0U; index < impl_->active->taskCount; ++index) {
-        if (impl_->active->tasks[index].status.load(std::memory_order_acquire)
-            != TaskStatus::Free) {
-            ++count;
-        }
-    }
-    return count;
+    return impl_->active == nullptr
+        ? 0U
+        : impl_->active->scheduler.ActiveTaskCount();
 }
 
 bool ProgramRuntime::HasActiveMappings() const noexcept
 {
-    if (impl_->active == nullptr) {
-        return false;
-    }
-    for (std::size_t index = 0U;
-         index < impl_->active->program->MappingSlots().size();
-         ++index) {
-        if (impl_->active->activeMappings[index].load(std::memory_order_acquire)
-            != kInvalidProgramIndex) {
-            return true;
-        }
-    }
-    return false;
+    return impl_->active != nullptr
+        && impl_->active->dispatch.HasActiveMappings();
 }
 
 bool ProgramRuntime::HasOwnedOutputs() const noexcept
 {
-    if (impl_->active == nullptr) {
-        return false;
-    }
-    const std::lock_guard lock(impl_->active->ownershipMutex);
-    return std::any_of(
-        impl_->active->globalOwnership.begin(),
-        impl_->active->globalOwnership.end(),
-        [](std::uint64_t count) noexcept { return count != 0U; });
+    return impl_->active != nullptr
+        && impl_->active->output.HasOwnedOutputs();
 }
 
 RuntimeMetrics ProgramRuntime::Metrics() const noexcept
@@ -2703,16 +2839,7 @@ RuntimeMetrics ProgramRuntime::Metrics() const noexcept
         return {};
     }
     const Impl::State& state = *impl_->active;
-    return {
-        state.dispatchedEvents.load(std::memory_order_relaxed),
-        state.suppressedEvents.load(std::memory_order_relaxed),
-        state.startedTasks.load(std::memory_order_relaxed),
-        state.completedTasks.load(std::memory_order_relaxed),
-        state.cancelledTasks.load(std::memory_order_relaxed),
-        state.transactionRejections.load(std::memory_order_relaxed),
-        state.diagnostics.Dropped(),
-        state.outputTransitions.load(std::memory_order_relaxed),
-        state.schedulerBackoffs.load(std::memory_order_relaxed)};
+    return state.metrics.Snapshot(state.diagnostics.Dropped());
 }
 
 RuntimeEvaluationResult ProgramRuntime::EvaluateExpression(
@@ -2724,12 +2851,12 @@ RuntimeEvaluationResult ProgramRuntime::EvaluateExpression(
         return result;
     }
     Impl::State& state = *impl_->active;
-    std::shared_lock pauseLock(state.pauseMutex);
-    std::shared_lock variableLock(state.variableMutex);
+    std::shared_lock pauseLock(state.mutableState.pauseMutex);
+    std::shared_lock variableLock(state.mutableState.variableMutex);
     return impl_->Evaluate(
         state,
         expression,
-        state.dispatchExpressionScratch);
+        state.dispatch.expressionScratch);
 }
 
 bool ProgramRuntime::ReadUserState(
@@ -2739,45 +2866,7 @@ bool ProgramRuntime::ReadUserState(
     if (impl_->active == nullptr) {
         return false;
     }
-    const Impl::State& state = *impl_->active;
-    std::shared_lock lock(state.variableMutex);
-    if (index >= state.userStates.size()) {
-        return false;
-    }
-    value = state.userStates[index] != 0U;
-    return true;
-}
-
-bool ProgramRuntime::ReadUserNumber(
-    std::uint32_t index,
-    double& value) const noexcept
-{
-    if (impl_->active == nullptr) {
-        return false;
-    }
-    const Impl::State& state = *impl_->active;
-    std::shared_lock lock(state.variableMutex);
-    if (index >= state.userNumbers.size()) {
-        return false;
-    }
-    value = state.userNumbers[index];
-    return true;
-}
-
-bool ProgramRuntime::ReadUserDuration(
-    std::uint32_t index,
-    DurationValue& value) const noexcept
-{
-    if (impl_->active == nullptr) {
-        return false;
-    }
-    const Impl::State& state = *impl_->active;
-    std::shared_lock lock(state.variableMutex);
-    if (index >= state.userDurations.size()) {
-        return false;
-    }
-    value = state.userDurations[index];
-    return true;
+    return impl_->active->mutableState.ReadUserState(index, value);
 }
 
 bool ProgramRuntime::TryPopDiagnostic(

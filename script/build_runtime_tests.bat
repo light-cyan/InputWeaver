@@ -21,7 +21,7 @@ echo [1/2] Building ProgramRuntimeTests.exe...
 if errorlevel 1 exit /b %errorlevel%
 
 echo [2/2] Building WindowsRuntimeAdapterTests.exe...
-%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -DINPUTWEAVER_TESTING ^
     "tests\runtime\windows_runtime_adapter_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
     "src\platform\windows\runtime\compiled_target_resolver.cpp" ^
