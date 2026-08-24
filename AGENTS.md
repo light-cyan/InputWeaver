@@ -25,7 +25,7 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - For compiler, compiler CLI, or Windows compiler-backend changes, use `script/build_compiler_tests.bat` followed by `script/test_compiler.bat`.
 - For platform-independent runtime or Windows runtime-adapter changes, use `script/build_runtime_tests.bat` followed by `script/test_runtime.bat`.
 - For shared-program, Windows executor, hook, injection, or diagnostic changes, use `script/build.bat` followed by `script/test.bat`.
-- Use `script/verify_phase3.bat` for cross-cutting code verification, and run the relevant analyzer and dependency audit when a changed boundary warrants them.
+- Use `script/verify_project.bat` for cross-cutting code verification, and run the relevant analyzer and dependency audit when a changed boundary warrants them.
 
 ## Agent Coordination
 
@@ -90,13 +90,14 @@ all modules -> support only for domain-independent primitives
 
 ## Current Development
 
-- The current delivered stage is the compiler and runtime command-line interface with completed Phase 5 integrity hardening; its integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
+- The current development stage is Phase 6: Declarative Runtime Controls; its scope and verification contract are recorded in `development/phase-6-declarative-runtime-controls/Plan.md`.
+- The delivered baseline is the compiler and runtime command-line interface with completed Phase 5 integrity hardening; its integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
 - `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
 - `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
 - Completed Phase 2, Phase 3, Phase 4, and Phase 5 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, `development/legacy/phase-4-refactor/`, and `development/legacy/phase-5-integrity-hardening/`.
-- Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_phase3.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
+- Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices
 

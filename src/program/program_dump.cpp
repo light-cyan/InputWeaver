@@ -266,6 +266,8 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
            << " numbers=" << requirements.numberSlotCount
            << " durations=" << requirements.durationSlotCount
            << " mapping-slots=" << requirements.mappingSlotCount
+           << " exit-rules/event="
+           << requirements.maximumExitRulesPerEvent
            << " pause-rules/event="
            << requirements.maximumPauseRulesPerEvent
            << " rules/event=" << requirements.maximumRulesPerEvent
@@ -399,6 +401,30 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         WriteId(output, 'c', mapping.target);
         output << " source=";
         WriteSpan(output, mapping.source);
+        output << '\n';
+    }
+
+    output << "exit-control-buckets "
+           << program.ExitControlBuckets().size() << '\n';
+    for (std::size_t index = 0;
+         index < program.ExitControlBuckets().size();
+         ++index) {
+        const ExitControlBucket& bucket = program.ExitControlBuckets()[index];
+        output << "  e" << index << " key=";
+        WriteId(output, 'c', bucket.key.control);
+        output << ':' << TransitionName(bucket.key.transition) << " rules=";
+        WriteRange(output, bucket.rules);
+        output << '\n';
+    }
+    output << "exit-control-rules " << program.ExitControlRules().size() << '\n';
+    for (std::size_t index = 0;
+         index < program.ExitControlRules().size();
+         ++index) {
+        const ExitControlRule& rule = program.ExitControlRules()[index];
+        output << "  e" << index << " condition=";
+        WriteId(output, 'e', rule.condition);
+        output << " ordinal=" << rule.sourceOrdinal << " source=";
+        WriteSpan(output, rule.source);
         output << '\n';
     }
 

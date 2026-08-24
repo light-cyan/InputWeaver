@@ -22,6 +22,31 @@ constexpr ControlRef kF7{
     0x07U,
     0x40U,
     kControlQualifierNone};
+constexpr ControlRef kF12{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0x45U,
+    kControlQualifierNone};
+constexpr ControlRef kLeftControl{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0xe0U,
+    kControlQualifierNone};
+constexpr ControlRef kRightControl{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0xe4U,
+    kControlQualifierNone};
+constexpr ControlRef kLeftShift{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0xe1U,
+    kControlQualifierNone};
+constexpr ControlRef kRightShift{
+    kControlNamespaceUsbHid,
+    0x07U,
+    0xe5U,
+    kControlQualifierNone};
 
 [[nodiscard]] SourceSpan SpanOf(
     const std::string& source,
@@ -78,6 +103,79 @@ void AddTapAction(CompiledProgramStorage& storage, const std::string& source)
     storage.debugInfo.actionInstructionSpans = {action, action};
 }
 
+void AddExitControl(CompiledProgramStorage& storage)
+{
+    const ControlRefId leftControl{
+        static_cast<std::uint32_t>(storage.controls.size())};
+    storage.controls.push_back(kLeftControl);
+    const ControlRefId rightControl{
+        static_cast<std::uint32_t>(storage.controls.size())};
+    storage.controls.push_back(kRightControl);
+    const ControlRefId leftShift{
+        static_cast<std::uint32_t>(storage.controls.size())};
+    storage.controls.push_back(kLeftShift);
+    const ControlRefId rightShift{
+        static_cast<std::uint32_t>(storage.controls.size())};
+    storage.controls.push_back(kRightShift);
+    const ControlRefId f12{
+        static_cast<std::uint32_t>(storage.controls.size())};
+    storage.controls.push_back(kF12);
+
+    const ExpressionId condition{
+        static_cast<std::uint32_t>(storage.expressions.size())};
+    const std::uint32_t begin = static_cast<std::uint32_t>(
+        storage.expressionCode.size());
+    storage.expressions.push_back({
+        {begin, 14U},
+        ExpressionType::Boolean,
+        1U,
+        {}});
+    storage.expressionCode.insert(storage.expressionCode.end(), {
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+            leftControl.value, 0U},
+        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 4U, 0U},
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+            rightControl.value, 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 5U, 0U},
+        {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
+        {ExpressionOpcode::JumpIfFalse, ExpressionType::None, 12U, 0U},
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+            leftShift.value, 0U},
+        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 10U, 0U},
+        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+            rightShift.value, 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 11U, 0U},
+        {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 13U, 0U},
+        {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    storage.debugInfo.expressionInstructionSpans.insert(
+        storage.debugInfo.expressionInstructionSpans.end(),
+        14U,
+        SourceSpan{});
+
+    for (const ControlRefId control : {
+             leftControl,
+             rightControl,
+             leftShift,
+             rightShift}) {
+        storage.controlRequirements.push_back({
+            control,
+            ToControlUseBits(ControlUse::PhysicalState)});
+    }
+    storage.controlRequirements.push_back({
+        f12,
+        ToControlUseBits(ControlUse::EventSource)});
+    storage.exitControlRules.push_back({
+        condition,
+        kInvalidProgramIndex,
+        {}});
+    storage.exitControlBuckets.push_back({
+        {f12, EventTransition::Down},
+        {0U, 1U}});
+}
+
 void Derive(CompiledProgramStorage& storage)
 {
     storage.requirements = ComputeProgramRequirements(storage);
@@ -110,6 +208,7 @@ CompiledProgramStorage MakeTapFixtureStorage()
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
+    AddExitControl(storage);
     Derive(storage);
     return storage;
 }
@@ -118,7 +217,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
 {
     static const std::string source =
         "TARGET = GLOBAL;\n"
-        "F6 := F7;\n";
+        "F6 -> F7;\n";
     CompiledProgramStorage storage{};
     SetCommonSource(storage, "fixture.mapping.weave", source);
     AddCommonControls(storage);
@@ -133,7 +232,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
     storage.mappings.push_back({
         MappingSlotId{0U},
         ControlRefId{0U},
-        SpanOf(source, "F6 := F7;")});
+        SpanOf(source, "F6 -> F7;")});
     storage.rules.push_back({
         ExpressionId{},
         ActionProgramId{},
@@ -142,10 +241,11 @@ CompiledProgramStorage MakeMappingFixtureStorage()
         MatchFlow::Stop,
         RuleKind::MappingDown,
         0U,
-        SpanOf(source, "F6 := F7;")});
+        SpanOf(source, "F6 -> F7;")});
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
+    AddExitControl(storage);
     Derive(storage);
     return storage;
 }
@@ -240,6 +340,7 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});
+    AddExitControl(storage);
     Derive(storage);
     return storage;
 }
@@ -266,6 +367,7 @@ CompiledProgramStorage MakePauseControlFixtureStorage()
     storage.pauseControlBuckets.push_back({
         {ControlRefId{0U}, EventTransition::Down},
         {0U, 1U}});
+    AddExitControl(storage);
     Derive(storage);
     return storage;
 }

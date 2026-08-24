@@ -5,6 +5,7 @@
 #include "runtime/program_runtime.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -205,6 +206,54 @@ struct RuntimeHarness final {
     }
 };
 
+void RebuildControlRequirements(inputweaver::CompiledProgramStorage& storage)
+{
+    using namespace inputweaver;
+    std::vector<std::uint8_t> uses(storage.controls.size(), 0U);
+    const auto add = [&uses](ControlRefId control, ControlUse use) {
+        if (control.value < uses.size()) {
+            uses[control.value] = static_cast<std::uint8_t>(
+                uses[control.value] | ToControlUseBits(use));
+        }
+    };
+    for (const ExpressionInstruction& instruction : storage.expressionCode) {
+        if (instruction.opcode == ExpressionOpcode::ReadControlHeld) {
+            add(ControlRefId{instruction.operand0}, ControlUse::PhysicalState);
+        }
+    }
+    for (const ActionInstruction& instruction : storage.actionCode) {
+        if (instruction.opcode == ActionOpcode::Press
+            || instruction.opcode == ActionOpcode::Release
+            || instruction.opcode == ActionOpcode::Tap) {
+            add(ControlRefId{instruction.operand0}, ControlUse::OutputDownUp);
+        }
+    }
+    for (const ExitControlBucket& bucket : storage.exitControlBuckets) {
+        add(bucket.key.control, ControlUse::EventSource);
+    }
+    for (const PauseControlBucket& bucket : storage.pauseControlBuckets) {
+        add(bucket.key.control, ControlUse::EventSource);
+    }
+    for (const EventBucket& bucket : storage.eventBuckets) {
+        add(bucket.key.control, ControlUse::EventSource);
+    }
+    for (const MappingSlotDescriptor& slot : storage.mappingSlots) {
+        add(slot.source, ControlUse::EventSource);
+    }
+    for (const MappingDescriptor& mapping : storage.mappings) {
+        add(mapping.target, ControlUse::OutputDownUp);
+        add(mapping.target, ControlUse::OutputRepeat);
+    }
+    storage.controlRequirements.clear();
+    for (std::size_t index = 0U; index < uses.size(); ++index) {
+        if (uses[index] != 0U) {
+            storage.controlRequirements.push_back({
+                ControlRefId{static_cast<std::uint32_t>(index)},
+                uses[index]});
+        }
+    }
+}
+
 [[nodiscard]] inputweaver::RuntimeCapacities ProcessLaunchCapacities() noexcept
 {
     inputweaver::RuntimeCapacities capacities{};
@@ -215,6 +264,13 @@ struct RuntimeHarness final {
 [[nodiscard]] std::shared_ptr<const inputweaver::CompiledProgram> Finalize(
     inputweaver::CompiledProgramStorage storage)
 {
+    for (inputweaver::ExitControlRule& rule : storage.exitControlRules) {
+        if (rule.sourceOrdinal == inputweaver::kInvalidProgramIndex) {
+            rule.condition = {};
+        }
+    }
+    RebuildControlRequirements(storage);
+    storage.requirements = inputweaver::ComputeProgramRequirements(storage);
     inputweaver::FinalizeResult result = inputweaver::FinalizeCompiledProgram(
         std::move(storage));
     if (!result.errors.empty()) {
@@ -265,13 +321,15 @@ void TestEffectiveTargetOverride()
 {
     using namespace inputweaver;
     CompiledProgramStorage storage = test::MakeMappingFixtureStorage();
+    const ControlRefId pauseControl{
+        static_cast<std::uint32_t>(storage.controls.size())};
     storage.controls.push_back({
         kControlNamespaceUsbHid,
         0x07U,
         0x41U,
         kControlQualifierNone});
     storage.controlRequirements.push_back({
-        ControlRefId{2U},
+        pauseControl,
         ToControlUseBits(ControlUse::EventSource)});
     storage.pauseControlRules.push_back({
         ExpressionId{},
@@ -280,7 +338,7 @@ void TestEffectiveTargetOverride()
         1U,
         storage.mappings[0].source});
     storage.pauseControlBuckets.push_back({
-        {ControlRefId{2U}, EventTransition::Down},
+        {pauseControl, EventTransition::Down},
         {0U, 1U}});
     storage.requirements = ComputeProgramRequirements(storage);
     return storage;
@@ -297,6 +355,42 @@ void TestEffectiveTargetOverride()
     event.origin = origin;
     event.transition = transition;
     return event;
+}
+
+[[nodiscard]] inputweaver::ControlRefId FindKeyboardControl(
+    const inputweaver::CompiledProgram& program,
+    std::uint32_t usage)
+{
+    const auto controls = program.Controls();
+    const auto found = std::find(
+        controls.begin(),
+        controls.end(),
+        inputweaver::ControlRef{
+            inputweaver::kControlNamespaceUsbHid,
+            0x07U,
+            usage,
+            inputweaver::kControlQualifierNone});
+    return found == controls.end()
+        ? inputweaver::ControlRefId{}
+        : inputweaver::ControlRefId{
+              static_cast<std::uint32_t>(found - controls.begin())};
+}
+
+[[nodiscard]] inputweaver::InputDecision RequestCompiledExit(
+    inputweaver::ProgramRuntime& runtime,
+    const inputweaver::CompiledProgram& program)
+{
+    const inputweaver::ControlRefId control = FindKeyboardControl(program, 0xe0U);
+    const inputweaver::ControlRefId shift = FindKeyboardControl(program, 0xe1U);
+    const inputweaver::ControlRefId f12 = FindKeyboardControl(program, 0x45U);
+    if (!runtime.SeedPhysicalState(control, true)
+        || !runtime.SeedPhysicalState(shift, true)
+        || !f12.IsValid()) {
+        return inputweaver::InputDecision::Forward;
+    }
+    return runtime.HandleInput(KeyboardEvent(
+        f12.value,
+        inputweaver::Transition::Down));
 }
 
 [[nodiscard]] std::uint32_t TriggerControl(
@@ -532,6 +626,46 @@ void TestPauseEffectsAndIdempotence()
         "pause Toggle consumes release and invalidates once");
 }
 
+void TestExitControlSemantics()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    storage.exitControlRules[0].sourceOrdinal = 1U;
+    const auto program = Finalize(std::move(storage));
+    RuntimeHarness routed;
+    routed.route.dispatchAllowed = false;
+    Check(routed.runtime.Activate(program).activated,
+        "conditional exit fixture activates");
+    const ControlRefId f12 = FindKeyboardControl(*program, 0x45U);
+    Check(
+        routed.runtime.HandleInput(KeyboardEvent(f12.value, Transition::Down))
+                == InputDecision::Forward
+            && !routed.runtime.ExitRequested(),
+        "an unmatched exit condition forwards the physical event");
+    (void)routed.runtime.HandleInput(KeyboardEvent(f12.value, Transition::Up));
+    Check(
+        routed.runtime.SeedPhysicalState(FindKeyboardControl(*program, 0xe0U), true)
+            && routed.runtime.SeedPhysicalState(
+                FindKeyboardControl(*program, 0xe1U), true)
+            && routed.runtime.HandleInput(KeyboardEvent(f12.value, Transition::Down))
+                == InputDecision::Suppress
+            && routed.runtime.ExitRequested(),
+        "a matched exit bypasses ordinary target routing and stops synchronously");
+
+    const auto pauseProgram = Finalize(MakePauseEffectsStorage());
+    RuntimeHarness paused;
+    Check(paused.runtime.Activate(pauseProgram).activated,
+        "paused exit fixture activates");
+    const std::uint32_t pauseTrigger = TriggerControl(*pauseProgram);
+    (void)paused.runtime.HandleInput(KeyboardEvent(pauseTrigger, Transition::Down));
+    Check(
+        !paused.runtime.PauseOn()
+            && RequestCompiledExit(paused.runtime, *pauseProgram)
+                == InputDecision::Suppress
+            && paused.runtime.ExitRequested(),
+        "compiled exit remains available while PAUSE is off");
+}
+
 void AppendExpression(
     inputweaver::CompiledProgramStorage& storage,
     inputweaver::ExpressionType resultType,
@@ -580,6 +714,15 @@ void AppendExpression(
         {(std::numeric_limits<std::int64_t>::max)()}};
     storage.expressions.clear();
     storage.expressionCode.clear();
+    storage.exitControlRules[0].condition = ExpressionId{};
+    storage.controlRequirements = {
+        {ControlRefId{0U}, static_cast<std::uint8_t>(
+            ToControlUseBits(ControlUse::OutputDownUp)
+            | ToControlUseBits(ControlUse::PhysicalState))},
+        {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
+        {storage.exitControlBuckets[0].key.control,
+            ToControlUseBits(ControlUse::EventSource)},
+    };
 
     AppendExpression(storage, ExpressionType::Boolean, 1U, {
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 0U, 0U},
@@ -755,9 +898,6 @@ void AppendExpression(
     });
     storage.debugInfo.expressionInstructionSpans.assign(
         storage.expressionCode.size(), source);
-    storage.controlRequirements[0].uses = static_cast<std::uint8_t>(
-        storage.controlRequirements[0].uses
-        | ToControlUseBits(ControlUse::PhysicalState));
     storage.requirements = ComputeProgramRequirements(storage);
     return storage;
 }
@@ -1266,14 +1406,10 @@ void TestTaskProgressBudgets()
          ++attempt) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    inputweaver::RuntimeInputEvent forceStop = KeyboardEvent(
-        readyTrigger,
-        inputweaver::Transition::Up);
-    forceStop.forceStopRequested = true;
     Check(
-        manyReadyHarness.runtime.HandleInput(forceStop)
+        RequestCompiledExit(manyReadyHarness.runtime, *manyReadyProgram)
             == inputweaver::InputDecision::Suppress,
-        "force stop interrupts maximum continuously ready work");
+        "compiled exit interrupts maximum continuously ready work");
     for (std::size_t attempt = 0U;
          attempt < 100U
             && manyReadyHarness.runtime.ActiveTaskCount() != 0U;
@@ -1286,18 +1422,19 @@ void TestTaskProgressBudgets()
         manyReadyHarness.runtime.Metrics().schedulerBackoffs != 0U
             && manyReadyHarness.runtime.ActiveTaskCount() == 0U
             && manyReadyHarness.runtime.Metrics().cancelledTasks == 16U,
-        "scheduler backoff remains responsive to force-stop cancellation");
+        "scheduler backoff remains responsive to exit cancellation");
 }
 
 void TestMaximumSynchronousDispatch()
 {
     const inputweaver::RuntimeCapacities defaults{};
     Check(
-        defaults.maximumPauseRulesPerEvent == 64U
+        defaults.maximumExitRulesPerEvent == 64U
+            && defaults.maximumPauseRulesPerEvent == 64U
             && defaults.maximumRulesPerEvent == 256U
             && defaults.maximumPredicateStepsPerEvent == 4096U
             && defaults.maximumMappingOperationsPerEvent == 64U,
-        "Phase 4 synchronous safety capacities remain frozen");
+        "synchronous safety capacities remain frozen");
     const auto program = Finalize(MakeMaximumDispatchStorage());
     Check(
         program->Requirements().maximumRulesPerEvent
@@ -1893,6 +2030,14 @@ void TestActivationAndTransientCapacity()
         mapping,
         inputweaver::RuntimeActivationErrorCode::MappingCapacity,
         "mapping capacity rejects activation before publication");
+    inputweaver::RuntimeCapacities exitRuleCapacity{};
+    exitRuleCapacity.maximumExitRulesPerEvent =
+        tap->Requirements().maximumExitRulesPerEvent - 1U;
+    checkCapacityRejection(
+        exitRuleCapacity,
+        tap,
+        inputweaver::RuntimeActivationErrorCode::ExitRuleCapacity,
+        "exit-rule hook-path capacity rejects activation");
     inputweaver::RuntimeCapacities pauseRuleCapacity{};
     pauseRuleCapacity.maximumPauseRulesPerEvent =
         pause->Requirements().maximumPauseRulesPerEvent - 1U;
@@ -2021,6 +2166,13 @@ void TestActivationAndTransientCapacity()
         inputweaver::RuntimeActivationErrorCode::ProcessLaunchDenied,
         "process policy rejects exec program before publication");
 
+    inputweaver::RuntimeCapacities exactExit{};
+    exactExit.maximumExitRulesPerEvent =
+        tap->Requirements().maximumExitRulesPerEvent;
+    RuntimeHarness exactExitHarness(exactExit);
+    Check(
+        exactExitHarness.runtime.Activate(tap).activated,
+        "exit-rule requirement is accepted at the exact capacity");
     inputweaver::RuntimeCapacities exactPause{};
     exactPause.maximumPauseRulesPerEvent =
         pause->Requirements().maximumPauseRulesPerEvent;
@@ -2425,13 +2577,15 @@ void TestMappingCancellationReleasePaths()
         pauseHarness.runtime.Activate(pauseProgram).activated,
         "mapping PAUSE cancellation fixture activates");
     const std::uint32_t pauseSource = TriggerControl(*pauseProgram);
+    const std::uint32_t pauseControl =
+        pauseProgram->PauseControlBuckets().front().key.control.value;
     (void)pauseHarness.runtime.HandleInput(KeyboardEvent(
         pauseSource,
         inputweaver::Transition::Down));
     (void)pauseHarness.runtime.Pump();
     Check(
         pauseHarness.runtime.HandleInput(KeyboardEvent(
-            2U,
+            pauseControl,
             inputweaver::Transition::Down))
                 == inputweaver::InputDecision::Suppress,
         "PAUSE transition consumes its physical control");
@@ -2440,23 +2594,19 @@ void TestMappingCancellationReleasePaths()
         released(pauseHarness),
         "PAUSE cancellation releases active mapping ownership");
 
-    RuntimeHarness forceStopHarness;
+    RuntimeHarness exitHarness;
     Check(
-        forceStopHarness.runtime.Activate(mapping).activated
-            && acquireMapping(forceStopHarness),
-        "mapping force-stop cancellation fixture acquires ownership");
-    inputweaver::RuntimeInputEvent forceStop = KeyboardEvent(
-        TriggerControl(*mapping),
-        inputweaver::Transition::Up);
-    forceStop.forceStopRequested = true;
+        exitHarness.runtime.Activate(mapping).activated
+            && acquireMapping(exitHarness),
+        "mapping exit cancellation fixture acquires ownership");
     Check(
-        forceStopHarness.runtime.HandleInput(forceStop)
+        RequestCompiledExit(exitHarness.runtime, *mapping)
             == inputweaver::InputDecision::Suppress,
-        "physical force stop is accepted during mapping ownership");
-    (void)forceStopHarness.runtime.Pump();
+        "compiled exit is accepted during mapping ownership");
+    (void)exitHarness.runtime.Pump();
     Check(
-        released(forceStopHarness),
-        "physical force stop releases active mapping ownership");
+        released(exitHarness),
+        "compiled exit releases active mapping ownership");
 
     RuntimeHarness failureHarness;
     Check(
@@ -2628,7 +2778,7 @@ void TestOutputRateBudget()
         "global output rate exhaustion cancels only the producing task");
 }
 
-void TestRoutingFailureAndForceStop()
+void TestRoutingFailureAndExit()
 {
     RuntimeHarness harness;
     inputweaver::CompiledProgramStorage tapStorage =
@@ -2648,17 +2798,14 @@ void TestRoutingFailureAndForceStop()
         "keyboard dispatch rejection enters reversible target ineligibility");
     harness.route.dispatchAllowed = true;
     harness.runtime.SetTargetEligible(true);
-    inputweaver::RuntimeInputEvent stop = KeyboardEvent(
-        trigger,
-        inputweaver::Transition::Up);
-    stop.forceStopRequested = true;
     Check(
-        harness.runtime.HandleInput(stop) == inputweaver::InputDecision::Suppress,
-        "force stop precedes ordinary routing and suppresses its completion event");
+        RequestCompiledExit(harness.runtime, *tap)
+            == inputweaver::InputDecision::Suppress,
+        "compiled exit precedes ordinary routing and suppresses its event");
     Check(
         harness.runtime.HandleInput(KeyboardEvent(trigger, inputweaver::Transition::Down))
             == inputweaver::InputDecision::Forward,
-        "force stop disables further transactions");
+        "compiled exit disables further transactions");
 }
 
 } // namespace
@@ -2671,6 +2818,7 @@ int main()
     TestConditionalRepeatFixture();
     TestPauseFixtureAndCancellation();
     TestPauseEffectsAndIdempotence();
+    TestExitControlSemantics();
     TestExpressionVm();
     TestArrowFlowAndOverlappingOwnership();
     TestActionVm();
@@ -2690,7 +2838,7 @@ int main()
     TestMappingCancellationReleasePaths();
     TestPhysicalStateInitialization();
     TestOutputRateBudget();
-    TestRoutingFailureAndForceStop();
+    TestRoutingFailureAndExit();
     TestProductionTaskThread();
 
     if (g_failureCount != 0) {

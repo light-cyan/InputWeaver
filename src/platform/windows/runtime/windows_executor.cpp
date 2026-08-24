@@ -177,7 +177,7 @@ int RunCompiledInstance(
                << (targetContext == nullptr
                     ? L" globally.\n"
                     : L" only while the selected process is foreground.\n")
-               << L"Press physical Ctrl+Shift+F12 to stop.\n" << std::flush;
+               << L"Use the configured physical exit event to stop.\n" << std::flush;
     DWORD waitError = ERROR_SUCCESS;
     const DWORD waitResult = WaitForProgramRuntime(runtime, waitError);
     if (waitResult == WAIT_OBJECT_0 + 1U || waitResult == WAIT_FAILED) {

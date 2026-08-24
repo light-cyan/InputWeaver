@@ -462,6 +462,7 @@ struct ProgramRuntime::Impl final {
         std::atomic<std::uint64_t>& generation;
         std::atomic<bool> accepting{true};
         std::atomic<bool> targetEligible{true};
+        std::atomic<bool> exitRequested{false};
         std::atomic<bool> fatalShutdownRequested{false};
     };
 
@@ -533,6 +534,9 @@ struct ProgramRuntime::Impl final {
         SourceSpan source,
         bool& matched) noexcept;
 
+    [[nodiscard]] const ExitControlBucket* FindExitBucket(
+        const State& state,
+        EventKey key) const noexcept;
     [[nodiscard]] const PauseControlBucket* FindPauseBucket(
         const State& state,
         EventKey key) const noexcept;
@@ -682,6 +686,13 @@ RuntimeActivationError ProgramRuntime::Impl::ValidateCapacities(
             RuntimeActivationErrorCode::MappingCapacity,
             required.mappingSlotCount,
             capacities.maximumMappingSlots);
+    }
+    if (required.maximumExitRulesPerEvent
+        > capacities.maximumExitRulesPerEvent) {
+        return capacityError(
+            RuntimeActivationErrorCode::ExitRuleCapacity,
+            required.maximumExitRulesPerEvent,
+            capacities.maximumExitRulesPerEvent);
     }
     if (required.maximumPauseRulesPerEvent
         > capacities.maximumPauseRulesPerEvent) {
@@ -939,6 +950,23 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
     return true;
 }
 
+const ExitControlBucket* ProgramRuntime::Impl::FindExitBucket(
+    const State& state,
+    EventKey key) const noexcept
+{
+    const auto buckets = state.program->ExitControlBuckets();
+    const auto found = std::lower_bound(
+        buckets.begin(),
+        buckets.end(),
+        key,
+        [](const ExitControlBucket& bucket, EventKey candidate) noexcept {
+            return bucket.key < candidate;
+        });
+    return found != buckets.end() && found->key == key
+        ? &*found
+        : nullptr;
+}
+
 const PauseControlBucket* ProgramRuntime::Impl::FindPauseBucket(
     const State& state,
     EventKey key) const noexcept
@@ -1079,13 +1107,6 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     }
     if (!event.control.IsValid()
         || event.control.value >= state->program->Controls().size()) {
-        if (event.forceStopRequested) {
-            Invalidate(*state, RuntimeCancellationReason::ForceStop);
-            state->metrics.suppressedEvents.fetch_add(
-                1U,
-                std::memory_order_relaxed);
-            return InputDecision::Suppress;
-        }
         return InputDecision::Forward;
     }
     EventTransition transition{};
@@ -1118,12 +1139,44 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         return InputDecision::Forward;
     }
 
-    if (event.forceStopRequested) {
-        Invalidate(*state, RuntimeCancellationReason::ForceStop);
-        state->metrics.suppressedEvents.fetch_add(
-            1U,
-            std::memory_order_relaxed);
-        return InputDecision::Suppress;
+    const EventKey key{event.control, transition};
+    const ExitControlBucket* const exitBucket = FindExitBucket(*state, key);
+    if (exitBucket != nullptr
+        && !state->exitRequested.load(std::memory_order_acquire)) {
+        std::shared_lock pauseLock(
+            state->mutableState.pauseMutex,
+            std::defer_lock);
+        if (!state->program->PauseControlBuckets().empty()
+            && !pauseLock.try_lock()) {
+            return InputDecision::Forward;
+        }
+        std::shared_lock variableLock(
+            state->mutableState.variableMutex,
+            std::try_to_lock);
+        if (!variableLock.owns_lock()) {
+            return InputDecision::Forward;
+        }
+        const auto rules = state->program->ExitControlRules().subspan(
+            exitBucket->rules.begin,
+            exitBucket->rules.count);
+        for (const ExitControlRule& rule : rules) {
+            bool matched = false;
+            if (!EvaluatePredicate(*state, rule.condition, rule.source, matched)) {
+                return InputDecision::Forward;
+            }
+            if (!matched) {
+                continue;
+            }
+            state->exitRequested.store(true, std::memory_order_release);
+            Invalidate(*state, RuntimeCancellationReason::Exit);
+            state->metrics.dispatchedEvents.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+            state->metrics.suppressedEvents.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+            return InputDecision::Suppress;
+        }
     }
     const std::uint64_t transactionGeneration = state->generation.load(
         std::memory_order_acquire);
@@ -1146,7 +1199,25 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         return InputDecision::Forward;
     }
 
-    const EventKey key{event.control, transition};
+    if (state->program->PauseControlBuckets().empty()) {
+        std::shared_lock variableLock(
+            state->mutableState.variableMutex,
+            std::try_to_lock);
+        if (!variableLock.owns_lock()) {
+            return InputDecision::Forward;
+        }
+        const InputDecision decision = DispatchOrdinary(
+            *state,
+            key,
+            transactionGeneration);
+        if (decision == InputDecision::Suppress) {
+            state->metrics.suppressedEvents.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+        }
+        return decision;
+    }
+
     const PauseControlBucket* const pauseBucket = FindPauseBucket(*state, key);
     if (pauseBucket != nullptr) {
         std::unique_lock pauseLock(
@@ -2800,7 +2871,14 @@ bool ProgramRuntime::TargetEligible() const noexcept
 bool ProgramRuntime::PauseOn() const noexcept
 {
     return impl_->active != nullptr
-        && impl_->active->mutableState.PauseEnabled();
+        && (impl_->active->program->PauseControlBuckets().empty()
+            || impl_->active->mutableState.PauseEnabled());
+}
+
+bool ProgramRuntime::ExitRequested() const noexcept
+{
+    return impl_->active != nullptr
+        && impl_->active->exitRequested.load(std::memory_order_acquire);
 }
 
 bool ProgramRuntime::FatalShutdownRequested() const noexcept

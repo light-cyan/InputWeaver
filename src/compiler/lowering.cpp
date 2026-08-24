@@ -528,6 +528,13 @@ private:
             }
             const ControlRefId source = InternControl(rule.source);
             const EventKey key{source, rule.transition};
+            if (rule.kind == BoundRule::Kind::Exit) {
+                exitRules_[key].push_back({
+                    condition,
+                    rule.sourceOrdinal,
+                    rule.sourceSpan});
+                continue;
+            }
             if (rule.kind == BoundRule::Kind::Pause) {
                 pauseRules_[key].push_back({
                     condition,
@@ -571,6 +578,17 @@ private:
         }
 
         CompiledProgramStorage& storage = builder_.Storage();
+        for (auto& [key, rules] : exitRules_) {
+            const std::uint32_t begin = static_cast<std::uint32_t>(
+                storage.exitControlRules.size());
+            storage.exitControlRules.insert(
+                storage.exitControlRules.end(),
+                rules.begin(),
+                rules.end());
+            storage.exitControlBuckets.push_back({
+                key,
+                {begin, static_cast<std::uint32_t>(rules.size())}});
+        }
         for (auto& [key, rules] : pauseRules_) {
             const std::uint32_t begin = static_cast<std::uint32_t>(
                 storage.pauseControlRules.size());
@@ -615,6 +633,9 @@ private:
         for (const PauseControlBucket& bucket : storage.pauseControlBuckets) {
             add(bucket.key.control, ControlUse::EventSource);
         }
+        for (const ExitControlBucket& bucket : storage.exitControlBuckets) {
+            add(bucket.key.control, ControlUse::EventSource);
+        }
         for (const EventBucket& bucket : storage.eventBuckets) {
             add(bucket.key.control, ControlUse::EventSource);
         }
@@ -642,6 +663,7 @@ private:
     std::map<std::uint64_t, std::uint32_t> numbers_;
     std::map<std::int64_t, std::uint32_t> durations_;
     std::map<std::uint32_t, std::uint32_t> mappingSlots_;
+    std::map<EventKey, std::vector<ExitControlRule>> exitRules_;
     std::map<EventKey, std::vector<PauseControlRule>> pauseRules_;
     std::map<EventKey, std::vector<CompiledRule>> eventRules_;
 };

@@ -277,20 +277,19 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         InputDecision decision = InputDecision::Forward;
         const bool outsideExecutableTarget =
             event.origin == InputOrigin::PhysicalCandidate
-            && !normalized.forceStopRequested
             && targetContext != nullptr
             && targetContext->IsValid()
             && !targetContext->IsTargetForeground();
-        if (outsideExecutableTarget) {
+        decision = runtime->HandleInput(normalized);
+        if (outsideExecutableTarget && decision == InputDecision::Forward) {
             forwardedOutsideTarget.fetch_add(1U, std::memory_order_relaxed);
         }
-        decision = runtime->HandleInput(normalized);
         currentGeneration.store(
             runtime->Generation(),
             std::memory_order_release);
         record.suppressed = decision == InputDecision::Suppress;
         DrainRuntimeDiagnostics();
-        if (normalized.forceStopRequested || runtime->FatalShutdownRequested()) {
+        if (runtime->ExitRequested() || runtime->FatalShutdownRequested()) {
             RequestStop();
         }
         PublishHookDiagnostic(
@@ -298,22 +297,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             startCounter,
             normalized.control.IsValid());
         return decision;
-    }
-
-    void SeedPhysicalState(
-        DeviceKind device,
-        WindowsVirtualKey virtualKey,
-        bool down) noexcept override
-    {
-        WindowsNativeInputEvent event{};
-        event.device = device;
-        event.origin = InputOrigin::PhysicalCandidate;
-        event.transition = down ? Transition::Down : Transition::Up;
-        event.virtualKey = virtualKey;
-        const RuntimeInputEvent normalized = inputAdapter->Normalize(event);
-        if (normalized.control.IsValid()) {
-            (void)runtime->SeedPhysicalState(normalized.control, down);
-        }
     }
 
     void SetTargetEligible(bool eligible) noexcept override

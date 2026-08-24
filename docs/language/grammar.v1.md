@@ -14,7 +14,7 @@
 - 连续动作按书写顺序执行，动作之间可以使用空白提高可读性；`|` 和 `gap()` 都表示等待一次 `ACTION_GAP` 指定的时间。
 - `if`、`repeat` 和 `while` 是动作项，可以出现在动作流的任意位置。
 - 自身注入和第三方注入的输入默认都不触发用户规则。
-- `:=` 提供由运行时负责配对的完整生命周期映射；逐事件规则只处理明确声明的单个事件。
+- `->` 提供由运行时负责配对的完整生命周期映射；逐事件规则只处理明确声明的单个事件。
 
 ## 示例
 
@@ -27,9 +27,9 @@ state combat = off;
 number burstCount = 3.5;
 duration fireGap = 80ms;
 
-CapsLock := Esc;
-A := B when combat[on];
-A := C when combat[off];
+CapsLock -> Esc;
+A -> B when combat[on];
+A -> C when combat[off];
 
 F1:down ~> toggle(combat);
 
@@ -47,6 +47,8 @@ Mouse.Middle:down ~>
     end;
 
 pause Pause:down ~> off;
+
+exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held]);
 ```
 
 ## 词法规则
@@ -215,31 +217,47 @@ pause-effect = "on" | "off" | "toggle" ;
 
 `=>` 消费物理事件，`~>` 放行物理事件；两种形式都会停止处理该事件，本语法不接受继续型箭头。PAUSE 语句不能包含普通动作、间隔、等待或控制结构。`set(PAUSE, ...)` 和 `toggle(PAUSE)` 都是非法普通动作；布尔条件仍可读取 `PAUSE[on]` 或 `PAUSE[off]`，这种读取不会形成 PAUSE 控制语句。
 
-编译器把 PAUSE 语句存入独立于映射和普通规则的 PAUSE 控制索引。运行时只对物理候选输入查询该索引；查询发生在物理状态更新、强制停止识别以及适用的目标和指针路由检查之后，但在读取当前 `PAUSE` 值之前。第一条匹配的 PAUSE 语句同步应用效果，不创建任务，然后按照箭头消费或放行事件；没有 PAUSE 语句匹配时，只有 `PAUSE[on]` 才继续普通分派。
+编译器把 PAUSE 语句存入独立于映射和普通规则的 PAUSE 控制索引。运行时只对物理候选输入查询该索引；查询发生在物理状态更新、退出规则以及适用的目标和指针路由检查之后，但在读取当前 `PAUSE` 值之前。第一条匹配的 PAUSE 语句同步应用效果，不创建任务，然后按照箭头消费或放行事件；没有 PAUSE 语句匹配时，只有 `PAUSE[on]` 才继续普通分派。
+
+`pause` 语句是可选的。程序没有任何 `pause` 语句时，编译产物保留空的 PAUSE 控制表，`PAUSE` 保持初始值 `on`，运行时不查询 PAUSE 控制索引，也不进入 PAUSE 控制的同步锁路径；普通条件仍可读取 `PAUSE[on]`。
 
 效果真正改变 `PAUSE` 值时，运行时递增取消代际、拒绝过时代际发布、唤醒调度器、丢弃旧代际的就绪和定时任务、清除活跃映射并释放程序输出所有权。已经为 `on` 时再次应用 `on`，或已经为 `off` 时再次应用 `off`，仍然按照箭头决定事件是否消费，但不会产生新的取消转换。
 
-### 强制停止
+### `exit`
 
-运行时保留一个不经过目标检查、`PAUSE` 或用户规则的物理强制停止组合。默认组合是任意一侧 `Ctrl`、任意一侧 `Shift` 与 `F12`；它只接受非注入的物理候选输入。组合完成后，运行时停止接受任务、取消全部任务、释放程序输出、清除活跃映射、卸载输入钩子并退出。该组合属于主程序设置而不是 Weave 语法，主程序可以提供其他组合配置。
+`exit` uses a dedicated top-level statement:
+
+```ebnf
+exit-rule = "exit", event, [ "when", boolean-expression ], ";" ;
+```
+
+An `exit` rule accepts one physical event and an optional Boolean condition. It has no arrow and no action flow. Multiple `exit` rules are allowed. They are evaluated in source order after the physical state is updated and before target eligibility, pointer routing, PAUSE control, mappings, or ordinary event rules. The first matching rule consumes the event and requests orderly program shutdown: new work is rejected, all tasks are cancelled, active mappings and owned outputs are released, input hooks are removed, and the executor exits.
+
+Only non-injected physical candidate input can match an `exit` rule. Exit controls and state queries are activated from the compiled program; the runtime does not inject or simulate the exit combination.
+
+`exit` statements are optional. If a source contains at least one `exit` statement, the compiler emits exactly those exit rules. If a source contains none, the compiler emits the equivalent of this default rule into the compiled program:
+
+```weave
+exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held]);
+```
 
 ## 完整映射
 
 ### 基础映射
 
 ```weave
-A := B;
-Mouse.Middle := F10;
-F9 := Mouse.Middle;
+A -> B;
+Mouse.Middle -> F10;
+F9 -> Mouse.Middle;
 ```
 
-`:=` 把源控制的按下、重复和松开生命周期映射到目标控制。运行时负责记录活跃映射、维持输出所有权并保证目标松开。
+`->` 把源控制的按下、重复和松开生命周期映射到目标控制。运行时负责记录活跃映射、维持输出所有权并保证目标松开。
 
 ### 条件映射
 
 ```weave
-A := B when combat[on];
-A := C when combat[off];
+A -> B when combat[on];
+A -> C when combat[off];
 ```
 
 映射条件只在源控制第一次按下时求值。匹配的映射和目标控制随后被锁存在内部状态中；条件在源控制按住期间发生变化，不改变本次活跃映射。
@@ -279,7 +297,7 @@ C:down when (LCtrl[held] or RCtrl[held]) and combat[on] => tap(Numpad8);
 | `~>` | 放行 | 停止 |
 | `~>>` | 放行 | 继续 |
 
-条件不成立时总是继续扫描。匹配停止只影响后续用户规则，不撤销已经匹配的任务，也不截断活跃 `:=` 映射的内部生命周期处理。
+条件不成立时总是继续扫描。匹配停止只影响后续用户规则，不撤销已经匹配的任务，也不截断活跃 `->` 映射的内部生命周期处理。
 
 如果一次事件匹配了多个继续型规则，任务按源码顺序创建。只要其中至少有一条匹配的消费规则，最终物理事件就被消费；后续观察规则不能撤销消费决定。
 
@@ -362,7 +380,7 @@ The decoded command passed to `exec` must be non-empty. The compiler preserves e
 
 The launcher sets the child working directory to the directory containing the resolved executable. The final child working directory is therefore selected from the resolved executable path rather than from the InputWeaver executable directory, the `.weave` source directory, or the InputWeaver process working directory. Resolving a relative executable token can still use the InputWeaver process working directory as described below. Failure to resolve either the executable or its containing directory is a launch failure.
 
-The child inherits the environment visible to InputWeaver at launch. A successful launch completes the `exec` action immediately, and the task continues without waiting for process exit or retaining child-process ownership. Cancellation before launch prevents process creation; cancellation, `PAUSE`, force stop, and application shutdown do not terminate a child that was already created. A launch failure records the platform error and ends the current task while other tasks continue.
+The child inherits the environment visible to InputWeaver at launch. A successful launch completes the `exec` action immediately, and the task continues without waiting for process exit or retaining child-process ownership. Cancellation before launch prevents process creation; cancellation, `PAUSE`, an `exit` rule, and application shutdown do not terminate a child that was already created. A launch failure records the platform error and ends the current task while other tasks continue.
 
 #### Windows executable lookup and working directory
 

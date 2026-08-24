@@ -495,47 +495,6 @@ bool WindowsControlCatalog::InputOverlaps(
         && left.scanQualifier == right.scanQualifier;
 }
 
-bool WindowsForceStopRecognizer::Observe(
-    const WindowsNativeInputEvent& event) noexcept
-{
-    if (event.origin != InputOrigin::PhysicalCandidate
-        || event.device != DeviceKind::Keyboard
-        || (event.transition != Transition::Down
-            && event.transition != Transition::Up)) {
-        return false;
-    }
-    const bool down = event.transition == Transition::Down;
-    switch (event.virtualKey) {
-    case VK_LCONTROL:
-        leftControl_ = down;
-        return false;
-    case VK_RCONTROL:
-        rightControl_ = down;
-        return false;
-    case VK_CONTROL:
-        genericControl_ = down;
-        return false;
-    case VK_LSHIFT:
-        leftShift_ = down;
-        return false;
-    case VK_RSHIFT:
-        rightShift_ = down;
-        return false;
-    case VK_SHIFT:
-        genericShift_ = down;
-        return false;
-    case VK_F12: {
-        const bool firstDown = down && !f12_;
-        f12_ = down;
-        return firstDown
-            && (leftControl_ || rightControl_ || genericControl_)
-            && (leftShift_ || rightShift_ || genericShift_);
-    }
-    default:
-        return false;
-    }
-}
-
 WindowsRuntimeInputAdapter::WindowsRuntimeInputAdapter(
     const WindowsControlCatalog& catalog) noexcept
     : catalog_(catalog)
@@ -550,7 +509,6 @@ RuntimeInputEvent WindowsRuntimeInputAdapter::Normalize(
     normalized.origin = event.origin;
     normalized.transition = event.transition;
     normalized.position = event.position;
-    normalized.forceStopRequested = forceStop_.Observe(event);
     const std::optional<ControlRefId> control = catalog_.Normalize(event);
     if (control.has_value()) {
         normalized.control = *control;

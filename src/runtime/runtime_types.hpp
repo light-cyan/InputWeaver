@@ -103,7 +103,6 @@ struct RuntimeInputEvent final {
     InputOrigin origin{InputOrigin::PhysicalCandidate};
     Transition transition{Transition::Down};
     ScreenPoint position{};
-    bool forceStopRequested{};
 };
 
 class RuntimeRoutePort {
@@ -180,6 +179,7 @@ struct RuntimeCapacities final {
     std::uint32_t maximumNumberSlots{4096U};
     std::uint32_t maximumDurationSlots{4096U};
     std::uint32_t maximumMappingSlots{4096U};
+    std::uint32_t maximumExitRulesPerEvent{64U};
     std::uint32_t maximumPauseRulesPerEvent{64U};
     std::uint32_t maximumRulesPerEvent{256U};
     std::uint32_t maximumPredicateStepsPerEvent{4096U};
@@ -205,6 +205,7 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     ControlCapacity,
     ValueCapacity,
     MappingCapacity,
+    ExitRuleCapacity,
     PauseRuleCapacity,
     RuleCapacity,
     PredicateStepCapacity,
@@ -256,7 +257,7 @@ enum class RuntimeCancellationReason : std::uint8_t {
     TargetIneligible,
     TargetLoss,
     FatalFailure,
-    ForceStop,
+    Exit,
     Shutdown,
 };
 

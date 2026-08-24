@@ -60,10 +60,6 @@ public:
         const WindowsNativeInputEvent& event,
         bool lowerIntegrityInjected,
         std::int64_t startCounter) noexcept = 0;
-    virtual void SeedPhysicalState(
-        DeviceKind device,
-        WindowsVirtualKey virtualKey,
-        bool down) noexcept = 0;
     [[nodiscard]] virtual bool SeedActivatedPhysicalState() noexcept
     {
         return true;
@@ -117,7 +113,6 @@ private:
     LRESULT HandleMouseHook(int code, WPARAM wParam, LPARAM lParam) noexcept;
     void HandleForegroundChange() noexcept;
     void ThreadMain() noexcept;
-    void SeedObservedPhysicalState() noexcept;
     bool CreateEvents(std::wstring& errorMessage) noexcept;
     void CloseEvents() noexcept;
 

@@ -41,11 +41,11 @@ InputWeaver.exe --program <file.weavec> [--target <exe-name-or-absolute-path> | 
 - `TARGET = GLOBAL` selects global execution in source. When neither the compiled program nor the command line supplies a target, mapping execution is rejected before input hooks are installed.
 - `--allow-exec` grants process-launch authority for the current compiled-program invocation. Programs requiring that authority are rejected during activation when it is not granted.
 - `--log` writes bounded operational diagnostics as JSONL. Launch failures expose both a portable `launch_result` and the captured numeric `platform_error`. `--trace-input` additionally includes physical input records and requires `--log`.
-- Physical Ctrl+Shift+F12 stops the active executor.
+- The compiled exit rules stop the active executor. A source with no `exit` statement receives the compiled default of physical left-or-right Ctrl plus left-or-right Shift and `F12:down`.
 
 ## Weave interface
 
-The implemented language supports target declarations, constants, typed user variables, full mappings, event rules, PAUSE rules, conditions, continuing rule matching, numeric and duration expressions, `if`, `repeat`, `while`, `press`, `release`, `tap`, `wait`, action intervals, raw Windows control identifiers, keyboard controls, mouse controls, and `exec`.
+The implemented language supports target declarations, constants, typed user variables, full mappings, event rules, exit rules, optional PAUSE rules, conditions, continuing rule matching, numeric and duration expressions, `if`, `repeat`, `while`, `press`, `release`, `tap`, `wait`, action intervals, raw Windows control identifiers, keyboard controls, mouse controls, and `exec`.
 
 `docs/language/grammar.v1.md` defines the base source language, while `docs/language/grammar.v2.md` and `docs/language/grammar.v2.ebnf` define the current control-name extension. `InputWeaverCompiler.exe validate` is the canonical command for checking a source file against that contract.
 
@@ -53,7 +53,9 @@ The implemented language supports target declarations, constants, typed user var
 
 - Temporary foreground loss cancels target-bound mappings and pending actions, releases owned outputs, and permits fresh input after the target returns.
 - A source held across foreground return must be released before a new physical press can create another mapping.
-- Activated keyboard state is initialized when execution starts so a key already held at startup does not create a new mapping; physical force stop remains available from startup-held modifiers.
+- Activated keyboard state is initialized when execution starts so a key already held at startup does not create a new mapping; compiled exit conditions can observe activated modifiers that were already held at startup.
+- Exit rules are evaluated for physical candidate input before target eligibility and PAUSE routing. A matching rule consumes its event and starts orderly runtime cancellation and shutdown.
+- A program with no PAUSE rule has no compiled PAUSE control table and bypasses PAUSE control lookup while the built-in `PAUSE` state remains `on`.
 - Dispatch, task progress, scheduling, output publication, and diagnostic transport are bounded so input processing remains responsive under accepted programs.
 - Raw Windows outputs preserve their authored virtual-key, scan-code, extended-scan, or mouse identity; unsupported output identities are rejected during activation.
 - Keyboard and mouse output is published through the Windows input system. The active keyboard layout, IME, Caps Lock, and physically held modifiers therefore affect the receiving application.

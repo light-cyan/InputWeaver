@@ -47,6 +47,7 @@ public:
     [[nodiscard]] bool HasActiveProgram() const noexcept;
     [[nodiscard]] bool TargetEligible() const noexcept;
     [[nodiscard]] bool PauseOn() const noexcept;
+    [[nodiscard]] bool ExitRequested() const noexcept;
     [[nodiscard]] bool FatalShutdownRequested() const noexcept;
     [[nodiscard]] std::uint64_t Generation() const noexcept;
     [[nodiscard]] std::size_t ActiveTaskCount() const noexcept;

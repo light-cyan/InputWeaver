@@ -13,7 +13,7 @@ void PrintRuntimeUsage(std::ostream& output) {
            " [--target <exe-name-or-absolute-path> | --target-global]"
            " [--allow-exec] [--log <jsonl-path>] [--trace-input]\n\n"
         << "The command-line target overrides the compiled TARGET declaration.\n"
-        << "Physical Ctrl+Shift+F12 stops the program.\n";
+        << "Compiled exit rules stop the program; the default is physical Ctrl+Shift+F12.\n";
 }
 
 bool ParseRuntimeCommandLine(

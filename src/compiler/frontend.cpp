@@ -346,8 +346,8 @@ private:
             punctuate(TokenKind::ConsumeContinue, 3U);
         } else if (StartsWith("~>>")) {
             punctuate(TokenKind::ObserveContinue, 3U);
-        } else if (StartsWith(":=")) {
-            punctuate(TokenKind::ColonEqual, 2U);
+        } else if (StartsWith("->")) {
+            punctuate(TokenKind::MappingArrow, 2U);
         } else if (StartsWith("=>")) {
             punctuate(TokenKind::ConsumeStop, 2U);
         } else if (StartsWith("~>")) {
@@ -586,6 +586,9 @@ private:
         if (MatchWord("pause")) {
             return ParsePauseRule(begin);
         }
+        if (MatchWord("exit")) {
+            return ParseExitRule(begin);
+        }
         return ParseMappingOrEventRule(begin);
     }
 
@@ -718,11 +721,23 @@ private:
         return item;
     }
 
+    [[nodiscard]] TopLevelSyntax ParseExitRule(SourceSpan begin)
+    {
+        TopLevelSyntax item{};
+        item.kind = TopLevelSyntax::Kind::ExitRule;
+        item.event = ParseEvent();
+        item.condition = ParseOptionalCondition();
+        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        item.span = MergeSpans(begin, semicolon.span);
+        CountNode(item.span);
+        return item;
+    }
+
     [[nodiscard]] TopLevelSyntax ParseMappingOrEventRule(SourceSpan begin)
     {
         TopLevelSyntax item{};
         item.sourceControl = ParseControl();
-        if (Match(TokenKind::ColonEqual)) {
+        if (Match(TokenKind::MappingArrow)) {
             item.kind = TopLevelSyntax::Kind::Mapping;
             item.targetControl = ParseControl();
             item.condition = ParseOptionalCondition();
@@ -733,7 +748,7 @@ private:
         }
 
         item.kind = TopLevelSyntax::Kind::EventRule;
-        Expect(TokenKind::Colon, "':' or ':='");
+        Expect(TokenKind::Colon, "':' or '->'");
         const Token& transition = ExpectWordToken("down, repeat, or up");
         item.event.control = std::move(item.sourceControl);
         item.event.transition = transition.text;

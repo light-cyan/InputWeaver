@@ -249,6 +249,15 @@ void TestDiagnosticPrivacyAndBounds() {
             && json.find("\"scan\":30") == std::string::npos,
         "ordinary keyboard diagnostics cannot reconstruct typed content");
 
+    inputweaver::HookDiagnosticRecord f12{};
+    f12.device = inputweaver::DeviceKind::Keyboard;
+    f12.transition = inputweaver::Transition::Down;
+    f12.code = VK_F12;
+    Check(
+        !inputweaver::ShouldPublishHookDiagnostic(f12, false)
+            && inputweaver::ShouldPublishProgramHookDiagnostic(f12, false, true),
+        "diagnostic publication follows compiled control activation instead of F12");
+
     constexpr inputweaver::WindowsSelfTag selfTag = 0x7100U;
     Check(
         inputweaver::CategorizeExtraInfo(0U, selfTag)

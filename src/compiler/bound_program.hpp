@@ -83,6 +83,7 @@ struct BoundRule final {
     enum class Kind : std::uint8_t {
         Event,
         Mapping,
+        Exit,
         Pause,
     };
 

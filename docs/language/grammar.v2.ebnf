@@ -23,6 +23,7 @@ top-level-item =
     | number-declaration
     | duration-declaration
     | mapping
+    | exit-rule
     | pause-rule
     | event-rule
     ;
@@ -36,7 +37,9 @@ state-declaration    = "state", identifier, "=", state-literal, ";" ;
 number-declaration   = "number", identifier, "=", signed-number-literal, ";" ;
 duration-declaration = "duration", identifier, "=", duration-literal, ";" ;
 
-mapping = control-reference, ":=", control-reference, [ condition ], ";" ;
+mapping = control-reference, "->", control-reference, [ condition ], ";" ;
+
+exit-rule = "exit", event, [ condition ], ";" ;
 
 pause-rule   = "pause", event, [ condition ], pause-arrow, pause-effect, ";" ;
 pause-arrow  = "=>" | "~>" ;

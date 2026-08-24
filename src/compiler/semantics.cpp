@@ -48,9 +48,9 @@ struct Symbol final {
 
 [[nodiscard]] bool IsReservedName(std::string_view name) noexcept
 {
-    constexpr std::array<std::string_view, 36U> reserved{{
+    constexpr std::array<std::string_view, 37U> reserved{{
         "TARGET", "TAP_DURATION", "ACTION_GAP", "PAUSE", "GLOBAL",
-        "state", "number", "duration", "pause", "when", "on", "off",
+        "state", "number", "duration", "exit", "pause", "when", "on", "off",
         "toggle", "down", "repeat", "up", "and", "or", "not", "press",
         "release", "tap", "wait", "gap", "set", "exec", "if", "then",
         "else", "end", "do", "while", "held", "idle", "E0", "E1",
@@ -206,11 +206,17 @@ public:
                 BindDeclaration(item);
                 break;
             case TopLevelSyntax::Kind::Mapping:
+            case TopLevelSyntax::Kind::ExitRule:
             case TopLevelSyntax::Kind::PauseRule:
             case TopLevelSyntax::Kind::EventRule:
+                hasExplicitExitRule_ = hasExplicitExitRule_
+                    || item.kind == TopLevelSyntax::Kind::ExitRule;
                 BindRule(item);
                 break;
             }
+        }
+        if (!hasExplicitExitRule_) {
+            AddDefaultExitRule();
         }
         return std::move(program_);
     }
@@ -1150,8 +1156,11 @@ private:
             if (transition.has_value()) rule.transition = *transition;
             if (item.condition != nullptr) {
                 rule.condition = BindExpression(*item.condition);
+                const std::string message = item.kind == TopLevelSyntax::Kind::ExitRule
+                    ? "exit condition must be Boolean"
+                    : "rule condition must be Boolean";
                 RequireType(*rule.condition, ExpressionType::Boolean, item.condition->span,
-                    "rule condition must be Boolean");
+                    message);
             }
             rule.delivery = item.arrow == TokenKind::ConsumeStop
                     || item.arrow == TokenKind::ConsumeContinue
@@ -1161,7 +1170,9 @@ private:
                     || item.arrow == TokenKind::ObserveContinue
                 ? MatchFlow::Continue
                 : MatchFlow::Stop;
-            if (item.kind == TopLevelSyntax::Kind::PauseRule) {
+            if (item.kind == TopLevelSyntax::Kind::ExitRule) {
+                rule.kind = BoundRule::Kind::Exit;
+            } else if (item.kind == TopLevelSyntax::Kind::PauseRule) {
                 rule.kind = BoundRule::Kind::Pause;
                 if (item.pauseEffect == "on") rule.pauseEffect = PauseEffect::On;
                 if (item.pauseEffect == "off") rule.pauseEffect = PauseEffect::Off;
@@ -1171,6 +1182,66 @@ private:
                 rule.actions = BindActions(item.actions);
             }
         }
+        program_.rules.push_back(std::move(rule));
+    }
+
+    [[nodiscard]] static std::unique_ptr<BoundExpression> MakeHeldExpression(
+        ControlRef control)
+    {
+        auto expression = std::make_unique<BoundExpression>();
+        expression->kind = BoundExpression::Kind::ReadControlHeld;
+        expression->type = ExpressionType::Boolean;
+        expression->control = control;
+        return expression;
+    }
+
+    [[nodiscard]] static std::unique_ptr<BoundExpression> MakeLogicalExpression(
+        BoundExpression::Kind kind,
+        std::unique_ptr<BoundExpression> left,
+        std::unique_ptr<BoundExpression> right)
+    {
+        auto expression = std::make_unique<BoundExpression>();
+        expression->kind = kind;
+        expression->type = ExpressionType::Boolean;
+        expression->left = std::move(left);
+        expression->right = std::move(right);
+        return expression;
+    }
+
+    void AddDefaultExitRule()
+    {
+        const auto f12 = ResolveNamedControl("F12");
+        const auto leftControl = ResolveNamedControl("LCtrl");
+        const auto rightControl = ResolveNamedControl("RCtrl");
+        const auto leftShift = ResolveNamedControl("LShift");
+        const auto rightShift = ResolveNamedControl("RShift");
+        if (!f12.has_value()
+            || !leftControl.has_value()
+            || !rightControl.has_value()
+            || !leftShift.has_value()
+            || !rightShift.has_value()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::UnknownControl,
+                {},
+                "default exit controls are unavailable");
+            return;
+        }
+
+        BoundRule rule{};
+        rule.kind = BoundRule::Kind::Exit;
+        rule.source = *f12;
+        rule.transition = EventTransition::Down;
+        rule.condition = MakeLogicalExpression(
+            BoundExpression::Kind::LogicalAnd,
+            MakeLogicalExpression(
+                BoundExpression::Kind::LogicalOr,
+                MakeHeldExpression(*leftControl),
+                MakeHeldExpression(*rightControl)),
+            MakeLogicalExpression(
+                BoundExpression::Kind::LogicalOr,
+                MakeHeldExpression(*leftShift),
+                MakeHeldExpression(*rightShift)));
+        rule.sourceOrdinal = kInvalidProgramIndex;
         program_.rules.push_back(std::move(rule));
     }
 
@@ -1184,6 +1255,7 @@ private:
     std::optional<SourceSpan> actionGapSetting_;
     std::uint32_t nextSourceOrdinal_{};
     std::uint32_t suppressedConstantFaultDepth_{};
+    bool hasExplicitExitRule_{};
 };
 
 } // namespace

@@ -87,6 +87,9 @@ void CanonicalizeControls(CompiledProgramStorage& storage)
     for (auto& mapping : storage.mappings) {
         RemapId(mapping.target, remap);
     }
+    for (auto& bucket : storage.exitControlBuckets) {
+        RemapId(bucket.key.control, remap);
+    }
     for (auto& bucket : storage.pauseControlBuckets) {
         RemapId(bucket.key.control, remap);
     }
@@ -284,6 +287,7 @@ void CanonicalizeCompiledProgram(CompiledProgramStorage& storage)
     CanonicalizeNumberConstants(storage);
     CanonicalizeDurationConstants(storage);
     CanonicalizeMappingSlots(storage);
+    CanonicalizeBuckets(storage.exitControlBuckets, storage.exitControlRules);
     CanonicalizeBuckets(storage.pauseControlBuckets, storage.pauseControlRules);
     CanonicalizeBuckets(storage.eventBuckets, storage.rules);
 }
@@ -387,6 +391,16 @@ std::span<const MappingSlotDescriptor> CompiledProgram::MappingSlots() const noe
 std::span<const MappingDescriptor> CompiledProgram::Mappings() const noexcept
 {
     return storage_.mappings;
+}
+
+std::span<const ExitControlBucket> CompiledProgram::ExitControlBuckets() const noexcept
+{
+    return storage_.exitControlBuckets;
+}
+
+std::span<const ExitControlRule> CompiledProgram::ExitControlRules() const noexcept
+{
+    return storage_.exitControlRules;
 }
 
 std::span<const PauseControlBucket> CompiledProgram::PauseControlBuckets() const noexcept

@@ -75,20 +75,6 @@ private:
 #endif
 };
 
-class WindowsForceStopRecognizer final {
-public:
-    [[nodiscard]] bool Observe(const WindowsNativeInputEvent& event) noexcept;
-
-private:
-    bool leftControl_{};
-    bool rightControl_{};
-    bool genericControl_{};
-    bool leftShift_{};
-    bool rightShift_{};
-    bool genericShift_{};
-    bool f12_{};
-};
-
 class WindowsRuntimeInputAdapter final {
 public:
     explicit WindowsRuntimeInputAdapter(
@@ -99,7 +85,6 @@ public:
 
 private:
     const WindowsControlCatalog& catalog_;
-    WindowsForceStopRecognizer forceStop_;
 };
 
 using WindowsOutputPublishFunction = RuntimeOutputResult (*)(

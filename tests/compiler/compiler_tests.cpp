@@ -262,7 +262,7 @@ void TestParserAndRecovery()
         "state enabled = on;\n"
         "number count = -2.5;\n"
         "duration delay = 1.5s;\n"
-        "A := B when enabled[on];\n"
+        "A -> B when enabled[on];\n"
         "pause Pause:down when LCtrl[held] ~> toggle;\n"
         "F1:down => | tap(A)tap(B) || gap()\n"
         "if enabled[on] then repeat count do tap(C) end else while F1[held] do | end end;\n",
@@ -280,6 +280,54 @@ void TestParserAndRecovery()
         "pause-action.weave",
         "pause F1:down => toggle(F2);");
     Check(!pauseAction.Succeeded(), "pause action flows are rejected");
+
+    const CompileOutput explicitExit = CompileGood(
+        "explicit-exit.weave",
+        "TARGET=GLOBAL; state enabled=on; "
+        "exit F10:down when enabled[on]; exit F10:down; F1:down =>;",
+        "explicit exit rule");
+    const auto explicitExitProgram = DecodeGood(explicitExit, "explicit exit rule");
+    if (explicitExitProgram != nullptr) {
+        Check(
+            explicitExitProgram->ExitControlRules().size() == 2U
+                && explicitExitProgram->ExitControlBuckets().size() == 1U
+                && explicitExitProgram->ExitControlBuckets()[0].rules.count == 2U
+                && explicitExitProgram->ExitControlRules()[0].condition.IsValid()
+                && !explicitExitProgram->ExitControlRules()[1].condition.IsValid()
+                && explicitExitProgram->ExitControlRules()[0].sourceOrdinal
+                    < explicitExitProgram->ExitControlRules()[1].sourceOrdinal
+                && explicitExitProgram->ExitControlRules()[0].source.byteLength != 0U
+                && explicitExitProgram->ExitControlRules()[1].source.byteLength != 0U,
+            "explicit exits preserve source order and replace the synthesized default");
+        Check(explicitExitProgram->PauseControlRules().empty(),
+            "pause control is absent when no pause statement is authored");
+    }
+
+    const CompileOutput invalidExitCondition = CompileSource(
+        "invalid-exit-condition.weave",
+        "TARGET=GLOBAL; exit F10:down when 1;");
+    Check(!invalidExitCondition.Succeeded(),
+        "exit conditions must be Boolean");
+
+    const CompileOutput defaultExit = CompileGood(
+        "default-exit.weave",
+        "TARGET=GLOBAL; F1:down =>;",
+        "default exit rule");
+    const auto defaultExitProgram = DecodeGood(defaultExit, "default exit rule");
+    if (defaultExitProgram != nullptr) {
+        Check(
+            defaultExitProgram->ExitControlRules().size() == 1U
+                && defaultExitProgram->ExitControlRules()[0].condition.IsValid()
+                && defaultExitProgram->ExitControlRules()[0].source.byteLength == 0U,
+            "missing exit statement synthesizes Ctrl-Shift-F12");
+        Check(defaultExitProgram->PauseControlBuckets().empty(),
+            "missing pause statement allocates no pause-control bucket");
+    }
+
+    const CompileOutput legacyMapping = CompileSource(
+        "legacy-mapping.weave",
+        "TARGET=GLOBAL; A := B;");
+    Check(!legacyMapping.Succeeded(), "legacy mapping operator is rejected");
 
     const CompileOutput recovered = CompileSource(
         "recovery.weave",
@@ -463,7 +511,7 @@ void TestControlCatalogAndV2()
     if (program == nullptr) {
         return;
     }
-    Check(program->Controls().size() == 6U,
+    Check(program->Controls().size() == 11U,
         "aliases and identical raw controls are canonicalized");
     const auto contains = [&program](ControlRef control) {
         return std::find(program->Controls().begin(), program->Controls().end(), control)
@@ -523,7 +571,7 @@ void TestLoweringCoverage()
     const std::string source =
         "TARGET=GLOBAL; TAP_DURATION=0ms; ACTION_GAP=1ms;\n"
         "state s=on; state t=off; number n=4; duration d=2s;\n"
-        "A := B when s[on];\n"
+        "A -> B when s[on];\n"
         "pause F12:down ~> toggle;\n"
         "F1:down when not t[on] and (n < 5 or n <= 5) =>>\n"
         "press(C) release(C) tap(D) wait(d) wait(1ms) | gap()\n"
@@ -661,7 +709,7 @@ void TestGoldenFixtureSemantics()
     fixtures.push_back({
         "mapping",
         "fixture.mapping.weave",
-        "TARGET = GLOBAL;\nF6 := F7;\n",
+        "TARGET = GLOBAL;\nF6 -> F7;\n",
         test::MakeMappingFixtureStorage()});
     fixtures.push_back({
         "conditional repeat",

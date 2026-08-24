@@ -16,7 +16,7 @@ enum class TokenKind : std::uint8_t {
     HexInteger,
     String,
     Equal,
-    ColonEqual,
+    MappingArrow,
     ConsumeStop,
     ConsumeContinue,
     ObserveStop,
@@ -122,6 +122,7 @@ struct TopLevelSyntax final {
         NumberDeclaration,
         DurationDeclaration,
         Mapping,
+        ExitRule,
         PauseRule,
         EventRule,
     };

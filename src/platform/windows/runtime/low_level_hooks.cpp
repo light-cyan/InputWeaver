@@ -332,9 +332,7 @@ void LowLevelHooks::ThreadMain() noexcept {
             startupError_.store(ERROR_INVALID_STATE, std::memory_order_release);
         }
     }
-    if (startupError_.load(std::memory_order_acquire) == ERROR_SUCCESS) {
-        SeedObservedPhysicalState();
-    } else {
+    if (startupError_.load(std::memory_order_acquire) != ERROR_SUCCESS) {
         stopRequest_.Request();
     }
     SetEvent(readyEvent_);
@@ -411,30 +409,6 @@ void LowLevelHooks::ThreadMain() noexcept {
     threadId_.store(0, std::memory_order_release);
     SetEvent(producerDoneEvent_);
     SetEvent(stoppedEvent_);
-}
-
-void LowLevelHooks::SeedObservedPhysicalState() noexcept {
-    constexpr WindowsVirtualKey keyboardControls[] = {
-        VK_F6,
-        VK_F7,
-        VK_F8,
-        VK_F9,
-        VK_F10,
-        VK_F12,
-        VK_LCONTROL,
-        VK_RCONTROL,
-        VK_LSHIFT,
-        VK_RSHIFT};
-    for (const WindowsVirtualKey virtualKey : keyboardControls) {
-        sink_.SeedPhysicalState(
-            DeviceKind::Keyboard,
-            virtualKey,
-            (GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000) != 0);
-    }
-    sink_.SeedPhysicalState(
-        DeviceKind::Mouse,
-        VK_MBUTTON,
-        (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0);
 }
 
 bool LowLevelHooks::CreateEvents(std::wstring& errorMessage) noexcept {

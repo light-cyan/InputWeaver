@@ -208,8 +208,7 @@ bool ShouldPublishHookDiagnostic(
     bool traceInput) noexcept {
     return traceInput ||
            record.origin == InputOrigin::SelfInjected ||
-           record.suppressed ||
-        (record.device == DeviceKind::Keyboard && record.code == VK_F12);
+           record.suppressed;
 }
 
 bool ShouldPublishProgramHookDiagnostic(

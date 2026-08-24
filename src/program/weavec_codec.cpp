@@ -24,7 +24,7 @@ constexpr std::array<std::uint8_t, 8U> kWeavecMagic{
     0x45U,
     0x43U,
     0x00U,
-    0x00U,
+    0x01U,
 };
 
 class ByteWriter final {
@@ -297,6 +297,7 @@ void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requiremen
     writer.U32(requirements.numberSlotCount);
     writer.U32(requirements.durationSlotCount);
     writer.U32(requirements.mappingSlotCount);
+    writer.U32(requirements.maximumExitRulesPerEvent);
     writer.U32(requirements.maximumPauseRulesPerEvent);
     writer.U32(requirements.maximumRulesPerEvent);
     writer.U32(requirements.maximumPredicateStepsPerEvent);
@@ -426,6 +427,7 @@ template <typename Value, typename ReadElement>
         || !reader.U32(requirements.numberSlotCount)
         || !reader.U32(requirements.durationSlotCount)
         || !reader.U32(requirements.mappingSlotCount)
+        || !reader.U32(requirements.maximumExitRulesPerEvent)
         || !reader.U32(requirements.maximumPauseRulesPerEvent)
         || !reader.U32(requirements.maximumRulesPerEvent)
         || !reader.U32(requirements.maximumPredicateStepsPerEvent)
@@ -552,6 +554,21 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         [](ByteWriter& output, const MappingDescriptor& value) {
             WriteId(output, value.slot);
             WriteId(output, value.target);
+            WriteSpan(output, value.source);
+        });
+    WriteVector(
+        writer,
+        program.ExitControlBuckets(),
+        [](ByteWriter& output, const ExitControlBucket& value) {
+            WriteEventKey(output, value.key);
+            WriteRange(output, value.rules);
+        });
+    WriteVector(
+        writer,
+        program.ExitControlRules(),
+        [](ByteWriter& output, const ExitControlRule& value) {
+            WriteId(output, value.condition);
+            output.U32(value.sourceOrdinal);
             WriteSpan(output, value.source);
         });
     WriteVector(
@@ -779,6 +796,25 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             })
         || !ReadVector(
             reader,
+            storage.exitControlBuckets,
+            limits,
+            13U,
+            [](ByteReader& input, ExitControlBucket& value) {
+                return ReadEventKey(input, value.key)
+                    && ReadRange(input, value.rules);
+            })
+        || !ReadVector(
+            reader,
+            storage.exitControlRules,
+            limits,
+            16U,
+            [](ByteReader& input, ExitControlRule& value) {
+                return ReadId(input, value.condition)
+                    && input.U32(value.sourceOrdinal)
+                    && ReadSpan(input, value.source);
+            })
+        || !ReadVector(
+            reader,
             storage.pauseControlBuckets,
             limits,
             13U,
@@ -895,7 +931,7 @@ DecodeWeavecResult DecodeWeavec(
             result.decodeError = WeavecDecodeError{
                 WeavecDecodeErrorCode::InvalidHeader,
                 index,
-                "artifact magic differs from WEAVEC"};
+                "artifact magic or format version differs from WEAVEC format 1"};
             return result;
         }
     }

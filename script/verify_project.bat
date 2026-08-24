@@ -30,5 +30,5 @@ echo [7/7] Checking the working diff...
 git diff --check
 if errorlevel 1 exit /b %errorlevel%
 
-echo Phase 3 verification completed successfully.
+echo Project verification completed successfully.
 exit /b 0

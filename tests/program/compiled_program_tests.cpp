@@ -331,6 +331,7 @@ void WriteLittleEndianU64(
         {ControlRefId{1U}, static_cast<std::uint8_t>(
             ToControlUseBits(ControlUse::EventSource)
             | ToControlUseBits(ControlUse::PhysicalState))},
+        {ControlRefId{6U}, ToControlUseBits(ControlUse::EventSource)},
     };
     storage.requirements = ComputeProgramRequirements(storage);
     return storage;
@@ -339,10 +340,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        13995634791663768003ULL,
-        13743080210461105494ULL,
-        8092455474302200342ULL,
-        3303624570601117283ULL,
+        18159453139710324528ULL,
+        11439670662014598197ULL,
+        8107066784753317881ULL,
+        8786148117674884653ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -386,7 +387,7 @@ void TestControlIdentityContract()
 
     const auto tap = FinalizeFixture(test::MakeTapFixtureStorage(), "control identity tap");
     Check(
-        tap != nullptr && tap->Controls().size() == 2U
+        tap != nullptr && tap->Controls().size() == 7U
             && tap->Controls()[0] == f6 && tap->Controls()[1] == f7,
         "control pool is canonicalized by the complete four-field identity");
     Check(
@@ -473,7 +474,7 @@ void TestWeavecRoundTrips()
         MakeOpcodeCoverageStorage(),
     };
     constexpr std::array<std::uint8_t, 8U> magic{
-        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x00U};
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x01U};
 
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto original = FinalizeFixture(storages[index], "weavec source fixture");
@@ -574,7 +575,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t requirementsBooleanOffset =
-            kWeavecHeaderSize + 16U + 29U + (13U * 4U);
+            kWeavecHeaderSize + 16U + 29U + (14U * 4U);
         bytes[requirementsBooleanOffset] = 2U;
         const auto result = DecodeWeavec(bytes);
         Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
@@ -597,7 +598,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumRulesOffset =
-            kWeavecHeaderSize + 16U + 29U + (5U * 4U);
+            kWeavecHeaderSize + 16U + 29U + (6U * 4U);
         bytes[maximumRulesOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -609,7 +610,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumTasksOffset =
-            kWeavecHeaderSize + 16U + 29U + (7U * 4U);
+            kWeavecHeaderSize + 16U + 29U + (8U * 4U);
         bytes[maximumTasksOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -621,7 +622,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t firstStringByteOffset =
-            kWeavecHeaderSize + 16U + 29U + 53U + 4U + 4U;
+            kWeavecHeaderSize + 16U + 29U + 57U + 4U + 4U;
         bytes[firstStringByteOffset] = 0xc0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -668,6 +669,8 @@ void TestBuilderAndImmutableAccess()
         Check(result.program->Rules().size() == 1U, "immutable program exposes const rule span");
         Check(result.program->PauseControlRules().empty(),
             "immutable program exposes const pause-control span");
+        Check(result.program->ExitControlRules().size() == 1U,
+            "immutable program exposes the compiled exit-control span");
     }
 
     using RulesReturn = decltype(std::declval<const inputweaver::CompiledProgram&>().Rules());
@@ -677,6 +680,57 @@ void TestBuilderAndImmutableAccess()
     static_assert(std::is_same_v<
         PauseRulesReturn,
         std::span<const inputweaver::PauseControlRule>>);
+    using ExitRulesReturn = decltype(
+        std::declval<const inputweaver::CompiledProgram&>().ExitControlRules());
+    static_assert(std::is_same_v<
+        ExitRulesReturn,
+        std::span<const inputweaver::ExitControlRule>>);
+}
+
+void TestExitControlContract()
+{
+    using namespace inputweaver;
+    {
+        const auto program = FinalizeFixture(
+            test::MakeTapFixtureStorage(),
+            "exit-control fixture");
+        Check(
+            program != nullptr
+                && program->ExitControlRules().size() == 1U
+                && program->Requirements().maximumExitRulesPerEvent == 1U,
+            "exit-control rules and capacity requirements are preserved");
+    }
+    {
+        auto storage = test::MakeTapFixtureStorage();
+        storage.exitControlBuckets.clear();
+        storage.exitControlRules.clear();
+        storage.requirements = ComputeProgramRequirements(storage);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Rule),
+            "compiled programs without an exit control are rejected");
+    }
+    {
+        auto storage = test::MakeConditionalRepeatFixtureStorage();
+        storage.exitControlRules[0].condition = ExpressionId{1U};
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Rule),
+            "exit-control conditions must be Boolean");
+    }
+    {
+        auto storage = test::MakeTapFixtureStorage();
+        storage.exitControlBuckets[0].rules = {1U, 1U};
+        storage.requirements = ComputeProgramRequirements(storage);
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Range),
+            "invalid exit-control bucket ranges are rejected");
+    }
+    {
+        auto storage = test::MakeTapFixtureStorage();
+        storage.exitControlRules[0].sourceOrdinal = 0U;
+        const auto result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, ProgramValidationErrorCode::Rule),
+            "exit and ordinary rules cannot share a source ordinal");
+    }
 }
 
 void TestPauseControlContract()
@@ -998,6 +1052,7 @@ int main()
     TestControlIdentityContract();
     TestWeavecRoundTrips();
     TestWeavecRejection();
+    TestExitControlContract();
     TestPauseControlContract();
     TestCanonicalization();
     TestBuilderAndImmutableAccess();

@@ -290,6 +290,17 @@ struct CompiledRule final {
     SourceSpan source{};
 };
 
+struct ExitControlRule final {
+    ExpressionId condition{};
+    std::uint32_t sourceOrdinal{};
+    SourceSpan source{};
+};
+
+struct ExitControlBucket final {
+    EventKey key{};
+    TableRange rules{};
+};
+
 enum class PauseEffect : std::uint8_t {
     On,
     Off,
@@ -345,6 +356,7 @@ struct ProgramRequirements final {
     std::uint32_t numberSlotCount{};
     std::uint32_t durationSlotCount{};
     std::uint32_t mappingSlotCount{};
+    std::uint32_t maximumExitRulesPerEvent{};
     std::uint32_t maximumPauseRulesPerEvent{};
     std::uint32_t maximumRulesPerEvent{};
     std::uint32_t maximumPredicateStepsPerEvent{};
@@ -387,6 +399,8 @@ struct CompiledProgramStorage final {
 
     std::vector<MappingSlotDescriptor> mappingSlots;
     std::vector<MappingDescriptor> mappings;
+    std::vector<ExitControlBucket> exitControlBuckets;
+    std::vector<ExitControlRule> exitControlRules;
     std::vector<PauseControlBucket> pauseControlBuckets;
     std::vector<PauseControlRule> pauseControlRules;
     std::vector<EventBucket> eventBuckets;
@@ -436,6 +450,8 @@ public:
     [[nodiscard]] std::span<const ActionInstruction> ActionCode() const noexcept;
     [[nodiscard]] std::span<const MappingSlotDescriptor> MappingSlots() const noexcept;
     [[nodiscard]] std::span<const MappingDescriptor> Mappings() const noexcept;
+    [[nodiscard]] std::span<const ExitControlBucket> ExitControlBuckets() const noexcept;
+    [[nodiscard]] std::span<const ExitControlRule> ExitControlRules() const noexcept;
     [[nodiscard]] std::span<const PauseControlBucket> PauseControlBuckets() const noexcept;
     [[nodiscard]] std::span<const PauseControlRule> PauseControlRules() const noexcept;
     [[nodiscard]] std::span<const EventBucket> EventBuckets() const noexcept;

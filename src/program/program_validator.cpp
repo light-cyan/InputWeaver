@@ -1221,6 +1221,105 @@ void ValidateUserValuesAndDebug(
     }
 }
 
+void ValidateExitControls(
+    const CompiledProgramStorage& storage,
+    ValidationContext& context,
+    std::vector<std::uint8_t>& expectedControlUses,
+    std::set<std::uint32_t>& sourceOrdinals)
+{
+    if (storage.exitControlBuckets.empty() || storage.exitControlRules.empty()) {
+        context.Add(
+            ProgramValidationErrorCode::Rule,
+            "exitControlBuckets",
+            "a compiled program must contain at least one exit-control rule");
+    }
+
+    std::vector<bool> coveredRules(storage.exitControlRules.size(), false);
+    EventKey previousKey{};
+    bool havePreviousKey = false;
+    for (std::size_t bucketIndex = 0;
+         bucketIndex < storage.exitControlBuckets.size();
+         ++bucketIndex) {
+        const ExitControlBucket& bucket = storage.exitControlBuckets[bucketIndex];
+        const std::string bucketLocation = At("exitControlBuckets", bucketIndex);
+        if (!ValidId(bucket.key.control, storage.controls.size())
+            || !ValidEventTransition(bucket.key.transition)
+            || (havePreviousKey && previousKey >= bucket.key)) {
+            context.Add(
+                ProgramValidationErrorCode::Rule,
+                bucketLocation,
+                "exit-control buckets must have strictly sorted valid keys");
+        }
+        previousKey = bucket.key;
+        havePreviousKey = true;
+        AddExpectedControlUse(
+            storage,
+            expectedControlUses,
+            bucket.key.control,
+            ControlUse::EventSource,
+            context,
+            bucketLocation);
+
+        if (!ValidRange(bucket.rules, storage.exitControlRules.size())) {
+            context.Add(
+                ProgramValidationErrorCode::Range,
+                bucketLocation + ".rules",
+                "exit-control rule range is outside its table");
+            continue;
+        }
+        std::uint32_t previousOrdinal = 0U;
+        bool havePreviousOrdinal = false;
+        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
+            + bucket.rules.count;
+        for (std::uint64_t rawIndex = bucket.rules.begin;
+             rawIndex < end;
+             ++rawIndex) {
+            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
+            if (coveredRules[ruleIndex]) {
+                context.Add(
+                    ProgramValidationErrorCode::Range,
+                    bucketLocation + ".rules",
+                    "exit-control bucket rule ranges overlap");
+            }
+            coveredRules[ruleIndex] = true;
+            const ExitControlRule& rule = storage.exitControlRules[ruleIndex];
+            const std::string ruleLocation = At("exitControlRules", ruleIndex);
+            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
+                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".sourceOrdinal",
+                    "rule source ordinals must be globally unique and increase in a bucket");
+            }
+            previousOrdinal = rule.sourceOrdinal;
+            havePreviousOrdinal = true;
+            if (!ValidSpan(rule.source, storage.source.byteLength)) {
+                context.Add(
+                    ProgramValidationErrorCode::Source,
+                    ruleLocation + ".source",
+                    "exit-control source span is outside the source file");
+            }
+            if (rule.condition.IsValid()
+                && (!ValidId(rule.condition, storage.expressions.size())
+                    || storage.expressions[rule.condition.value].resultType
+                        != ExpressionType::Boolean)) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".condition",
+                    "exit-control condition must be invalid or Boolean");
+            }
+        }
+    }
+    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
+            return !value;
+        })) {
+        context.Add(
+            ProgramValidationErrorCode::Range,
+            "exitControlBuckets",
+            "exit-control bucket ranges do not cover the complete rule table");
+    }
+}
+
 void ValidatePauseControls(
     const CompiledProgramStorage& storage,
     ValidationContext& context,
@@ -1681,6 +1780,31 @@ ProgramRequirements ComputeProgramRequirements(
         requirements.maximumMappingOperationsPerEvent;
 
     std::map<EventKey, std::uint32_t> predicateStepsByEvent;
+    for (const ExitControlBucket& bucket : storage.exitControlBuckets) {
+        requirements.maximumExitRulesPerEvent = (std::max)(
+            requirements.maximumExitRulesPerEvent,
+            bucket.rules.count);
+        if (!ValidRange(bucket.rules, storage.exitControlRules.size())) {
+            continue;
+        }
+        std::uint32_t predicateSteps = 0U;
+        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
+            + bucket.rules.count;
+        for (std::uint64_t rawIndex = bucket.rules.begin;
+             rawIndex < end;
+             ++rawIndex) {
+            const ExitControlRule& rule = storage.exitControlRules[
+                static_cast<std::size_t>(rawIndex)];
+            if (ValidId(rule.condition, storage.expressions.size())) {
+                predicateSteps = SaturatingAdd(
+                    predicateSteps,
+                    storage.expressions[rule.condition.value].code.count);
+            }
+        }
+        predicateStepsByEvent[bucket.key] = SaturatingAdd(
+            predicateStepsByEvent[bucket.key],
+            predicateSteps);
+    }
     for (const PauseControlBucket& bucket : storage.pauseControlBuckets) {
         requirements.maximumPauseRulesPerEvent = (std::max)(
             requirements.maximumPauseRulesPerEvent,
@@ -1774,6 +1898,8 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"actionCode", storage.actionCode.size()},
         {"mappingSlots", storage.mappingSlots.size()},
         {"mappings", storage.mappings.size()},
+        {"exitControlBuckets", storage.exitControlBuckets.size()},
+        {"exitControlRules", storage.exitControlRules.size()},
         {"pauseControlBuckets", storage.pauseControlBuckets.size()},
         {"pauseControlRules", storage.pauseControlRules.size()},
         {"eventBuckets", storage.eventBuckets.size()},
@@ -1845,6 +1971,11 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         }
     }
     std::set<std::uint32_t> sourceOrdinals;
+    ValidateExitControls(
+        storage,
+        context,
+        expectedControlUses,
+        sourceOrdinals);
     ValidatePauseControls(
         storage,
         context,

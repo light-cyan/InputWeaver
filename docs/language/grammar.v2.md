@@ -11,7 +11,7 @@ Weave v2 是对 v1 的增量扩展，只扩展控制名称的写法。v1 的映�
 扩展后的控制名称可以出现在 v1 原本接受控制名称的所有位置，包括映射两侧、事件来源、`[held]` 与 `[idle]` 状态查询，以及 `press`、`release` 和 `tap` 动作的参数。
 
 ```weave
-A := B;
+A -> B;
 Keyboard.F6:down => tap(Mouse.Left);
 Consumer.VolumeUp:down ~> press(Keyboard.LCtrl);
 ```
@@ -92,7 +92,7 @@ These checks validate stable identity storage domains, not whether a code is cur
 ```weave
 HID.Usage(0x000C, 0x00E9):down => tap(F6);
 Windows.ScanCode(0x45, E1):down =>;
-Linux.Key(30) := Keyboard.B;
+Linux.Key(30) -> Keyboard.B;
 ```
 
 `HID.Usage` 表达标准控制编号；带操作系统名称的原始编号只表达对应平台的控制。一个合法控制是否能在当前平台上被接收、查询或模拟，由当前平台对该控制的支持情况决定。

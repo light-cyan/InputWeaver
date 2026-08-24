@@ -617,8 +617,16 @@ void TestModifierStateSeeding()
         {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 1U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     };
+    storage.exitControlRules = {
+        {ExpressionId{}, kInvalidProgramIndex, {}},
+    };
+    storage.exitControlBuckets = {
+        {{ControlRefId{0U}, EventTransition::Up}, {0U, 1U}},
+    };
     storage.controlRequirements = {
-        {ControlRefId{0U}, ToControlUseBits(ControlUse::PhysicalState)},
+        {ControlRefId{0U}, static_cast<std::uint8_t>(
+            ToControlUseBits(ControlUse::EventSource)
+            | ToControlUseBits(ControlUse::PhysicalState))},
         {ControlRefId{1U}, ToControlUseBits(ControlUse::PhysicalState)},
     };
     storage.debugInfo.actionInstructionSpans.clear();
@@ -720,7 +728,7 @@ void TestCompiledTargetResolution()
     }
 }
 
-void TestRuntimeAdaptersAndForceStop()
+void TestRuntimeAdaptersAndExit()
 {
     using namespace inputweaver;
     win32::WindowsControlCatalog catalog;
@@ -763,17 +771,16 @@ void TestRuntimeAdaptersAndForceStop()
     shift.virtualKey = VK_RSHIFT;
     WindowsNativeInputEvent f12 = control;
     f12.virtualKey = VK_F12;
-    win32::WindowsRuntimeInputAdapter startupSeedAdapter(catalog);
-    (void)startupSeedAdapter.Normalize(control);
-    (void)startupSeedAdapter.Normalize(shift);
-    const RuntimeInputEvent seededForceStop = startupSeedAdapter.Normalize(f12);
+    (void)runtime.HandleInput(inputAdapter.Normalize(control));
+    (void)runtime.HandleInput(inputAdapter.Normalize(shift));
+    const RuntimeInputEvent exitEvent = inputAdapter.Normalize(f12);
     Check(
-        seededForceStop.forceStopRequested
-            && runtime.HandleInput(seededForceStop) == InputDecision::Suppress,
-        "startup-seeded Ctrl-Shift state preserves physical F12 force stop");
+        runtime.HandleInput(exitEvent) == InputDecision::Suppress
+            && runtime.ExitRequested(),
+        "compiled Ctrl-Shift-F12 exit is recognized through native input bindings");
     Check(
         runtime.HandleInput(inputAdapter.Normalize(f6)) == InputDecision::Forward,
-        "force stop disables subsequent runtime transactions");
+        "compiled exit disables subsequent runtime transactions");
 }
 
 void TestExecutableResolutionAndCreateContract()
@@ -956,7 +963,7 @@ int main(int argc, char** argv)
     TestKeyboardInitialStateCapabilities();
     TestModifierStateSeeding();
     TestCompiledTargetResolution();
-    TestRuntimeAdaptersAndForceStop();
+    TestRuntimeAdaptersAndExit();
     TestExecutableResolutionAndCreateContract();
     TestChildWorkingDirectoryAndImmediateReturn();
 
