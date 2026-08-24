@@ -93,5 +93,3 @@
 | `output_transitions` | 运行时发布的输出转换数 |
 
 会话停止行中的 `runtime_diagnostic_drops=0` 表示运行时内部诊断队列没有丢弃记录。该行可能在日志工作线程完全排空前输出；外层日志完整性应以随后出现的 `Diagnostic log stopped.` 行为准。最终行中的三类丢弃计数均为 `0` 且 `jsonl_truncated=false`，表示当前进程已经刷新并关闭的日志没有触发外层记录环丢弃或文件截断。
-
-完整物理键盘验收的保留 JSONL 与控制台记录位于 `example/phase-4-safety/`，`example\phase-4-safety\verify.bat` 只复核这些现有证据，不启动新的人工验收运行。

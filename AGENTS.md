@@ -25,16 +25,17 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - For compiler, compiler CLI, or Windows compiler-backend changes, use `script/build_compiler_tests.bat` followed by `script/test_compiler.bat`.
 - For platform-independent runtime or Windows runtime-adapter changes, use `script/build_runtime_tests.bat` followed by `script/test_runtime.bat`.
 - For shared-program, Windows executor, hook, injection, or diagnostic changes, use `script/build.bat` followed by `script/test.bat`.
-- Run the relevant analyzer and dependency audit when a changed boundary warrants them; reserve `script/verify_phase4.bat` for cross-cutting integration, release, or acceptance-gate verification.
+- Use `script/verify_phase3.bat` for cross-cutting code verification, and run the relevant analyzer and dependency audit when a changed boundary warrants them.
 
 ## Agent Coordination
 
 - `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise pointers to current development work.
 - `docs/language/` owns Weave source-language definitions.
-- Chinese product operation guides live directly under `docs/`, outside `docs/language/`; example-specific manual test procedures live with their example as `ManualTest.md`.
+- Chinese product operation guides live directly under `docs/`, outside `docs/language/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
 - `development/` outside `development/legacy/` owns current designs, handoff material, research, and open design issues.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
+- `validation/` owns current validation assets, while `validation/legacy/` contains content-preserving validation snapshots that are outside current acceptance authority.
 - `development/CompilerRuntimeCompletionHandoff.md` is the interface handoff for the completed compiler and runtime stage.
 - Read the relevant language specification, compiler/runtime handoff, shared program contract in `src/program/`, and open-issue register before changing an owned subsystem.
 - Record a new decision in its owning document instead of duplicating phase history or handoff logs in `AGENTS.md`.
@@ -57,7 +58,7 @@ Code dependencies:
 
 compiler -> program
 runtime  -> program + input
-program  -> input control types
+program  -> standard library
 ui/cli/compiler_cli -> compiler
 ui/cli/runtime_cli -> standard library
 platform/windows/cli/compiler_main -> ui/cli/compiler_cli
@@ -74,7 +75,7 @@ all modules -> support only for domain-independent primitives
 
 - `src/compiler/` owns Weave source loading, lexical analysis, parsing, semantic binding, type checking, lowering, compile diagnostics, `.weavec` encoding, and the platform-neutral artifact publication flow.
 - `src/program/` owns `CompiledProgram`, canonicalization, structural validation, deterministic dumps, and the shared `.weavec` encoding contract.
-- `src/input/` owns platform-independent live input and output control types, normalized events, transitions, origins, decisions, and bounded output batch records.
+- `src/input/` owns platform-independent live input and output types, transitions, origins, and decisions; platform-native raw events and injection recipes belong under `src/platform/<platform>/`.
 - `src/runtime/` owns platform-independent program activation, physical state, variable and `PAUSE` state, dispatch, expression evaluation, mappings, action execution, task scheduling, cancellation, output ownership, and runtime port interfaces.
 - `src/ui/cli/` owns platform-independent command-line option models, parsing, help output, and compiler command presentation.
 - `src/platform/<platform>/<module>/` is the required layout for platform-specific code.
@@ -84,7 +85,7 @@ all modules -> support only for domain-independent primitives
 - `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows diagnostics but not on the CLI module.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; each example directory may contain its own `ManualTest.md`; `development/` contains current engineering documents; `development/legacy/` contains archived material that is outside current development.
+- `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; `validation/` contains current validation assets; `validation/legacy/` contains archived validation snapshots; `development/` contains current engineering documents; `development/legacy/` contains archived engineering material.
 - `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Current Development
@@ -92,15 +93,15 @@ all modules -> support only for domain-independent primitives
 - The current delivered stage is the completed compiler and runtime command-line interface recorded in `development/CompilerRuntimeCompletionHandoff.md`.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
-- `example/notepad-showcase/` owns the showcase source, compiled artifact, helper commands, manual test procedure, and retained acceptance JSONL for the current end-to-end Windows path.
-- `docs/safety-guide.md`, `docs/runtime-boundaries.md`, and `example/phase-4-safety/` define the current Chinese safety guidance, fixed execution boundaries, and Windows keyboard-safety manual test path.
+- `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
+- `development/phase-5-integrity-hardening/ProblemStatement.md` and `development/phase-5-integrity-hardening/ModificationPlan.md` own the current correctness, efficiency, redundancy, and internal-structure hardening work.
 - `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
 - Completed Phase 2, Phase 3, and Phase 4 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, and `development/legacy/phase-4-refactor/`.
-- Use `development/OpenDesignIssues.md` for design decisions that remain active, `script/verify_phase4.bat` for the combined build, test, static-analysis, dependency, CLI-authority, acceptance-validator self-test, retained-evidence validation, documentation, and diff gate, and `example/phase-4-safety/verify.bat` for retained physical Windows evidence.
+- Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_phase3.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices
 
-- Keep source code, comments, filenames, language specifications, and engineering documentation in English; keep Chinese product operation guides under `docs/` and example-specific manual test procedures with their example.
+- Keep source code, comments, filenames, language specifications, and engineering documentation in English; keep Chinese product operation guides under `docs/` and validation-specific manual test procedures with their validation assets.
 - Keep `src/ui/` platform-independent; native entry points, operating-system APIs, and platform adapter dependencies belong under `src/platform/<platform>/<module>/`.
 - Keep code concise and avoid unnecessary complexity or verbosity.
 - Design structures carefully so each implementation is clear, cohesive, and efficient.

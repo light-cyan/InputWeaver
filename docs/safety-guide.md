@@ -97,8 +97,6 @@ JSONL 中与第四阶段安全边界直接相关的运行时事件包括：
 
 任务预算诊断保留动作来源位置，输出和映射诊断保留对应主体编号。日志缓冲区保持固定容量，丢弃数量通过运行指标持续可见。
 
-仓库内置的完整物理键盘验收使用 `example\phase-4-safety\run.bat` 保存 JSONL 与控制台记录，并使用 `example\phase-4-safety\verify.bat` 校验可机器判定的安全事实；具体测试步骤见 `example\phase-4-safety\ManualTest.md`。
-
 ## 运行条件检查
 
 目标程序与 InputWeaver 应处于相同 Windows 完整性级别，通常都以普通用户身份运行。键盘输出按系统输入控制发送，因此最终文本仍由当前键盘布局、输入法、Caps Lock 和修饰键状态决定。
