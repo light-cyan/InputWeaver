@@ -7,6 +7,10 @@
 # Example-local negative activation output
 /example/phase-4-safety/denied.jsonl
 
+# Private working files
+/draft.md
+/TODO.md
+
 # IDE and editor files
 .vscode/
 .idea/
