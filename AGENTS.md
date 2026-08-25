@@ -90,13 +90,17 @@ all modules -> support only for domain-independent primitives
 
 ## Current Development
 
-- The current development stage is Phase 6: Declarative Runtime Controls; its scope and verification contract are recorded in `development/phase-6-declarative-runtime-controls/Plan.md`.
-- The delivered baseline is the compiler and runtime command-line interface with completed Phase 5 integrity hardening; its integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
+- Phase 6: Declarative Runtime Controls is complete and archived under `development/legacy/phase-6-declarative-runtime-controls/`.
+- The current development stage is Phase 7: Input Debug Producer; its implementation plan and target contract are under `development/phase-7-input-debug-producer/`.
+- Phase 8: Debug Client is planned under `development/phase-8-debug-client/` as an in-process client of the completed Phase 7 target contract.
+- Phase 9 App material under `development/phase-9-app/` and Phase 10 TUI material under `development/phase-10-tui/` are partial proposals rather than implementation plans.
+- `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and the proposed `InputWeaverTUI.exe`.
+- The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls; its compiler/runtime integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
 - `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
 - `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
-- Completed Phase 2, Phase 3, Phase 4, and Phase 5 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, `development/legacy/phase-4-refactor/`, and `development/legacy/phase-5-integrity-hardening/`.
+- Completed Phase 2 through Phase 6 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, `development/legacy/phase-4-refactor/`, `development/legacy/phase-5-integrity-hardening/`, and `development/legacy/phase-6-declarative-runtime-controls/`.
 - Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices
