@@ -14,10 +14,12 @@ const char* OriginName(InputOrigin value) noexcept {
     switch (value) {
         case InputOrigin::PhysicalCandidate:
             return "PhysicalCandidate";
-        case InputOrigin::SelfInjected:
-            return "SelfInjected";
+        case InputOrigin::CurrentInstanceInjected:
+            return "CurrentInstanceInjected";
         case InputOrigin::ExternalInjected:
             return "ExternalInjected";
+        case InputOrigin::InitialSample:
+            return "InitialSample";
     }
     return "Unknown";
 }
@@ -207,7 +209,7 @@ bool ShouldPublishHookDiagnostic(
     const HookDiagnosticRecord& record,
     bool traceInput) noexcept {
     return traceInput ||
-           record.origin == InputOrigin::SelfInjected ||
+           record.origin == InputOrigin::CurrentInstanceInjected ||
            record.suppressed;
 }
 

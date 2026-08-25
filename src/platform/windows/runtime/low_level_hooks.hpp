@@ -64,6 +64,9 @@ public:
     {
         return true;
     }
+    virtual void ProcessControlRequests() noexcept
+    {
+    }
     virtual void SetTargetEligible(bool eligible) noexcept
     {
         (void)eligible;

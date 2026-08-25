@@ -105,6 +105,13 @@ bool StopWasRequested() noexcept {
            WaitForSingleObject(gConsoleStopEvent, 0) == WAIT_OBJECT_0;
 }
 
+void RequestExecutorStopFromDebug(void*) noexcept
+{
+    if (gConsoleStopEvent != nullptr) {
+        SetEvent(gConsoleStopEvent);
+    }
+}
+
 bool WaitForRetry() noexcept {
     return gConsoleStopEvent != nullptr &&
            WaitForSingleObject(gConsoleStopEvent, 1000) == WAIT_OBJECT_0;
@@ -164,7 +171,13 @@ int RunCompiledInstance(
     inputweaver::TargetSelectorKind effectiveTargetKind,
     inputweaver::TargetProcessContext* targetContext) {
     inputweaver::WindowsProgramRuntimeSession runtime(
-        {options.traceInput, options.allowExec, selfTag, effectiveTargetKind},
+        {
+            options.traceInput,
+            options.allowExec,
+            selfTag,
+            effectiveTargetKind,
+            options.debugSessionToken,
+            {nullptr, &RequestExecutorStopFromDebug}},
         targetContext,
         diagnosticLog);
     std::wstring errorMessage;

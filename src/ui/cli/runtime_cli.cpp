@@ -11,7 +11,8 @@ void PrintRuntimeUsage(std::ostream& output) {
         << "Usage:\n"
         << "  InputWeaver --program <file.weavec>"
            " [--target <exe-name-or-absolute-path> | --target-global]"
-           " [--allow-exec] [--log <jsonl-path>] [--trace-input]\n\n"
+           " [--allow-exec] [--log <jsonl-path>] [--trace-input]"
+           " [--debug-session <opaque-token>]\n\n"
         << "The command-line target overrides the compiled TARGET declaration.\n"
         << "Compiled exit rules stop the program; the default is physical Ctrl+Shift+F12.\n";
 }
@@ -52,6 +53,13 @@ bool ParseRuntimeCommandLine(
                 return false;
             }
             options.jsonlPath = arguments[index];
+        } else if (argument == std::filesystem::path{"--debug-session"}) {
+            ++index;
+            if (index >= arguments.size() || arguments[index].empty()) {
+                errorMessage = "--debug-session requires an opaque token.";
+                return false;
+            }
+            options.debugSessionToken = arguments[index];
         } else {
             errorMessage = "Unknown option: " + argument.string();
             return false;

@@ -72,7 +72,7 @@ PID 和管道令牌不进入数据消息。每条消息包含固定魔数、协�
 
 | 命令 | 作用 |
 | --- | --- |
-| `Hello` | 协商协议版本和容量。 |
+| `Hello` | 协商协议版本。 |
 | `StartCapture` | 开始新的捕获周期。 |
 | `StopCapture` | 停止当前捕获。 |
 | `RequestExecutorStop` | 请求执行器有序退出。 |

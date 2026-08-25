@@ -14,6 +14,7 @@ struct RuntimeCliOptions final {
     bool targetGlobal{};
     std::filesystem::path targetSelector;
     std::filesystem::path jsonlPath;
+    std::filesystem::path debugSessionToken;
     std::filesystem::path programPath;
 };
 

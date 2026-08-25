@@ -10,6 +10,7 @@
 
 #include "windows_input_types.hpp"
 #include "runtime/runtime_types.hpp"
+#include "support/stop_request.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -26,6 +27,8 @@ struct WindowsProgramRuntimeSessionOptions final {
     bool permitProcessLaunch{};
     WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};
+    std::wstring debugSessionToken;
+    StopRequest executorStopRequest{};
 };
 
 struct WindowsProgramRuntimeSessionMetrics final {

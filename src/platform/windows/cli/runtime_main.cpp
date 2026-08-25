@@ -37,6 +37,7 @@ int wmain(int argumentCount, wchar_t** arguments) {
     executor.targetGlobal = options.targetGlobal;
     executor.targetSelector = options.targetSelector.wstring();
     executor.jsonlPath = options.jsonlPath.wstring();
+    executor.debugSessionToken = options.debugSessionToken.wstring();
     executor.programPath = options.programPath;
     return inputweaver::win32::RunWindowsExecutor(executor);
 }

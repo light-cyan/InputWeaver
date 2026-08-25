@@ -91,8 +91,8 @@ void TestOriginClassification() {
     keyboard.flags = LLKHF_INJECTED;
     Check(
         inputweaver::ClassifyKeyboard(keyboard, selfTag)
-            == inputweaver::InputOrigin::SelfInjected,
-        "tagged injected keyboard input is self-injected");
+            == inputweaver::InputOrigin::CurrentInstanceInjected,
+        "tagged injected keyboard input is current-instance injected");
     keyboard.dwExtraInfo = selfTag + 1U;
     Check(
         inputweaver::ClassifyKeyboard(keyboard, selfTag)
@@ -104,8 +104,8 @@ void TestOriginClassification() {
     mouse.dwExtraInfo = selfTag;
     Check(
         inputweaver::ClassifyMouse(mouse, selfTag)
-            == inputweaver::InputOrigin::SelfInjected,
-        "tagged injected mouse input is self-injected");
+            == inputweaver::InputOrigin::CurrentInstanceInjected,
+        "tagged injected mouse input is current-instance injected");
 }
 
 void TestWindowsOutputQueueBoundaries() {
@@ -217,7 +217,7 @@ void TestInjectorSafety() {
     hook.dwExtraInfo = keyboard.input.ki.dwExtraInfo;
     Check(
         inputweaver::ClassifyKeyboard(hook, selfTag)
-            == inputweaver::InputOrigin::SelfInjected,
+            == inputweaver::InputOrigin::CurrentInstanceInjected,
         "injector tag closes the classification contract");
 }
 

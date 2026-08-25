@@ -18,8 +18,9 @@ enum class DeviceKind : unsigned char {
 
 enum class InputOrigin : unsigned char {
     PhysicalCandidate,
-    SelfInjected,
-    ExternalInjected
+    CurrentInstanceInjected,
+    ExternalInjected,
+    InitialSample
 };
 
 enum class Transition : unsigned char {

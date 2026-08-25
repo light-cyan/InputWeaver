@@ -11,6 +11,7 @@ struct WindowsExecutorOptions final {
     bool targetGlobal{};
     std::wstring targetSelector;
     std::wstring jsonlPath;
+    std::wstring debugSessionToken;
     std::filesystem::path programPath;
 };
 

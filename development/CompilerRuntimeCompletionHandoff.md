@@ -33,7 +33,7 @@ InputWeaverCompiler.exe dump <source.weave>
 ## Executor interface
 
 ```text
-InputWeaver.exe --program <file.weavec> [--target <exe-name-or-absolute-path> | --target-global] [--allow-exec] [--log <jsonl-path>] [--trace-input]
+InputWeaver.exe --program <file.weavec> [--target <exe-name-or-absolute-path> | --target-global] [--allow-exec] [--log <jsonl-path>] [--trace-input] [--debug-session <opaque-token>]
 ```
 
 - The executor requires one `.weavec` file and executes it against the compiled target by default. `--target` overrides it with an executable selector, while `--target-global` overrides it with global execution; the two command-line overrides are mutually exclusive. The effective selection governs process discovery, runtime rule routing, and output eligibility for the whole invocation.
@@ -41,6 +41,7 @@ InputWeaver.exe --program <file.weavec> [--target <exe-name-or-absolute-path> | 
 - `TARGET = GLOBAL` selects global execution in source. When neither the compiled program nor the command line supplies a target, mapping execution is rejected before input hooks are installed.
 - `--allow-exec` grants process-launch authority for the current compiled-program invocation. Programs requiring that authority are rejected during activation when it is not granted.
 - `--log` writes bounded operational diagnostics as JSONL. Launch failures expose both a portable `launch_result` and the captured numeric `platform_error`. `--trace-input` additionally includes physical input records and requires `--log`.
+- `--debug-session` enables the local input-debug endpoint for this executor. The token must contain 1 to 64 ASCII letters, digits, periods, hyphens, or underscores; the client connects to `\\.\pipe\InputWeaver.Debug.<pid>.<token>` and must run as the same Windows user. The endpoint accepts one client, requires protocol negotiation, and does not capture until the client sends `StartCapture`; `StopCapture` ends capture and `RequestExecutorStop` requests orderly executor shutdown. Without this option, the executor creates no debug queue, pipe, or debug thread. The protocol contract is recorded in `development/legacy/phase-7-input-debug-producer/TargetDataContract.md`.
 - The compiled exit rules stop the active executor. A source with no `exit` statement receives the compiled default of physical left-or-right Ctrl plus left-or-right Shift and `F12:down`.
 
 ## Weave interface

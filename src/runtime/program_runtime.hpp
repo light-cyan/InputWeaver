@@ -16,7 +16,8 @@ public:
         RuntimeOutputPort& outputPort,
         RuntimeRoutePort& routePort,
         RuntimeProcessLauncher& processLauncher,
-        RuntimeClock& clock);
+        RuntimeClock& clock,
+        RuntimeDebugEventPort* debugPort = nullptr);
     ~ProgramRuntime();
 
     ProgramRuntime(const ProgramRuntime&) = delete;

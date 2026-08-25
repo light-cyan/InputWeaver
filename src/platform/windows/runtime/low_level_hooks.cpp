@@ -331,6 +331,7 @@ void LowLevelHooks::ThreadMain() noexcept {
         if (!sink_.SeedActivatedPhysicalState()) {
             startupError_.store(ERROR_INVALID_STATE, std::memory_order_release);
         }
+        sink_.ProcessControlRequests();
     }
     if (startupError_.load(std::memory_order_acquire) != ERROR_SUCCESS) {
         stopRequest_.Request();
@@ -375,6 +376,7 @@ void LowLevelHooks::ThreadMain() noexcept {
                 0, nullptr, remaining, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
 
+        sink_.ProcessControlRequests();
         MSG message{};
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             if (message.message == WM_QUIT || message.message == kWakeMessage) {
@@ -383,6 +385,7 @@ void LowLevelHooks::ThreadMain() noexcept {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        sink_.ProcessControlRequests();
 
         if (!shuttingDown && shutdownRequested_.load(std::memory_order_acquire)) {
             shuttingDown = true;

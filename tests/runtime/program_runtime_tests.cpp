@@ -192,6 +192,22 @@ public:
     }
 };
 
+class FakeDebugPort final : public inputweaver::RuntimeDebugEventPort {
+public:
+    std::vector<inputweaver::RuntimeDebugEvent> events;
+
+    [[nodiscard]] bool Publish(
+        const inputweaver::RuntimeDebugEvent& event) noexcept override
+    {
+        try {
+            events.push_back(event);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+};
+
 struct RuntimeHarness final {
     FakeClock clock;
     FakeControlPort controls;
@@ -438,9 +454,9 @@ void TestTapFixture()
         harness.runtime.HandleInput(KeyboardEvent(
             trigger,
             inputweaver::Transition::Up,
-            inputweaver::InputOrigin::SelfInjected))
+            inputweaver::InputOrigin::CurrentInstanceInjected))
             == inputweaver::InputDecision::Forward,
-        "self-injected input bypasses runtime state and rules");
+        "current-instance injected input bypasses runtime state and rules");
     Check(
         harness.runtime.HandleInput(KeyboardEvent(
             trigger,
@@ -1723,6 +1739,144 @@ void TestTaskExpressionFault()
         "task expression fault requests shutdown and records its action position");
 }
 
+void TestRuntimeDebugEvents()
+{
+    FakeClock clock;
+    FakeControlPort controls;
+    FakeOutputPort output;
+    FakeRoutePort route;
+    FakeLauncher launcher;
+    FakeDebugPort debug;
+    inputweaver::ProgramRuntime runtime(
+        {},
+        controls,
+        output,
+        route,
+        launcher,
+        clock,
+        &debug);
+    const auto program = Finalize(inputweaver::test::MakeTapFixtureStorage());
+    Check(runtime.Activate(program).activated, "debug event fixture activates");
+    inputweaver::RuntimeInputEvent event = KeyboardEvent(
+        TriggerControl(*program),
+        inputweaver::Transition::Down);
+    event.debugCaptureEpoch = 4U;
+    event.debugInputSequence = 9U;
+    (void)runtime.HandleInput(event);
+    (void)runtime.Pump();
+    clock.Advance(30'000'000);
+    (void)runtime.Pump();
+    Check(
+        debug.events.size() == 4U,
+        "accepted task emits match, two steps, and one terminal event");
+    if (debug.events.size() == 4U) {
+        const std::uint64_t marker = debug.events[0].executionMarker;
+        Check(
+            debug.events[0].kind
+                    == inputweaver::RuntimeDebugEventKind::RuleMatched
+                && debug.events[0].captureEpoch == 4U
+                && debug.events[0].triggerInputSequence == 9U
+                && debug.events[0].ruleIndex == 0U
+                && marker != 0U,
+            "rule match carries capture, input, rule, and marker correlation");
+        Check(
+            debug.events[1].kind
+                    == inputweaver::RuntimeDebugEventKind::ActionStarted
+                && debug.events[1].executionMarker == marker
+                && debug.events[1].instructionIndex == 0U
+                && debug.events[2].kind
+                    == inputweaver::RuntimeDebugEventKind::ActionStarted
+                && debug.events[2].executionMarker == marker
+                && debug.events[2].instructionIndex == 1U,
+            "every compiled action starts before execution");
+        Check(
+            debug.events[3].kind
+                    == inputweaver::RuntimeDebugEventKind::ExecutionEnded
+                && debug.events[3].executionMarker == marker
+                && debug.events[3].result
+                    == inputweaver::RuntimeExecutionResult::Completed,
+            "completed task emits one correlated terminal result");
+    }
+
+    FakeClock failedClock;
+    FakeControlPort failedControls;
+    FakeOutputPort failedOutput;
+    FakeRoutePort failedRoute;
+    FakeLauncher failedLauncher;
+    FakeDebugPort failedDebug;
+    inputweaver::ProgramRuntime failedRuntime(
+        {},
+        failedControls,
+        failedOutput,
+        failedRoute,
+        failedLauncher,
+        failedClock,
+        &failedDebug);
+    const auto failedProgram = Finalize(MakeTaskExpressionFaultStorage());
+    Check(
+        failedRuntime.Activate(failedProgram).activated,
+        "failed debug event fixture activates");
+    inputweaver::RuntimeInputEvent failedEvent = KeyboardEvent(
+        TriggerControl(*failedProgram),
+        inputweaver::Transition::Down);
+    failedEvent.debugCaptureEpoch = 5U;
+    failedEvent.debugInputSequence = 1U;
+    (void)failedRuntime.HandleInput(failedEvent);
+    (void)failedRuntime.Pump();
+    const auto terminal = std::find_if(
+        failedDebug.events.begin(),
+        failedDebug.events.end(),
+        [](const inputweaver::RuntimeDebugEvent& current) {
+            return current.kind
+                == inputweaver::RuntimeDebugEventKind::ExecutionEnded;
+        });
+    Check(
+        terminal != failedDebug.events.end()
+            && terminal->result == inputweaver::RuntimeExecutionResult::Failed
+            && failedRuntime.Metrics().cancelledTasks == 1U,
+        "debug failure remains distinct without changing runtime metrics");
+
+    FakeClock cancelledClock;
+    FakeControlPort cancelledControls;
+    FakeOutputPort cancelledOutput;
+    FakeRoutePort cancelledRoute;
+    FakeLauncher cancelledLauncher;
+    FakeDebugPort cancelledDebug;
+    inputweaver::ProgramRuntime cancelledRuntime(
+        {},
+        cancelledControls,
+        cancelledOutput,
+        cancelledRoute,
+        cancelledLauncher,
+        cancelledClock,
+        &cancelledDebug);
+    Check(
+        cancelledRuntime.Activate(program).activated,
+        "cancelled debug event fixture activates");
+    inputweaver::RuntimeInputEvent cancelledEvent = KeyboardEvent(
+        TriggerControl(*program),
+        inputweaver::Transition::Down);
+    cancelledEvent.debugCaptureEpoch = 6U;
+    cancelledEvent.debugInputSequence = 1U;
+    (void)cancelledRuntime.HandleInput(cancelledEvent);
+    (void)cancelledRuntime.Pump();
+    cancelledRuntime.RequestShutdown();
+    (void)cancelledRuntime.Pump();
+    const auto cancelledTerminal = std::find_if(
+        cancelledDebug.events.begin(),
+        cancelledDebug.events.end(),
+        [](const inputweaver::RuntimeDebugEvent& current) {
+            return current.kind
+                == inputweaver::RuntimeDebugEventKind::ExecutionEnded;
+        });
+    Check(
+        cancelledTerminal != cancelledDebug.events.end()
+            && cancelledTerminal->result
+                == inputweaver::RuntimeExecutionResult::Cancelled
+            && cancelledRuntime.Metrics().cancelledTasks == 1U,
+        "runtime invalidation emits a cancelled terminal result");
+}
+
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeRepeatedOwnershipStorage(
     bool unownedRelease)
 {
@@ -2828,6 +2982,7 @@ int main()
     TestConcurrentStateLocks();
     TestExecCancellationBoundaries();
     TestTaskExpressionFault();
+    TestRuntimeDebugEvents();
     TestOwnershipFaultsAndOutputFailure();
     TestMappingAndTaskOwnershipOverlap();
     TestPredicateFaultAndDiagnostics();

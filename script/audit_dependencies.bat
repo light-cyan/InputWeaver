@@ -68,12 +68,14 @@ set "INPUTWEAVER_OWNER="
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/program/" set "INPUTWEAVER_OWNER=program"
 if /i "!INPUTWEAVER_FILE:~0,13!"=="src/compiler/" set "INPUTWEAVER_OWNER=compiler"
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/runtime/" set "INPUTWEAVER_OWNER=runtime"
+if /i "!INPUTWEAVER_FILE:~0,10!"=="src/debug/" set "INPUTWEAVER_OWNER=debug"
 if /i "!INPUTWEAVER_FILE!"=="src/ui/cli/compiler_cli.cpp" set "INPUTWEAVER_OWNER=compiler_cli"
 if /i "!INPUTWEAVER_FILE!"=="src/ui/cli/runtime_cli.cpp" set "INPUTWEAVER_OWNER=runtime_cli"
 if /i "!INPUTWEAVER_FILE!"=="src/platform/windows/cli/compiler_main.cpp" set "INPUTWEAVER_OWNER=windows_compiler_cli"
 if /i "!INPUTWEAVER_FILE!"=="src/platform/windows/cli/runtime_main.cpp" set "INPUTWEAVER_OWNER=windows_runtime_cli"
 if /i "!INPUTWEAVER_FILE:~0,30!"=="src/platform/windows/compiler/" set "INPUTWEAVER_OWNER=windows_compiler"
 if /i "!INPUTWEAVER_FILE:~0,33!"=="src/platform/windows/diagnostics/" set "INPUTWEAVER_OWNER=windows_diagnostics"
+if /i "!INPUTWEAVER_FILE:~0,27!"=="src/platform/windows/debug/" set "INPUTWEAVER_OWNER=windows_debug"
 if /i "!INPUTWEAVER_FILE:~0,29!"=="src/platform/windows/runtime/" set "INPUTWEAVER_OWNER=windows_runtime"
 if not defined INPUTWEAVER_OWNER (
     echo Unclassified tracked implementation: !INPUTWEAVER_FILE!
@@ -122,6 +124,16 @@ if not errorlevel 1 (
 )
 exit /b 0
 
+:check_debug
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo Debug protocol dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
 :check_windows_compiler
 call :generate "%~1"
 if errorlevel 1 exit /b 1
@@ -138,6 +150,16 @@ if errorlevel 1 exit /b 1
 findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\compiler" /c:"src/platform/windows/compiler" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" "%INPUTWEAVER_DEPENDENCIES%" >nul
 if not errorlevel 1 (
     echo Windows diagnostics dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_windows_debug
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\compiler" /c:"src/platform/windows/compiler" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo Windows debug dependency boundary failed for %~1.
     exit /b 1
 )
 exit /b 0

@@ -58,6 +58,7 @@ Code dependencies:
 
 compiler -> program
 runtime  -> program + input
+debug -> runtime + program + input
 program  -> standard library
 ui/cli/compiler_cli -> compiler
 ui/cli/runtime_cli -> standard library
@@ -65,7 +66,8 @@ platform/windows/cli/compiler_main -> ui/cli/compiler_cli
 platform/windows/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
 platform/windows/compiler -> compiler artifact-file interface
 platform/windows/diagnostics -> input + runtime diagnostic types
-platform/windows/runtime -> runtime + program + input + platform/windows/diagnostics
+platform/windows/debug -> debug + runtime + program + input
+platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics
 all modules -> support only for domain-independent primitives
 ```
 
@@ -77,22 +79,24 @@ all modules -> support only for domain-independent primitives
 - `src/program/` owns `CompiledProgram`, canonicalization, structural validation, deterministic dumps, and the shared `.weavec` encoding contract.
 - `src/input/` owns platform-independent live input and output types, transitions, origins, and decisions; platform-native raw events and injection recipes belong under `src/platform/<platform>/`.
 - `src/runtime/` owns platform-independent program activation, physical state, variable and `PAUSE` state, dispatch, expression evaluation, mappings, action execution, task scheduling, cancellation, output ownership, and runtime port interfaces.
+- `src/debug/` owns the platform-independent input-debug protocol values and explicit binary frame codec.
 - `src/ui/cli/` owns platform-independent command-line option models, parsing, help output, and compiler command presentation.
 - `src/platform/<platform>/<module>/` is the required layout for platform-specific code.
 - `src/platform/windows/cli/` owns only the Windows command-line entry points, native argument adaptation, and invocation of the platform-independent CLI or Windows executor interface.
 - `src/platform/windows/compiler/` owns Windows sibling-temporary naming and atomic destination replacement for compiled artifacts.
 - `src/platform/windows/diagnostics/` owns bounded Windows diagnostic records, privacy redaction, JSONL formatting, transport, and file output.
-- `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows diagnostics but not on the CLI module.
+- `src/platform/windows/debug/` owns the local same-user named-pipe server, capture control, and bounded debug event transport.
+- `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the CLI module.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
-- `tests/program/`, `tests/compiler/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
+- `tests/program/`, `tests/compiler/`, `tests/debug/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
 - `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; `validation/` is the tracked location for validation assets; `development/` contains current engineering documents; `development/legacy/` contains archived engineering material.
 - `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Current Development
 
 - Phase 6: Declarative Runtime Controls is complete and archived under `development/legacy/phase-6-declarative-runtime-controls/`.
-- The current development stage is Phase 7: Input Debug Producer; its implementation plan and target contract are under `development/phase-7-input-debug-producer/`.
-- Phase 8: Debug Client is planned under `development/phase-8-debug-client/` as an in-process client of the completed Phase 7 target contract.
+- Phase 7: Input Debug Producer is complete and archived under `development/legacy/phase-7-input-debug-producer/`.
+- The current development stage is Phase 8: Debug Client under `development/phase-8-debug-client/`; it is an in-process client of the completed Phase 7 target contract.
 - Phase 9 App material under `development/phase-9-app/` and Phase 10 TUI material under `development/phase-10-tui/` are partial proposals rather than implementation plans.
 - `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and the proposed `InputWeaverTUI.exe`.
 - The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls; its compiler/runtime integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
@@ -100,7 +104,7 @@ all modules -> support only for domain-independent primitives
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
 - `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
 - `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
-- Completed Phase 2 through Phase 6 records are archived under `development/legacy/phase-2/`, `development/legacy/phase-3-compiler/`, `development/legacy/phase-3-runtime/`, `development/legacy/phase-4-safety/`, `development/legacy/phase-4-refactor/`, `development/legacy/phase-5-integrity-hardening/`, and `development/legacy/phase-6-declarative-runtime-controls/`.
+- Completed Phase 2 through Phase 7 records are archived under `development/legacy/`.
 - Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices

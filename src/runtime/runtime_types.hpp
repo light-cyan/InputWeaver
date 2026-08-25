@@ -103,6 +103,8 @@ struct RuntimeInputEvent final {
     InputOrigin origin{InputOrigin::PhysicalCandidate};
     Transition transition{Transition::Down};
     ScreenPoint position{};
+    std::uint64_t debugCaptureEpoch{};
+    std::uint64_t debugInputSequence{};
 };
 
 class RuntimeRoutePort {
@@ -289,6 +291,48 @@ struct RuntimeDiagnosticRecord final {
     std::int64_t deadlineNanoseconds{};
     std::uint32_t detail{};
     std::uint32_t platformError{};
+};
+
+enum class RuntimeExecutionResult : std::uint8_t {
+    Completed,
+    Failed,
+    Cancelled,
+};
+
+enum class RuntimeDebugEventKind : std::uint8_t {
+    RuleMatched,
+    ActionStarted,
+    ExecutionEnded,
+    RuntimeIssue,
+};
+
+struct RuntimeDebugIssue final {
+    RuntimeDiagnosticKind kind{};
+    SourceSpan source{};
+    std::uint32_t subject{kInvalidProgramIndex};
+    std::uint32_t position{kInvalidProgramIndex};
+    std::int64_t deadlineNanoseconds{};
+    std::uint32_t detail{};
+    std::uint32_t platformError{};
+};
+
+struct RuntimeDebugEvent final {
+    RuntimeDebugEventKind kind{};
+    std::uint64_t captureEpoch{};
+    std::uint64_t executionMarker{};
+    std::uint64_t triggerInputSequence{};
+    EventKey eventKey{};
+    std::uint32_t ruleIndex{kInvalidProgramIndex};
+    std::uint32_t instructionIndex{kInvalidProgramIndex};
+    RuntimeExecutionResult result{RuntimeExecutionResult::Completed};
+    RuntimeDebugIssue issue{};
+};
+
+class RuntimeDebugEventPort {
+public:
+    virtual ~RuntimeDebugEventPort() = default;
+    [[nodiscard]] virtual bool Publish(
+        const RuntimeDebugEvent& event) noexcept = 0;
 };
 
 struct RuntimeMetrics final {

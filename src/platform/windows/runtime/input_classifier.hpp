@@ -21,7 +21,7 @@ namespace inputweaver {
     }
 
     return static_cast<WindowsSelfTag>(event.dwExtraInfo) == selfTag
-        ? InputOrigin::SelfInjected
+        ? InputOrigin::CurrentInstanceInjected
         : InputOrigin::ExternalInjected;
 }
 
@@ -34,7 +34,7 @@ namespace inputweaver {
     }
 
     return static_cast<WindowsSelfTag>(event.dwExtraInfo) == selfTag
-        ? InputOrigin::SelfInjected
+        ? InputOrigin::CurrentInstanceInjected
         : InputOrigin::ExternalInjected;
 }
 

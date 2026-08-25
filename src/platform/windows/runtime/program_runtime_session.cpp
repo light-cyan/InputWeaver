@@ -1,5 +1,6 @@
 #include "program_runtime_session.hpp"
 
+#include "platform/windows/debug/debug_server.hpp"
 #include "platform/windows/diagnostics/diagnostic_log.hpp"
 #include "platform/windows/runtime/input_injector.hpp"
 #include "platform/windows/runtime/low_level_hooks.hpp"
@@ -13,6 +14,7 @@
 #include "support/stop_request.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <exception>
 #include <limits>
@@ -63,6 +65,29 @@ void PopulateInjectionIdentity(
     return item.transition == WindowsOutputTransition::Up;
 }
 
+[[nodiscard]] bool IsDebugInputTransition(Transition transition) noexcept
+{
+    return transition == Transition::Down || transition == Transition::Up;
+}
+
+[[nodiscard]] bool IsMouseButtonVirtualKey(
+    WindowsVirtualKey virtualKey) noexcept
+{
+    return virtualKey == VK_LBUTTON
+        || virtualKey == VK_RBUTTON
+        || virtualKey == VK_MBUTTON
+        || virtualKey == VK_XBUTTON1
+        || virtualKey == VK_XBUTTON2;
+}
+
+[[nodiscard]] bool IsAliasedModifierVirtualKey(
+    WindowsVirtualKey virtualKey) noexcept
+{
+    return virtualKey == VK_SHIFT
+        || virtualKey == VK_CONTROL
+        || virtualKey == VK_MENU;
+}
+
 [[nodiscard]] std::wstring FormatActivationError(
     const RuntimeActivationError& error)
 {
@@ -105,6 +130,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         lowLevelHooks.reset();
         inputAdapter.reset();
         runtime.reset();
+        debugServer.reset();
+        activeProgram.reset();
         outputPort.reset();
         clock.reset();
         processLauncher.reset();
@@ -133,6 +160,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             return false;
         }
 
+        if (debugServer != nullptr) {
+            activeProgram = program;
+        }
         const RuntimeActivationResult activation = runtime->Activate(
             std::move(program),
             options.effectiveTargetKind);
@@ -141,6 +171,17 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             return false;
         }
         currentGeneration.store(runtime->Generation(), std::memory_order_release);
+        if (debugServer != nullptr
+            && !debugServer->Start(
+                options.debugSessionToken,
+                activeProgram,
+                {
+                    this,
+                    &Impl::WakeDebugInputThreadThunk,
+                    &Impl::RequestExecutorStopThunk},
+                errorMessage)) {
+            return false;
+        }
         if (!StartOutputThread(errorMessage)) {
             return false;
         }
@@ -220,6 +261,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             runtime->Deactivate();
             DrainRuntimeDiagnostics();
         }
+        if (debugServer != nullptr) {
+            debugServer->Stop();
+        }
         if (outputProducerDoneEvent != nullptr) {
             SetEvent(outputProducerDoneEvent);
         }
@@ -274,6 +318,12 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         hookEvents.fetch_add(1U, std::memory_order_relaxed);
 
         RuntimeInputEvent normalized = inputAdapter->Normalize(event);
+        const win32::DebugInputCorrelation debugCorrelation =
+            debugServer != nullptr && IsDebugInputTransition(event.transition)
+            ? debugServer->BeginInput()
+            : win32::DebugInputCorrelation{};
+        normalized.debugCaptureEpoch = debugCorrelation.captureEpoch;
+        normalized.debugInputSequence = debugCorrelation.inputSequence;
         InputDecision decision = InputDecision::Forward;
         const bool outsideExecutableTarget =
             event.origin == InputOrigin::PhysicalCandidate
@@ -288,6 +338,17 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             runtime->Generation(),
             std::memory_order_release);
         record.suppressed = decision == InputDecision::Suppress;
+        if (debugServer != nullptr && debugCorrelation.Active()) {
+            debug::InputEventPayload input{};
+            PopulateDebugInput(
+                event,
+                normalized,
+                decision == InputDecision::Suppress
+                    ? debug::InputDisposition::Suppress
+                    : debug::InputDisposition::Forward,
+                input);
+            (void)debugServer->PublishInput(debugCorrelation, input);
+        }
         DrainRuntimeDiagnostics();
         if (runtime->ExitRequested() || runtime->FatalShutdownRequested()) {
             RequestStop();
@@ -320,6 +381,27 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         return SeedActivatedKeyboardState();
     }
 
+    void ProcessControlRequests() noexcept override
+    {
+        if (debugServer == nullptr) {
+            return;
+        }
+        const win32::DebugCaptureRequest request =
+            debugServer->TakeCaptureRequest();
+        if (request == win32::DebugCaptureRequest::Stop) {
+            debugServer->EndCapture();
+            return;
+        }
+        if (request != win32::DebugCaptureRequest::Start) {
+            return;
+        }
+        std::array<debug::InputEventPayload, 256U> initialInputs{};
+        const std::size_t count = SampleDebugInitialInputs(initialInputs);
+        (void)debugServer->BeginCapture(
+            std::span<const debug::InputEventPayload>{initialInputs}.first(
+                count));
+    }
+
     [[nodiscard]] bool RequiresTargetEligibilityNotifications() const noexcept override
     {
         return targetContext != nullptr;
@@ -341,6 +423,27 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         if (context != nullptr) {
             static_cast<Impl*>(context)->RequestStop();
         }
+    }
+
+    static void WakeDebugInputThreadThunk(void* context) noexcept
+    {
+        if (context == nullptr) {
+            return;
+        }
+        Impl& session = *static_cast<Impl*>(context);
+        if (session.lowLevelHooks != nullptr) {
+            session.lowLevelHooks->Wake();
+        }
+    }
+
+    static void RequestExecutorStopThunk(void* context) noexcept
+    {
+        if (context == nullptr) {
+            return;
+        }
+        Impl& session = *static_cast<Impl*>(context);
+        session.options.executorStopRequest.Request();
+        session.RequestStop();
     }
 
     static RuntimeOutputResult PublishThunk(
@@ -389,6 +492,78 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             }
         }
         return true;
+    }
+
+    void PopulateDebugInput(
+        const WindowsNativeInputEvent& event,
+        const RuntimeInputEvent& normalized,
+        debug::InputDisposition disposition,
+        debug::InputEventPayload& input) const noexcept
+    {
+        input.device = event.device;
+        input.transition = event.transition;
+        input.origin = event.origin;
+        input.disposition = disposition;
+        input.virtualKey = event.virtualKey;
+        input.scanCode = event.scanCode;
+        if (event.device == DeviceKind::Keyboard) {
+            input.nativeQualifier = (event.hookFlags & LLKHF_EXTENDED) != 0U
+                ? kWindowsScanCodeQualifierE0
+                : event.virtualKey == VK_PAUSE && event.scanCode == 0x45U
+                    ? kWindowsScanCodeQualifierE1
+                    : kControlQualifierNone;
+        }
+        input.mouseData = event.mouseData;
+        if (normalized.control.IsValid()
+            && activeProgram != nullptr
+            && normalized.control.value < activeProgram->Controls().size()) {
+            input.hasCompiledControl = true;
+            input.compiledIdentity =
+                activeProgram->Controls()[normalized.control.value];
+        }
+    }
+
+    [[nodiscard]] std::size_t SampleDebugInitialInputs(
+        std::array<debug::InputEventPayload, 256U>& inputs) const noexcept
+    {
+        std::size_t count = 0U;
+        for (WindowsVirtualKey virtualKey = 1U;
+             virtualKey <= 0xffU;
+             ++virtualKey) {
+            if (IsAliasedModifierVirtualKey(virtualKey)
+                || (GetAsyncKeyState(static_cast<int>(virtualKey)) & 0x8000)
+                    == 0) {
+                continue;
+            }
+            WindowsNativeInputEvent event{};
+            event.device = IsMouseButtonVirtualKey(virtualKey)
+                ? DeviceKind::Mouse
+                : DeviceKind::Keyboard;
+            event.origin = InputOrigin::InitialSample;
+            event.transition = Transition::Down;
+            event.virtualKey = virtualKey;
+            if (event.device == DeviceKind::Keyboard) {
+                const UINT mapped = MapVirtualKeyW(
+                    virtualKey,
+                    MAPVK_VK_TO_VSC_EX);
+                event.scanCode = mapped & 0xffU;
+                if ((mapped & 0xff00U) == 0xe000U) {
+                    event.hookFlags = LLKHF_EXTENDED;
+                }
+            } else if (virtualKey == VK_XBUTTON1) {
+                event.mouseData = XBUTTON1;
+            } else if (virtualKey == VK_XBUTTON2) {
+                event.mouseData = XBUTTON2;
+            }
+            const RuntimeInputEvent normalized = inputAdapter->Normalize(event);
+            debug::InputEventPayload& input = inputs[count++];
+            PopulateDebugInput(
+                event,
+                normalized,
+                debug::InputDisposition::NotApplicable,
+                input);
+        }
+        return count;
     }
 
     void NotifyTargetLostFromOutput() noexcept
@@ -461,6 +636,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *controlCatalog,
                 this,
                 &Impl::PublishThunk);
+            if (!options.debugSessionToken.empty()) {
+                debugServer = std::make_unique<win32::WindowsDebugServer>();
+            }
             RuntimeCapacities capacities{};
             capacities.permitProcessLaunch = options.permitProcessLaunch;
             runtime = std::make_unique<ProgramRuntime>(
@@ -469,7 +647,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *outputPort,
                 *routePort,
                 *processLauncher,
-                *clock);
+                *clock,
+                debugServer.get());
             inputAdapter = std::make_unique<win32::WindowsRuntimeInputAdapter>(
                 *controlCatalog);
             const StopRequest stopRequest{this, &Impl::RequestStopThunk};
@@ -603,6 +782,14 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 circuitBreakerOpen.store(true, std::memory_order_release);
                 SignalStopOnly();
             }
+            if (debugServer != nullptr) {
+                RuntimeDebugEvent issue{};
+                issue.kind = RuntimeDebugEventKind::RuntimeIssue;
+                issue.issue.kind = RuntimeDiagnosticKind::OutputFailure;
+                issue.issue.subject = item.outputCode;
+                issue.issue.platformError = result.error;
+                (void)debugServer->Publish(issue);
+            }
         }
         record.circuitBreakerOpen = circuitBreakerOpen.load(std::memory_order_acquire);
         (void)diagnosticLog.TryPushInjection(record);
@@ -695,8 +882,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::unique_ptr<SteadyRuntimeClock> clock;
     std::unique_ptr<win32::WindowsRuntimeOutputPort> outputPort;
     std::unique_ptr<ProgramRuntime> runtime;
+    std::unique_ptr<win32::WindowsDebugServer> debugServer;
     std::unique_ptr<win32::WindowsRuntimeInputAdapter> inputAdapter;
     std::unique_ptr<LowLevelHooks> lowLevelHooks;
+    std::shared_ptr<const CompiledProgram> activeProgram;
 };
 
 WindowsProgramRuntimeSession::WindowsProgramRuntimeSession(

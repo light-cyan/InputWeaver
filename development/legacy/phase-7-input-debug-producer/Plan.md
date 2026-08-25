@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文件是 Phase 7 实现计划。本阶段只修改 `InputWeaver.exe`、共享协议类型和 Windows 调试管道服务端。
+Phase 7 已完成并归档。本阶段只修改 `InputWeaver.exe`、共享协议类型和 Windows 调试管道服务端；验证结果记录在 `Verification.md`。
 
 ## 目标
 
@@ -34,7 +34,7 @@ InputWeaver.exe --program <file.weavec> [existing options] --debug-session <opaq
 | `ExternalInjected` | `EXT` | 已注入但不携带当前实例的 `selfTag`。 |
 | `InitialSample` | `INIT` | 捕获开始时采样到的已按下控件。 |
 
-`ExternalInjected` 包含其他 InputWeaver 实例和其他模拟输入来源。现有 `SelfInjected` 类型改名为 `CurrentInstanceInjected`；不增加输入等级。
+`ExternalInjected` 包含其他 InputWeaver 实例和其他模拟输入来源。`CurrentInstanceInjected` 是当前实例注入来源的内部名称；输入来源不使用数字等级。
 
 ## 最小接入点
 
@@ -45,7 +45,7 @@ InputWeaver.exe --program <file.weavec> [existing options] --debug-session <opaq
 | 规则调度 | 把调试标记、触发输入和规则引用随 `WorkItem` 传递；任务真正进入 `Ready` 前发送一次 `RuleMatched`。 |
 | `RunTaskSlice` | 每次取出编译指令并执行前发送 `ActionStarted`；`Wait`、跳转和循环指令均包含在内。 |
 | `FinishTask` | 清理完成后发送一次 `ExecutionEnded`。 |
-| 现有诊断排出点 | 只把异常诊断转换为 `RuntimeIssue`。 |
+| `ProgramRuntime::PublishDiagnostic` | 只把异常诊断转换为固定大小的 `RuntimeIssue` 记录。 |
 
 在任务真正被接受前不发送 `RuleMatched`；容量拒绝等情况只发送 `RuntimeIssue`，避免产生不存在的执行条目。
 

@@ -44,6 +44,35 @@ enum class WorkKind : std::uint8_t {
     MappingRelease,
 };
 
+[[nodiscard]] constexpr bool IsDebugIssue(
+    RuntimeDiagnosticKind kind) noexcept
+{
+    switch (kind) {
+    case RuntimeDiagnosticKind::OwnershipChange:
+    case RuntimeDiagnosticKind::MappingChange:
+    case RuntimeDiagnosticKind::Cancellation:
+    case RuntimeDiagnosticKind::TargetEligibilityChange:
+        return false;
+    default:
+        return true;
+    }
+}
+
+[[nodiscard]] constexpr RuntimeExecutionResult MergeExecutionResult(
+    RuntimeExecutionResult existing,
+    RuntimeExecutionResult requested) noexcept
+{
+    if (existing == RuntimeExecutionResult::Failed
+        || requested == RuntimeExecutionResult::Failed) {
+        return RuntimeExecutionResult::Failed;
+    }
+    if (existing == RuntimeExecutionResult::Cancelled
+        || requested == RuntimeExecutionResult::Cancelled) {
+        return RuntimeExecutionResult::Cancelled;
+    }
+    return RuntimeExecutionResult::Completed;
+}
+
 struct RepeatFrame final {
     std::uint64_t index{};
     double limit{};
@@ -68,6 +97,9 @@ struct TaskInstance final {
     std::vector<TaskOwnershipRecord> ownership;
     std::uint32_t instructionsWithoutSuspension{};
     std::uint32_t outputsWithoutSuspension{};
+    std::uint64_t debugCaptureEpoch{};
+    std::uint64_t debugExecutionMarker{};
+    RuntimeExecutionResult cleanupResult{RuntimeExecutionResult::Completed};
     bool cleanupCancelled{};
     bool safetyCancelled{};
 };
@@ -87,6 +119,10 @@ struct WorkItem final {
     MappingId mapping{};
     MappingSlotId mappingSlot{};
     ControlRefId control{};
+    std::uint64_t debugCaptureEpoch{};
+    std::uint64_t debugInputSequence{};
+    EventKey debugEventKey{};
+    std::uint32_t debugRuleIndex{kInvalidProgramIndex};
 };
 
 class WorkQueue final {
@@ -377,6 +413,7 @@ struct ProgramRuntime::Impl final {
         RuntimeExpressionScratch expressionScratch;
         std::uint64_t nextReadyOrder{1U};
         std::uint64_t nextTimedOrder{1U};
+        std::uint64_t nextDebugExecutionMarker{1U};
         std::atomic<std::uint64_t> positiveSuspensions{0U};
         std::atomic_flag pumpLock = ATOMIC_FLAG_INIT;
     };
@@ -472,13 +509,15 @@ struct ProgramRuntime::Impl final {
         RuntimeOutputPort& runtimeOutputPort,
         RuntimeRoutePort& runtimeRoutePort,
         RuntimeProcessLauncher& runtimeProcessLauncher,
-        RuntimeClock& runtimeClock)
+        RuntimeClock& runtimeClock,
+        RuntimeDebugEventPort* runtimeDebugPort)
         : capacities(runtimeCapacities),
           controlPort(runtimeControlPort),
           outputPort(runtimeOutputPort),
           routePort(runtimeRoutePort),
           processLauncher(runtimeProcessLauncher),
-          clock(runtimeClock)
+          clock(runtimeClock),
+          debugPort(runtimeDebugPort)
     {
     }
 
@@ -494,6 +533,7 @@ struct ProgramRuntime::Impl final {
     RuntimeRoutePort& routePort;
     RuntimeProcessLauncher& processLauncher;
     RuntimeClock& clock;
+    RuntimeDebugEventPort* debugPort;
     std::unique_ptr<State> active;
     std::atomic<std::uint64_t> observableGeneration{0U};
     std::uint64_t nextProgramSerial{1U};
@@ -549,7 +589,9 @@ struct ProgramRuntime::Impl final {
     [[nodiscard]] InputDecision DispatchOrdinary(
         State& state,
         EventKey key,
-        std::uint64_t transactionGeneration) noexcept;
+        std::uint64_t transactionGeneration,
+        std::uint64_t debugCaptureEpoch,
+        std::uint64_t debugInputSequence) noexcept;
     [[nodiscard]] bool ReserveTasks(
         State& state,
         std::size_t scratchCount,
@@ -583,7 +625,11 @@ struct ProgramRuntime::Impl final {
     void FinishTask(
         State& state,
         std::uint32_t slot,
-        bool cancelled) noexcept;
+        bool cancelled,
+        RuntimeExecutionResult result) noexcept;
+    [[nodiscard]] RuntimeExecutionResult ClassifyTaskOperationFailure(
+        const State& state,
+        const TaskInstance& task) const noexcept;
     void ScheduleTimed(
         State& state,
         TaskInstance& task,
@@ -1028,7 +1074,7 @@ void ProgramRuntime::Impl::PublishDiagnostic(
     std::uint32_t detail,
     std::uint32_t platformError) noexcept
 {
-    state.diagnostics.TryPush({
+    const RuntimeDiagnosticRecord record{
         kind,
         state.programSerial,
         state.generation.load(std::memory_order_acquire),
@@ -1038,7 +1084,21 @@ void ProgramRuntime::Impl::PublishDiagnostic(
         position,
         deadline,
         detail,
-        platformError});
+        platformError};
+    state.diagnostics.TryPush(record);
+    if (debugPort != nullptr && IsDebugIssue(kind)) {
+        RuntimeDebugEvent event{};
+        event.kind = RuntimeDebugEventKind::RuntimeIssue;
+        event.issue = {
+            record.kind,
+            record.source,
+            record.subject,
+            record.position,
+            record.deadlineNanoseconds,
+            record.detail,
+            record.platformError};
+        (void)debugPort->Publish(event);
+    }
 }
 
 void ProgramRuntime::Impl::Invalidate(
@@ -1209,7 +1269,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         const InputDecision decision = DispatchOrdinary(
             *state,
             key,
-            transactionGeneration);
+            transactionGeneration,
+            event.debugCaptureEpoch,
+            event.debugInputSequence);
         if (decision == InputDecision::Suppress) {
             state->metrics.suppressedEvents.fetch_add(
                 1U,
@@ -1274,7 +1336,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         const InputDecision decision = DispatchOrdinary(
             *state,
             key,
-            transactionGeneration);
+            transactionGeneration,
+            event.debugCaptureEpoch,
+            event.debugInputSequence);
         if (decision == InputDecision::Suppress) {
             state->metrics.suppressedEvents.fetch_add(
                 1U,
@@ -1301,7 +1365,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     const InputDecision decision = DispatchOrdinary(
         *state,
         key,
-        transactionGeneration);
+        transactionGeneration,
+        event.debugCaptureEpoch,
+        event.debugInputSequence);
     if (decision == InputDecision::Suppress) {
         state->metrics.suppressedEvents.fetch_add(
             1U,
@@ -1397,7 +1463,9 @@ void ProgramRuntime::Impl::TransitionTargetEligibility(
 InputDecision ProgramRuntime::Impl::DispatchOrdinary(
     State& state,
     EventKey key,
-    std::uint64_t transactionGeneration) noexcept
+    std::uint64_t transactionGeneration,
+    std::uint64_t debugCaptureEpoch,
+    std::uint64_t debugInputSequence) noexcept
 {
     const auto transactionCurrent = [&state, transactionGeneration]() noexcept {
         return state.generation.load(std::memory_order_acquire)
@@ -1443,7 +1511,8 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
         const auto rules = state.program->Rules().subspan(
             bucket->rules.begin,
             bucket->rules.count);
-        for (const CompiledRule& rule : rules) {
+        for (std::size_t ruleOffset = 0U; ruleOffset < rules.size(); ++ruleOffset) {
+            const CompiledRule& rule = rules[ruleOffset];
             bool matched = false;
             if (!EvaluatePredicate(state, rule.condition, rule.source, matched)) {
                 return InputDecision::Forward;
@@ -1469,11 +1538,17 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                     mappingActivationId = rule.mapping.value;
                 }
             } else if (rule.action.IsValid()) {
-                state.dispatch.transactionScratch[scratchCount++] = {
+                WorkItem& item = state.dispatch.transactionScratch[scratchCount++];
+                item = {
                     WorkKind::TaskStart,
                     transactionGeneration,
                     kInvalidTaskSlot,
                     rule.action};
+                item.debugCaptureEpoch = debugCaptureEpoch;
+                item.debugInputSequence = debugInputSequence;
+                item.debugEventKey = key;
+                item.debugRuleIndex = bucket->rules.begin
+                    + static_cast<std::uint32_t>(ruleOffset);
             }
             consumed = consumed || rule.delivery == Delivery::Consume;
             if (rule.flow == MatchFlow::Stop) {
@@ -1591,6 +1666,9 @@ bool ProgramRuntime::Impl::ReserveTasks(
             task.pendingTap = {};
             task.instructionsWithoutSuspension = 0U;
             task.outputsWithoutSuspension = 0U;
+            task.debugCaptureEpoch = 0U;
+            task.debugExecutionMarker = 0U;
+            task.cleanupResult = RuntimeExecutionResult::Completed;
             task.cleanupCancelled = false;
             task.safetyCancelled = false;
             std::fill(task.repeatFrames.begin(), task.repeatFrames.end(), RepeatFrame{});
@@ -2043,18 +2121,43 @@ void ProgramRuntime::Impl::CleanupMappingOwners(State& state) noexcept
 void ProgramRuntime::Impl::FinishTask(
     State& state,
     std::uint32_t slot,
-    bool cancelled) noexcept
+    bool cancelled,
+    RuntimeExecutionResult result) noexcept
 {
     TaskInstance& task = state.scheduler.tasks[slot];
-    const bool requestedCancelled = task.safetyCancelled || cancelled;
+    bool requestedCancelled = task.safetyCancelled || cancelled;
+    RuntimeExecutionResult requested = task.safetyCancelled
+        ? RuntimeExecutionResult::Cancelled
+        : result;
+    if (task.status.load(std::memory_order_acquire) == TaskStatus::Cleanup) {
+        requestedCancelled = requestedCancelled || task.cleanupCancelled;
+        requested = MergeExecutionResult(task.cleanupResult, requested);
+    }
     if (!ReleaseTaskOwnership(state, task)) {
-        task.cleanupCancelled = task.cleanupCancelled || requestedCancelled;
+        requested = MergeExecutionResult(
+            requested,
+            ClassifyTaskOperationFailure(state, task));
+        task.cleanupCancelled = requestedCancelled;
+        task.cleanupResult = requested;
         task.resumeKind = TaskResumeKind::None;
         task.pendingTap = {};
         task.status.store(TaskStatus::Cleanup, std::memory_order_release);
         return;
     }
-    const bool finalCancelled = task.cleanupCancelled || requestedCancelled;
+    const RuntimeExecutionResult finalResult = requested;
+    if (debugPort != nullptr
+        && task.debugCaptureEpoch != 0U
+        && task.debugExecutionMarker != 0U) {
+        RuntimeDebugEvent event{};
+        event.kind = RuntimeDebugEventKind::ExecutionEnded;
+        event.captureEpoch = task.debugCaptureEpoch;
+        event.executionMarker = task.debugExecutionMarker;
+        event.result = finalResult;
+        (void)debugPort->Publish(event);
+    }
+    task.debugCaptureEpoch = 0U;
+    task.debugExecutionMarker = 0U;
+    task.cleanupResult = RuntimeExecutionResult::Completed;
     task.cleanupCancelled = false;
     task.safetyCancelled = false;
     task.resumeKind = TaskResumeKind::None;
@@ -2062,11 +2165,26 @@ void ProgramRuntime::Impl::FinishTask(
     task.instructionsWithoutSuspension = 0U;
     task.outputsWithoutSuspension = 0U;
     task.status.store(TaskStatus::Free, std::memory_order_release);
-    if (finalCancelled) {
+    if (requestedCancelled) {
         state.metrics.cancelledTasks.fetch_add(1U, std::memory_order_relaxed);
     } else {
         state.metrics.completedTasks.fetch_add(1U, std::memory_order_relaxed);
     }
+}
+
+RuntimeExecutionResult ProgramRuntime::Impl::ClassifyTaskOperationFailure(
+    const State& state,
+    const TaskInstance& task) const noexcept
+{
+    if (task.safetyCancelled) {
+        return RuntimeExecutionResult::Cancelled;
+    }
+    if (state.fatalShutdownRequested.load(std::memory_order_acquire)) {
+        return RuntimeExecutionResult::Failed;
+    }
+    return task.generation != state.generation.load(std::memory_order_acquire)
+        ? RuntimeExecutionResult::Cancelled
+        : RuntimeExecutionResult::Failed;
 }
 
 void ProgramRuntime::Impl::CleanupStale(State& state) noexcept
@@ -2080,7 +2198,11 @@ void ProgramRuntime::Impl::CleanupStale(State& state) noexcept
             || task.generation == generation) {
             continue;
         }
-        FinishTask(state, static_cast<std::uint32_t>(index), true);
+        FinishTask(
+            state,
+            static_cast<std::uint32_t>(index),
+            true,
+            RuntimeExecutionResult::Cancelled);
     }
     for (MappingOwner& owner : state.dispatch.mappingOwners) {
         if (!owner.owned || owner.generation == generation) {
@@ -2135,6 +2257,26 @@ void ProgramRuntime::Impl::DrainWork(State& state) noexcept
                     1U,
                     std::memory_order_relaxed);
                 continue;
+            }
+            if (debugPort != nullptr
+                && item.debugCaptureEpoch != 0U
+                && item.debugInputSequence != 0U
+                && item.debugRuleIndex != kInvalidProgramIndex) {
+                const std::uint64_t marker =
+                    state.scheduler.nextDebugExecutionMarker++;
+                if (marker != 0U) {
+                    RuntimeDebugEvent event{};
+                    event.kind = RuntimeDebugEventKind::RuleMatched;
+                    event.captureEpoch = item.debugCaptureEpoch;
+                    event.executionMarker = marker;
+                    event.triggerInputSequence = item.debugInputSequence;
+                    event.eventKey = item.debugEventKey;
+                    event.ruleIndex = item.debugRuleIndex;
+                    if (debugPort->Publish(event)) {
+                        task.debugCaptureEpoch = item.debugCaptureEpoch;
+                        task.debugExecutionMarker = marker;
+                    }
+                }
             }
             task.readyOrder = state.scheduler.nextReadyOrder++;
             task.status.store(TaskStatus::Ready, std::memory_order_release);
@@ -2330,7 +2472,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
     }
     const std::uint64_t generation = state.generation.load(std::memory_order_acquire);
     if (task.generation != generation) {
-        FinishTask(state, slot, true);
+        FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
         return true;
     }
     const auto descriptors = state.program->ActionPrograms();
@@ -2342,7 +2484,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             task.action.value,
             task.position,
             8U);
-        FinishTask(state, slot, true);
+        FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
         return true;
     }
     const ActionProgramDescriptor& descriptor = descriptors[task.action.value];
@@ -2355,7 +2497,8 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             FinishTask(
                 state,
                 slot,
-                task.generation != state.generation.load(std::memory_order_acquire));
+                task.generation != state.generation.load(std::memory_order_acquire),
+                ClassifyTaskOperationFailure(state, task));
             return true;
         }
         task.resumeKind = TaskResumeKind::None;
@@ -2365,7 +2508,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
 
     while (task.position < code.size()) {
         if (task.generation != state.generation.load(std::memory_order_acquire)) {
-            FinishTask(state, slot, true);
+            FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
             return true;
         }
         const std::uint32_t position = task.position;
@@ -2380,12 +2523,22 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                 0,
                 1U);
             task.safetyCancelled = true;
-            FinishTask(state, slot, true);
+            FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
             return true;
         }
         ++task.instructionsWithoutSuspension;
         const ActionInstruction& instruction = code[position];
         const SourceSpan source = ActionSource(state, descriptor, position);
+        if (debugPort != nullptr
+            && task.debugCaptureEpoch != 0U
+            && task.debugExecutionMarker != 0U) {
+            RuntimeDebugEvent event{};
+            event.kind = RuntimeDebugEventKind::ActionStarted;
+            event.captureEpoch = task.debugCaptureEpoch;
+            event.executionMarker = task.debugExecutionMarker;
+            event.instructionIndex = position;
+            (void)debugPort->Publish(event);
+        }
         switch (instruction.opcode) {
         case ActionOpcode::Press:
             if (!AcquireTaskControl(state, task, ControlRefId{instruction.operand0})) {
@@ -2393,7 +2546,8 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     state,
                     slot,
                     task.generation
-                        != state.generation.load(std::memory_order_acquire));
+                        != state.generation.load(std::memory_order_acquire),
+                    ClassifyTaskOperationFailure(state, task));
                 return true;
             }
             ++task.position;
@@ -2404,7 +2558,8 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     state,
                     slot,
                     task.generation
-                        != state.generation.load(std::memory_order_acquire));
+                        != state.generation.load(std::memory_order_acquire),
+                    ClassifyTaskOperationFailure(state, task));
                 return true;
             }
             ++task.position;
@@ -2415,7 +2570,8 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     state,
                     slot,
                     task.generation
-                        != state.generation.load(std::memory_order_acquire));
+                        != state.generation.load(std::memory_order_acquire),
+                    ClassifyTaskOperationFailure(state, task));
                 return true;
             }
             task.resumeKind = TaskResumeKind::TapRelease;
@@ -2435,7 +2591,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     task.action.value,
                     position,
                     static_cast<std::uint32_t>(result.fault));
-                FinishTask(state, slot, true);
+                FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
             ++task.position;
@@ -2458,7 +2614,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                         0,
                         9U);
                 }
-                FinishTask(state, slot, false);
+                FinishTask(state, slot, false, RuntimeExecutionResult::Failed);
                 return true;
             }
             ++task.position;
@@ -2473,14 +2629,14 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     position,
                     0,
                     10U);
-                FinishTask(state, slot, false);
+                FinishTask(state, slot, false, RuntimeExecutionResult::Failed);
                 return true;
             }
             ++task.position;
             break;
         case ActionOpcode::Exec: {
             if (task.generation != state.generation.load(std::memory_order_acquire)) {
-                FinishTask(state, slot, true);
+                FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
                 return true;
             }
             TaskCancellationContext cancellationContext{
@@ -2504,7 +2660,10 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                 FinishTask(
                     state,
                     slot,
-                    outcome.result == RuntimeLaunchResult::Cancelled);
+                    outcome.result == RuntimeLaunchResult::Cancelled,
+                    outcome.result == RuntimeLaunchResult::Cancelled
+                        ? RuntimeExecutionResult::Cancelled
+                        : RuntimeExecutionResult::Failed);
                 return true;
             }
             ++task.position;
@@ -2526,7 +2685,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     task.action.value,
                     position,
                     static_cast<std::uint32_t>(result.fault));
-                FinishTask(state, slot, true);
+                FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
             task.position = result.value.booleanValue
@@ -2547,7 +2706,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     task.action.value,
                     position,
                     static_cast<std::uint32_t>(result.fault));
-                FinishTask(state, slot, true);
+                FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
             task.repeatFrames[instruction.operand0] = {
@@ -2573,7 +2732,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     task.action.value,
                     position,
                     11U);
-                FinishTask(state, slot, true);
+                FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
             ++frame.index;
@@ -2586,7 +2745,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             task.status.store(TaskStatus::Ready, std::memory_order_release);
             return true;
         case ActionOpcode::End:
-            FinishTask(state, slot, false);
+            FinishTask(state, slot, false, RuntimeExecutionResult::Completed);
             return true;
         }
     }
@@ -2598,7 +2757,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         task.action.value,
         task.position,
         12U);
-    FinishTask(state, slot, true);
+    FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
     return true;
 }
 
@@ -2775,14 +2934,16 @@ ProgramRuntime::ProgramRuntime(
     RuntimeOutputPort& outputPort,
     RuntimeRoutePort& routePort,
     RuntimeProcessLauncher& processLauncher,
-    RuntimeClock& clock)
+    RuntimeClock& clock,
+    RuntimeDebugEventPort* debugPort)
     : impl_(std::make_unique<Impl>(
           capacities,
           controlPort,
           outputPort,
           routePort,
           processLauncher,
-          clock))
+          clock,
+          debugPort))
 {
 }
 

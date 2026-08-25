@@ -2,7 +2,7 @@
 
 ## 状态
 
-输入调试从提交 `3aed66f2d424384dc7c7c52dbffe19e1cd53bfbd` 或其后继版本开始开发。Phase 7 和 Phase 8 是实现阶段，Phase 9 App 与 Phase 10 TUI 目前只保存部分提案。
+输入调试从提交 `3aed66f2d424384dc7c7c52dbffe19e1cd53bfbd` 或其后继版本开始开发。Phase 7 已完成并归档，Phase 8 是当前实现阶段，Phase 9 App 与 Phase 10 TUI 目前只保存部分提案。
 
 ## 简化结构
 
@@ -31,14 +31,14 @@ App 负责启动调试执行器并持有 `DebugClient`。`InputWeaver.exe` 只�
 
 | 阶段 | 状态 | 内容 |
 | --- | --- | --- |
-| Phase 7: Input Debug Producer | 实现计划 | `InputWeaver.exe` 发布有界的追加型调试事件。 |
-| Phase 8: Debug Client | 实现计划 | 连接调试管道并把事件流归约为只读状态。 |
+| Phase 7: Input Debug Producer | 完成并归档 | `InputWeaver.exe` 发布有界的追加型调试事件。 |
+| Phase 8: Debug Client | 当前实现阶段 | 连接调试管道并把事件流归约为只读状态。 |
 | Phase 9: App | 部分提案 | 设计程序模型、进程生命周期和单一调试会话。 |
 | Phase 10: TUI | 部分提案 | 设计终端交互和显示方式。 |
 
 ## 文档入口
 
-- Phase 7：`development/phase-7-input-debug-producer/Plan.md` 与 `TargetDataContract.md`。
+- Phase 7：`development/legacy/phase-7-input-debug-producer/Plan.md`、`TargetDataContract.md` 与 `Verification.md`。
 - Phase 8：`development/phase-8-debug-client/Plan.md`。
 - Phase 9：`development/phase-9-app/Proposal.md`。
 - Phase 10：`development/phase-10-tui/Proposal.md`。

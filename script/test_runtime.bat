@@ -12,8 +12,32 @@ if not exist "bin\WindowsRuntimeAdapterTests.exe" (
     exit /b 2
 )
 
+if not exist "bin\DebugProtocolTests.exe" (
+    echo DebugProtocolTests.exe is missing. Run script\build_runtime_tests.bat first.
+    exit /b 2
+)
+
+if not exist "bin\WindowsDebugServerTests.exe" (
+    echo WindowsDebugServerTests.exe is missing. Run script\build_runtime_tests.bat first.
+    exit /b 2
+)
+
+if not exist "bin\RuntimeCliTests.exe" (
+    echo RuntimeCliTests.exe is missing. Run script\build_runtime_tests.bat first.
+    exit /b 2
+)
+
 "bin\ProgramRuntimeTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
 "bin\WindowsRuntimeAdapterTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"bin\DebugProtocolTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"bin\WindowsDebugServerTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"bin\RuntimeCliTests.exe"
 exit /b %errorlevel%

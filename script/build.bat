@@ -26,7 +26,9 @@ echo [2/5] Building InputWeaver.exe...
     "src\platform\windows\runtime\runtime_control_catalog.cpp" ^
     "src\platform\windows\runtime\runtime_process_launcher.cpp" ^
     "src\platform\windows\runtime\runtime_route_adapter.cpp" ^
+    "src\platform\windows\debug\debug_server.cpp" ^
     "src\platform\windows\diagnostics\diagnostic_log.cpp" ^
+    "src\debug\debug_protocol.cpp" ^
     "src\runtime\artifact_loader.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
