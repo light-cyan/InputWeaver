@@ -17,6 +17,16 @@ if not exist "bin\DebugProtocolTests.exe" (
     exit /b 2
 )
 
+if not exist "bin\DebugClientTests.exe" (
+    echo DebugClientTests.exe is missing. Run script\build_runtime_tests.bat first.
+    exit /b 2
+)
+
+if not exist "bin\WindowsDebugClientTests.exe" (
+    echo WindowsDebugClientTests.exe is missing. Run script\build_runtime_tests.bat first.
+    exit /b 2
+)
+
 if not exist "bin\WindowsDebugServerTests.exe" (
     echo WindowsDebugServerTests.exe is missing. Run script\build_runtime_tests.bat first.
     exit /b 2
@@ -34,6 +44,12 @@ if errorlevel 1 exit /b %errorlevel%
 if errorlevel 1 exit /b %errorlevel%
 
 "bin\DebugProtocolTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"bin\DebugClientTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+"bin\WindowsDebugClientTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
 "bin\WindowsDebugServerTests.exe"

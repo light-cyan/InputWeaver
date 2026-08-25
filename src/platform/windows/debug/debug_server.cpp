@@ -1052,7 +1052,9 @@ bool WindowsDebugServer::Publish(const RuntimeDebugEvent& event) noexcept
     ProducerRecord record{};
     record.kind = ProducerRecordKind::RuntimeEvent;
     record.captureEpoch = eventEpoch;
-    record.captureTimeNanoseconds = impl_->CaptureTimeNanoseconds();
+    if (event.kind != RuntimeDebugEventKind::ExecutionEnded) {
+        record.captureTimeNanoseconds = impl_->CaptureTimeNanoseconds();
+    }
     record.runtime = event;
     record.runtime.captureEpoch = eventEpoch;
     return impl_->PushRecord(record);

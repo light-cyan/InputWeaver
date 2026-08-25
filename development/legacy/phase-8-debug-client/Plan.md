@@ -15,7 +15,7 @@ Phase 7 事件契约已完成并归档。本文件是当前 Phase 8 实现计划
 | 数据 | 归约方式 |
 | --- | --- |
 | 输入事件 | 按接收顺序保存最近事件。 |
-| 按键状态 | `CaptureStarted` 时清空；按控件和来源归约 `INIT/Down/Up`，同一来源再次 `Down` 记为重复。 |
+| Pressed state | Clear on `CaptureStarted`; reduce `INIT/Down/Up` by control and origin, classify another `Down` from the same origin as repeated, and classify an `Up` without a corresponding pressed origin as `unmatchedUp`. |
 | 规则执行 | `RuleMatched` 建立条目，`ActionStarted` 更新步骤，`ExecutionEnded` 记录结果。 |
 | 运行异常 | 保存最近 `RuntimeIssue`，并标记是否影响当前捕获可信度。 |
 
@@ -31,7 +31,7 @@ Phase 7 事件契约已完成并归档。本文件是当前 Phase 8 实现计划
 - 完整编译动作程序。
 - 当前指令下标。
 - 最近三个 `ActionStarted` 指令下标，最新项排在最后。
-- 可选的 `Completed/Failed/Cancelled` 结果及结束时间。
+- An optional `Completed/Failed/Cancelled` result.
 
 收到第四个步骤时删除最旧步骤。完整动作程序只在 `RuleMatched` 时建立；后续步骤消息只携带标记和下标。结束时清除当前下标并保留最近步骤，界面可据此显示快速执行轨迹，但颜色和闪烁由 TUI 决定。
 

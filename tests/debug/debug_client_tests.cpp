@@ -1,0 +1,579 @@
+#include "debug/debug_client.hpp"
+
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include <string_view>
+
+namespace {
+
+int gFailureCount = 0;
+
+void Check(bool condition, std::string_view name)
+{
+    if (!condition) {
+        ++gFailureCount;
+        std::cerr << "FAIL: " << name << '\n';
+    }
+}
+
+[[nodiscard]] inputweaver::debug::Message MakeMessage(
+    inputweaver::debug::MessageKind kind,
+    std::uint64_t sequence,
+    std::uint64_t epoch = 1U,
+    std::uint64_t session = 17U)
+{
+    inputweaver::debug::Message message{};
+    message.header.kind = kind;
+    message.header.targetSessionId = session;
+    message.header.captureEpoch = epoch;
+    message.header.protocolSequence = sequence;
+    message.header.captureTimeNanoseconds = static_cast<std::int64_t>(
+        sequence * 100U);
+    return message;
+}
+
+[[nodiscard]] inputweaver::debug::Message MakeInput(
+    std::uint64_t protocolSequence,
+    std::uint64_t inputSequence,
+    std::uint32_t virtualKey,
+    inputweaver::Transition transition,
+    inputweaver::InputOrigin origin,
+    std::uint64_t epoch = 1U)
+{
+    auto message = MakeMessage(
+        inputweaver::debug::MessageKind::InputEvent,
+        protocolSequence,
+        epoch);
+    message.inputEvent.inputSequence = inputSequence;
+    message.inputEvent.device = inputweaver::DeviceKind::Keyboard;
+    message.inputEvent.transition = transition;
+    message.inputEvent.origin = origin;
+    message.inputEvent.disposition = origin == inputweaver::InputOrigin::InitialSample
+        ? inputweaver::debug::InputDisposition::NotApplicable
+        : inputweaver::debug::InputDisposition::Forward;
+    message.inputEvent.virtualKey = virtualKey;
+    message.inputEvent.scanCode = virtualKey;
+    return message;
+}
+
+void BeginCapture(
+    inputweaver::debug::DebugStateReducer& reducer,
+    std::uint64_t epoch = 1U)
+{
+    reducer.Connected(17U);
+    reducer.CaptureRequested();
+    Check(
+        reducer.Accept(MakeMessage(
+            inputweaver::debug::MessageKind::CaptureStarted,
+            1U,
+            epoch)) == inputweaver::debug::DebugReductionAction::None,
+        "capture starts");
+}
+
+void TestOriginsAndPressedState()
+{
+    using inputweaver::InputOrigin;
+    Check(
+        inputweaver::debug::InputOriginLabel(InputOrigin::PhysicalCandidate)
+            == "PHY",
+        "physical origin label is PHY");
+    Check(
+        inputweaver::debug::InputOriginLabel(
+            InputOrigin::CurrentInstanceInjected) == "ECHO",
+        "current injection origin label is ECHO");
+    Check(
+        inputweaver::debug::InputOriginLabel(InputOrigin::ExternalInjected)
+            == "EXT",
+        "external injection origin label is EXT");
+    Check(
+        inputweaver::debug::InputOriginLabel(InputOrigin::InitialSample)
+            == "INIT",
+        "initial sample origin label is INIT");
+
+    inputweaver::debug::DebugStateReducer reducer;
+    BeginCapture(reducer);
+    const auto captureState = reducer.ReadState();
+    Check(
+        reducer.Accept(MakeInput(
+            2U,
+            1U,
+            65U,
+            inputweaver::Transition::Down,
+            InputOrigin::InitialSample))
+            == inputweaver::debug::DebugReductionAction::None,
+        "INIT Down is accepted");
+    auto state = reducer.ReadState();
+    Check(
+        state != captureState && state->version > captureState->version
+            && captureState->recentInputEvents.empty(),
+        "ReadState publishes an immutable versioned snapshot");
+    Check(
+        state->pressedControls.size() == 1U
+            && state->pressedControls[0].origin == InputOrigin::InitialSample,
+        "INIT creates initial pressed state");
+
+    Check(
+        reducer.Accept(MakeInput(
+            3U,
+            2U,
+            65U,
+            inputweaver::Transition::Down,
+            InputOrigin::PhysicalCandidate))
+            == inputweaver::debug::DebugReductionAction::None,
+        "concrete Down replaces INIT");
+    state = reducer.ReadState();
+    Check(
+        state->pressedControls.size() == 1U
+            && state->pressedControls[0].origin
+                == InputOrigin::PhysicalCandidate,
+        "concrete origin replaces INIT state");
+    Check(
+        state->recentInputEvents.back().repeatedDown,
+        "first concrete Down after INIT is a repeat");
+
+    Check(
+        reducer.Accept(MakeInput(
+            4U,
+            3U,
+            65U,
+            inputweaver::Transition::Down,
+            InputOrigin::PhysicalCandidate))
+            == inputweaver::debug::DebugReductionAction::None,
+        "repeated concrete Down is accepted");
+    state = reducer.ReadState();
+    Check(
+        state->recentInputEvents.back().repeatedDown,
+        "same-origin Down is a repeat");
+
+    Check(
+        reducer.Accept(MakeInput(
+            5U,
+            4U,
+            65U,
+            inputweaver::Transition::Up,
+            InputOrigin::PhysicalCandidate))
+            == inputweaver::debug::DebugReductionAction::None,
+        "concrete Up is accepted");
+    state = reducer.ReadState();
+    Check(
+        state->pressedControls.empty()
+            && !state->recentInputEvents.back().unmatchedUp,
+        "matched Up clears pressed state");
+
+    Check(
+        reducer.Accept(MakeInput(
+            6U,
+            5U,
+            66U,
+            inputweaver::Transition::Down,
+            InputOrigin::InitialSample))
+            == inputweaver::debug::DebugReductionAction::None,
+        "second INIT Down is accepted");
+    Check(
+        reducer.Accept(MakeInput(
+            7U,
+            6U,
+            66U,
+            inputweaver::Transition::Up,
+            InputOrigin::ExternalInjected))
+            == inputweaver::debug::DebugReductionAction::None,
+        "first concrete Up removes INIT");
+    Check(
+        reducer.ReadState()->pressedControls.empty()
+            && !reducer.ReadState()->recentInputEvents.back().unmatchedUp,
+        "concrete Up clears temporary INIT state");
+
+    Check(
+        reducer.Accept(MakeInput(
+            8U,
+            7U,
+            67U,
+            inputweaver::Transition::Down,
+            InputOrigin::CurrentInstanceInjected))
+            == inputweaver::debug::DebugReductionAction::None,
+        "ordinary Down without INIT is accepted");
+    state = reducer.ReadState();
+    Check(
+        !state->recentInputEvents.back().repeatedDown
+            && state->pressedControls.back().origin
+                == InputOrigin::CurrentInstanceInjected,
+        "ordinary first Down is not a repeat");
+
+    Check(
+        reducer.Accept(MakeInput(
+            9U,
+            8U,
+            68U,
+            inputweaver::Transition::Up,
+            InputOrigin::ExternalInjected))
+            == inputweaver::debug::DebugReductionAction::None,
+        "Up without a matching pressed origin is accepted");
+    state = reducer.ReadState();
+    Check(
+        state->recentInputEvents.back().unmatchedUp
+            && state->pressedControls.size() == 1U,
+        "unmatched Up is classified without changing pressed state");
+}
+
+[[nodiscard]] inputweaver::debug::Message MakeMatched(
+    std::uint64_t protocolSequence,
+    std::uint64_t marker,
+    std::uint64_t triggerInputSequence)
+{
+    auto message = MakeMessage(
+        inputweaver::debug::MessageKind::RuleMatched,
+        protocolSequence);
+    message.ruleMatched.executionMarker = marker;
+    message.ruleMatched.triggerInputSequence = triggerInputSequence;
+    message.ruleMatched.eventTransition = inputweaver::EventTransition::Down;
+    message.ruleMatched.eventControl = {1U, 7U, 4U, 0U};
+    message.ruleMatched.conditionInstructions.push_back({
+        inputweaver::ExpressionOpcode::PushBoolean,
+        inputweaver::ExpressionType::Boolean,
+        1U,
+        0U});
+    for (std::uint32_t index = 0U; index < 5U; ++index) {
+        message.ruleMatched.actionInstructions.push_back({
+            index == 4U
+                ? inputweaver::ActionOpcode::End
+                : inputweaver::ActionOpcode::Wait,
+            index,
+            0U});
+    }
+    return message;
+}
+
+[[nodiscard]] inputweaver::debug::Message MakeAction(
+    std::uint64_t protocolSequence,
+    std::uint64_t marker,
+    std::uint32_t instructionIndex)
+{
+    auto message = MakeMessage(
+        inputweaver::debug::MessageKind::ActionStarted,
+        protocolSequence);
+    message.actionStarted.executionMarker = marker;
+    message.actionStarted.instructionIndex = instructionIndex;
+    return message;
+}
+
+[[nodiscard]] inputweaver::debug::Message MakeEnded(
+    std::uint64_t protocolSequence,
+    std::uint64_t marker,
+    inputweaver::RuntimeExecutionResult result)
+{
+    auto message = MakeMessage(
+        inputweaver::debug::MessageKind::ExecutionEnded,
+        protocolSequence);
+    message.executionEnded.executionMarker = marker;
+    message.executionEnded.result = result;
+    return message;
+}
+
+[[nodiscard]] const inputweaver::debug::DebugRuleExecution* FindExecution(
+    const inputweaver::debug::DebugClientState& state,
+    std::uint64_t marker)
+{
+    for (const auto& execution : state.ruleExecutions) {
+        if (execution.executionMarker == marker) {
+            return &execution;
+        }
+    }
+    return nullptr;
+}
+
+void TestRuleCorrelationAndInterleaving()
+{
+    inputweaver::debug::DebugStateReducer reducer;
+    BeginCapture(reducer);
+    Check(
+        reducer.Accept(MakeMatched(2U, 11U, 1U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "first RuleMatched waits for its input");
+    Check(
+        reducer.Accept(MakeAction(3U, 11U, 0U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "pending execution accepts ActionStarted");
+    Check(
+        reducer.Accept(MakeMatched(4U, 22U, 2U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "second marker interleaves");
+    Check(
+        reducer.Accept(MakeAction(5U, 22U, 2U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "second marker tracks its own step");
+    Check(
+        reducer.ReadState()->ruleExecutions.empty(),
+        "pending current steps remain isolated until trigger association");
+    for (std::uint64_t sequence = 6U; sequence <= 9U; ++sequence) {
+        Check(
+            reducer.Accept(MakeAction(
+                sequence,
+                11U,
+                static_cast<std::uint32_t>(sequence - 5U)))
+                == inputweaver::debug::DebugReductionAction::None,
+            "first marker advances action");
+    }
+    Check(
+        reducer.Accept(MakeEnded(
+            10U,
+            11U,
+            inputweaver::RuntimeExecutionResult::Completed))
+            == inputweaver::debug::DebugReductionAction::None,
+        "pending execution completes");
+    Check(
+        reducer.Accept(MakeEnded(
+            11U,
+            22U,
+            inputweaver::RuntimeExecutionResult::Failed))
+            == inputweaver::debug::DebugReductionAction::None,
+        "interleaved execution fails independently");
+    Check(
+        reducer.ReadState()->ruleExecutions.empty(),
+        "entries are not formed before trigger inputs arrive");
+
+    Check(
+        reducer.Accept(MakeInput(
+            12U,
+            1U,
+            65U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::PhysicalCandidate))
+            == inputweaver::debug::DebugReductionAction::None,
+        "first trigger input materializes its execution");
+    Check(
+        reducer.Accept(MakeInput(
+            13U,
+            2U,
+            66U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::ExternalInjected))
+            == inputweaver::debug::DebugReductionAction::None,
+        "second trigger input materializes its execution");
+    auto state = reducer.ReadState();
+    const auto* first = FindExecution(*state, 11U);
+    const auto* second = FindExecution(*state, 22U);
+    Check(
+        first != nullptr && first->program != nullptr
+            && first->matchedTimeNanoseconds == 200
+            && first->triggerInput.captureTimeNanoseconds == 1200
+            && first->program->conditionInstructions.size() == 1U
+            && first->program->actionInstructions.size() == 5U,
+        "execution keeps display times, condition, and complete action program");
+    Check(
+        first != nullptr && !first->currentInstructionIndex.has_value()
+            && first->recentInstructionIndices
+                == std::vector<std::uint32_t>({2U, 3U, 4U})
+            && first->result
+                == inputweaver::RuntimeExecutionResult::Completed,
+        "execution keeps the latest three steps and completed result");
+    Check(
+        second != nullptr && !second->currentInstructionIndex.has_value()
+            && second->recentInstructionIndices
+                == std::vector<std::uint32_t>({2U})
+            && second->result == inputweaver::RuntimeExecutionResult::Failed,
+        "interleaved marker keeps an independent failed result");
+
+    Check(
+        reducer.Accept(MakeMatched(14U, 33U, 3U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "third execution waits for input");
+    Check(
+        reducer.Accept(MakeAction(
+            15U,
+            33U,
+            1U))
+            == inputweaver::debug::DebugReductionAction::None,
+        "third execution records a current instruction");
+    Check(
+        reducer.Accept(MakeInput(
+            16U,
+            3U,
+            67U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::CurrentInstanceInjected))
+            == inputweaver::debug::DebugReductionAction::None,
+        "active execution receives trigger input");
+    state = reducer.ReadState();
+    auto* third = FindExecution(*state, 33U);
+    Check(
+        third != nullptr && third->currentInstructionIndex == 1U
+            && !third->result.has_value(),
+        "current instruction remains visible while execution is active");
+    Check(
+        reducer.Accept(MakeEnded(
+            17U,
+            33U,
+            inputweaver::RuntimeExecutionResult::Cancelled))
+            == inputweaver::debug::DebugReductionAction::None,
+        "cancelled result is accepted");
+    state = reducer.ReadState();
+    third = FindExecution(*state, 33U);
+    Check(
+        third != nullptr && !third->currentInstructionIndex.has_value()
+            && third->result == inputweaver::RuntimeExecutionResult::Cancelled,
+        "cancelled result is retained");
+}
+
+void TestIssuesAndRecovery()
+{
+    inputweaver::debug::DebugStateReducer reducer;
+    BeginCapture(reducer, 4U);
+    auto issue = MakeMessage(
+        inputweaver::debug::MessageKind::RuntimeIssue,
+        2U,
+        4U);
+    issue.runtimeIssue.issue.kind =
+        inputweaver::RuntimeDiagnosticKind::TaskActionFault;
+    Check(
+        reducer.Accept(issue) == inputweaver::debug::DebugReductionAction::None,
+        "runtime diagnostic is retained");
+    auto state = reducer.ReadState();
+    Check(
+        state->runtimeIssues.size() == 1U && state->captureTrusted,
+        "ordinary runtime issue does not invalidate the stream");
+
+    issue.header.protocolSequence = 3U;
+    issue.runtimeIssue.code = inputweaver::debug::IssueCode::DebugStreamOverflow;
+    issue.runtimeIssue.droppedRecords = 9U;
+    Check(
+        reducer.Accept(issue)
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "stream loss requests a new capture");
+    state = reducer.ReadState();
+    Check(
+        !state->captureTrusted && !state->capturing
+            && state->runtimeIssues.size() == 2U
+            && state->lastFault
+                == inputweaver::debug::DebugClientFault::DebugStreamLost,
+        "stream loss preserves issue history and marks state untrusted");
+
+    Check(
+        reducer.Accept(MakeMessage(
+            inputweaver::debug::MessageKind::CaptureStarted,
+            4U,
+            5U)) == inputweaver::debug::DebugReductionAction::None,
+        "fresh CaptureStarted restores trust");
+    state = reducer.ReadState();
+    Check(
+        state->captureTrusted && state->capturing
+            && state->captureEpoch == 5U
+            && state->runtimeIssues.empty(),
+        "fresh capture clears prior-cycle derived state");
+
+    Check(
+        reducer.Accept(MakeInput(
+            6U,
+            1U,
+            70U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::PhysicalCandidate,
+            5U)) == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "protocol sequence gap requests capture restart");
+    state = reducer.ReadState();
+    Check(
+        state->lastFault
+            == inputweaver::debug::DebugClientFault::ProtocolSequenceMismatch,
+        "protocol sequence fault is published");
+}
+
+void TestStrictValidationAndCapacity()
+{
+    inputweaver::debug::DebugStateReducer reducer;
+    BeginCapture(reducer);
+    auto wrongSession = MakeInput(
+        2U,
+        1U,
+        65U,
+        inputweaver::Transition::Down,
+        inputweaver::InputOrigin::PhysicalCandidate);
+    wrongSession.header.targetSessionId = 18U;
+    Check(
+        reducer.Accept(wrongSession)
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "target session mismatch requests restart");
+    Check(
+        reducer.ReadState()->lastFault
+            == inputweaver::debug::DebugClientFault::SessionMismatch,
+        "session mismatch fault is published");
+
+    inputweaver::debug::DebugStateReducer epochReducer;
+    BeginCapture(epochReducer);
+    Check(
+        epochReducer.Accept(MakeInput(
+            2U,
+            1U,
+            65U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::PhysicalCandidate,
+            2U)) == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "capture epoch mismatch requests restart");
+    Check(
+        epochReducer.ReadState()->lastFault
+            == inputweaver::debug::DebugClientFault::CaptureEpochMismatch,
+        "capture epoch fault is published");
+
+    inputweaver::debug::DebugStateReducer markerReducer;
+    BeginCapture(markerReducer);
+    Check(
+        markerReducer.Accept(MakeAction(2U, 999U, 0U))
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "unknown marker requests restart");
+    Check(
+        markerReducer.ReadState()->lastFault
+            == inputweaver::debug::DebugClientFault::UnknownExecutionMarker,
+        "unknown marker fault is published");
+
+    inputweaver::debug::DebugClientCapacities capacities{};
+    capacities.maximumPressedControls = 1U;
+    inputweaver::debug::DebugStateReducer capacityReducer(capacities);
+    BeginCapture(capacityReducer);
+    Check(
+        capacityReducer.Accept(MakeInput(
+            2U,
+            1U,
+            65U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::InitialSample))
+            == inputweaver::debug::DebugReductionAction::None,
+        "first pressed control fits capacity");
+    Check(
+        capacityReducer.Accept(MakeInput(
+            3U,
+            2U,
+            66U,
+            inputweaver::Transition::Down,
+            inputweaver::InputOrigin::InitialSample))
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "pressed-state capacity overflow requests restart");
+    Check(
+        capacityReducer.ReadState()->lastFault
+            == inputweaver::debug::DebugClientFault::CapacityExceeded,
+        "capacity fault is published");
+
+    inputweaver::debug::DebugStateReducer corruptReducer;
+    BeginCapture(corruptReducer);
+    Check(
+        corruptReducer.RejectFrame()
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "corrupt frame requests restart");
+    Check(
+        !corruptReducer.ReadState()->captureTrusted,
+        "corrupt frame invalidates current state");
+}
+
+} // namespace
+
+int main()
+{
+    TestOriginsAndPressedState();
+    TestRuleCorrelationAndInterleaving();
+    TestIssuesAndRecovery();
+    TestStrictValidationAndCapacity();
+    if (gFailureCount != 0) {
+        std::cerr << gFailureCount << " debug client test(s) failed.\n";
+        return 1;
+    }
+    std::cout << "Debug client tests passed.\n";
+    return 0;
+}

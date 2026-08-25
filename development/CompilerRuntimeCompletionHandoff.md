@@ -50,6 +50,14 @@ The implemented language supports target declarations, constants, typed user var
 
 `docs/language/grammar.v1.md` defines the base source language, while `docs/language/grammar.v2.md` and `docs/language/grammar.v2.ebnf` define the current control-name extension. `InputWeaverCompiler.exe validate` is the canonical command for checking a source file against that contract.
 
+## In-process debug client interface
+
+`inputweaver::debug::DebugClient` is the platform-independent in-process client interface, and `inputweaver::win32::WindowsDebugClient` is its Windows named-pipe implementation. The delivered operations are `Connect(ProcessIdentity, debugToken)`, `StartCapture()`, `StopCapture()`, `RequestExecutorStop()`, `ReadState()`, and `Disconnect()`.
+
+`Connect` validates the selected running process, pipe-server PID, protocol negotiation, and target session. The client does not start, stop, or otherwise manage `InputWeaver.exe`; `RequestExecutorStop` only sends the existing protocol command.
+
+`ReadState()` returns a versioned `shared_ptr<const DebugClientState>` snapshot derived locally from the Phase 7 event stream. The state contains bounded recent input events, source-aware pressed controls, correlated rule executions, recent runtime issues, and capture trust. A sequence, session, epoch, frame, marker, consistency, stream-loss, or local-capacity fault invalidates the current reduction and requests a fresh capture; a later `CaptureStarted` establishes the new trusted state.
+
 ## Runtime contract
 
 - Temporary foreground loss cancels target-bound mappings and pending actions, releases owned outputs, and permits fresh input after the target returns.

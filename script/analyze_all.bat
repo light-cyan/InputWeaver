@@ -6,17 +6,17 @@ set "INPUTWEAVER_CXX=g++"
 set "INPUTWEAVER_ANALYZE=-std=c++20 -O0 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -fanalyzer -fsyntax-only -DUNICODE -D_UNICODE -Isrc"
 set /a INPUTWEAVER_ANALYZED=0
 
-for /f "delims=" %%F in ('git ls-files "src/*.cpp"') do (
+for /f "delims=" %%F in ('git ls-files --cached --others --exclude-standard "src/*.cpp"') do (
     call :analyze "%%F"
     if errorlevel 1 exit /b 1
 )
 
 if !INPUTWEAVER_ANALYZED! equ 0 (
-    echo No tracked source implementation was classified for static analysis.
+    echo No source implementation was classified for static analysis.
     exit /b 1
 )
 
-echo Static analysis completed successfully for !INPUTWEAVER_ANALYZED! tracked implementations.
+echo Static analysis completed successfully for !INPUTWEAVER_ANALYZED! source implementations.
 exit /b 0
 
 :analyze

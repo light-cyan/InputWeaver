@@ -30,7 +30,13 @@ PASS forwarded | DROP suppressed
 
 事件区保存独立的按下和松开记录。状态区由 `DebugClient` 根据事件流生成，释放立即移出按下状态。
 
+Each event row displays `DebugInputEvent::captureTimeNanoseconds` together with the control, transition, origin, disposition, `repeatedDown`, and `unmatchedUp` classification.
+
 规则执行条目使用两行：第一行显示触发事件、命中规则和结束结果；第二行显示完整编译动作程序并定位当前步骤。`DebugClient` 同时保留最近三个步骤，供快速执行时展示轨迹。
+
+The first rule-execution row displays `DebugRuleExecution::matchedTimeNanoseconds` together with the trigger event, matched event rule, condition program, and execution result.
+
+The second rule-execution row displays the complete compiled action program, highlights `currentInstructionIndex`, and renders the three entries in `recentInstructionIndices` with distinct color intensities while preserving their oldest-to-newest order.
 
 `INIT` 事件没有处理结果。`ECHO` 表示当前实例生成的输入再次被当前实例观察到。
 

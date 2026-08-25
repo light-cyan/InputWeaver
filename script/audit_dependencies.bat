@@ -10,13 +10,13 @@ set "INPUTWEAVER_CPP=-std=c++20 -DUNICODE -D_UNICODE -Isrc -MM"
 set "INPUTWEAVER_GENERATE=%INPUTWEAVER_CXX% %INPUTWEAVER_CPP%"
 set /a INPUTWEAVER_AUDITED=0
 
-for /f "delims=" %%F in ('git ls-files "src/*.cpp"') do (
+for /f "delims=" %%F in ('git ls-files --cached --others --exclude-standard "src/*.cpp"') do (
     call :classify_and_check "%%F"
     if errorlevel 1 exit /b 1
 )
 
 if !INPUTWEAVER_AUDITED! equ 0 (
-    echo No tracked source implementation was classified for dependency audit.
+    echo No source implementation was classified for dependency audit.
     exit /b 1
 )
 
@@ -59,7 +59,7 @@ if exist "src\ui" (
 )
 
 del /q "%INPUTWEAVER_DEPENDENCIES%" >nul 2>nul
-echo Dependency audit completed successfully for !INPUTWEAVER_AUDITED! tracked implementations.
+echo Dependency audit completed successfully for !INPUTWEAVER_AUDITED! source implementations.
 exit /b 0
 
 :classify_and_check

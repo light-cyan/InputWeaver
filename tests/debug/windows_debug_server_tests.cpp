@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include "debug/debug_protocol.hpp"
+#include "platform/windows/debug/debug_client.hpp"
 #include "platform/windows/debug/debug_server.hpp"
 #include "program/compiled_program.hpp"
 #include "../program/compiled_program_fixtures.hpp"
@@ -202,6 +203,19 @@ void Stop(void* context) noexcept
     return inputweaver::win32::DebugCaptureRequest::None;
 }
 
+template <typename Predicate>
+[[nodiscard]] bool WaitUntil(Predicate predicate)
+{
+    const ULONGLONG deadline = GetTickCount64() + 5000U;
+    do {
+        if (predicate()) {
+            return true;
+        }
+        Sleep(1U);
+    } while (GetTickCount64() < deadline);
+    return predicate();
+}
+
 void TestPipeSession()
 {
     inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
@@ -346,6 +360,11 @@ void TestPipeSession()
                     received.message.ruleMatched.actionInstructions.size() == 2U,
                     "pipe worker expands the complete compiled action program");
             }
+            if (index == 4U) {
+                Check(
+                    received.message.header.captureTimeNanoseconds == 0,
+                    "execution end does not sample or publish an end time");
+            }
         }
     }
 
@@ -422,11 +441,133 @@ void TestPipeSession()
     server.Stop();
 }
 
+void TestDebugClientIntegration()
+{
+    inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
+        inputweaver::test::MakeTapFixtureStorage());
+    Check(
+        finalized.program != nullptr && finalized.errors.empty(),
+        "debug client integration fixture finalizes");
+    if (finalized.program == nullptr) {
+        return;
+    }
+    CallbackState callbacks;
+    inputweaver::win32::WindowsDebugServer server;
+    const std::wstring token = L"integration-"
+        + std::to_wstring(GetCurrentProcessId())
+        + L"-"
+        + std::to_wstring(GetTickCount64());
+    std::wstring error;
+    Check(
+        server.Start(
+            token,
+            finalized.program,
+            {&callbacks, &Wake, &Stop},
+            error),
+        "debug server starts for DebugClient integration");
+    if (!error.empty()) {
+        std::wcerr << L"Debug client integration error: " << error << L'\n';
+    }
+
+    inputweaver::win32::WindowsDebugClient client;
+    const std::string narrowToken(token.begin(), token.end());
+    Check(
+        client.Connect({GetCurrentProcessId()}, narrowToken).Succeeded(),
+        "DebugClient connects to WindowsDebugServer");
+    Check(client.StartCapture().Succeeded(), "DebugClient starts capture");
+    Check(
+        WaitForRequest(server)
+            == inputweaver::win32::DebugCaptureRequest::Start,
+        "DebugClient StartCapture reaches WindowsDebugServer");
+
+    inputweaver::debug::InputEventPayload initial{};
+    initial.device = inputweaver::DeviceKind::Keyboard;
+    initial.virtualKey = 65U;
+    initial.scanCode = 30U;
+    initial.hasCompiledControl = true;
+    initial.compiledIdentity = finalized.program->Controls()[1U];
+    Check(
+        server.BeginCapture(std::span<const inputweaver::debug::InputEventPayload>{
+            &initial,
+            1U}),
+        "WindowsDebugServer publishes the integration capture boundary");
+    Check(
+        WaitUntil([&] {
+            const auto state = client.ReadState();
+            return state->capturing && state->captureTrusted
+                && state->pressedControls.size() == 1U
+                && state->pressedControls[0].origin
+                    == inputweaver::InputOrigin::InitialSample;
+        }),
+        "DebugClient derives INIT state from WindowsDebugServer");
+
+    const auto correlation = server.BeginInput();
+    inputweaver::RuntimeDebugEvent matched{};
+    matched.kind = inputweaver::RuntimeDebugEventKind::RuleMatched;
+    matched.captureEpoch = correlation.captureEpoch;
+    matched.executionMarker = 88U;
+    matched.triggerInputSequence = correlation.inputSequence;
+    matched.eventKey = finalized.program->EventBuckets()[0U].key;
+    matched.ruleIndex = 0U;
+    Check(server.Publish(matched), "integration RuleMatched is published");
+    inputweaver::RuntimeDebugEvent action{};
+    action.kind = inputweaver::RuntimeDebugEventKind::ActionStarted;
+    action.captureEpoch = correlation.captureEpoch;
+    action.executionMarker = 88U;
+    action.instructionIndex = 0U;
+    Check(server.Publish(action), "integration ActionStarted is published");
+    inputweaver::RuntimeDebugEvent ended{};
+    ended.kind = inputweaver::RuntimeDebugEventKind::ExecutionEnded;
+    ended.captureEpoch = correlation.captureEpoch;
+    ended.executionMarker = 88U;
+    ended.result = inputweaver::RuntimeExecutionResult::Cancelled;
+    Check(server.Publish(ended), "integration ExecutionEnded is published");
+    inputweaver::debug::InputEventPayload input{};
+    input.device = inputweaver::DeviceKind::Keyboard;
+    input.transition = inputweaver::Transition::Down;
+    input.origin = inputweaver::InputOrigin::ExternalInjected;
+    input.disposition = inputweaver::debug::InputDisposition::Forward;
+    input.virtualKey = 66U;
+    Check(
+        correlation.Active() && server.PublishInput(correlation, input),
+        "integration trigger input is published after RuleMatched");
+    Check(
+        WaitUntil([&] {
+            const auto state = client.ReadState();
+            return state->ruleExecutions.size() == 1U
+                && state->ruleExecutions[0].executionMarker == 88U
+                && state->ruleExecutions[0].result
+                    == inputweaver::RuntimeExecutionResult::Cancelled
+                && state->ruleExecutions[0].program != nullptr
+                && state->ruleExecutions[0].program->actionInstructions.size()
+                    == 2U;
+        }),
+        "DebugClient correlates an early RuleMatched from WindowsDebugServer");
+
+    Check(client.StopCapture().Succeeded(), "DebugClient stops capture");
+    Check(
+        WaitForRequest(server)
+            == inputweaver::win32::DebugCaptureRequest::Stop,
+        "DebugClient StopCapture reaches WindowsDebugServer");
+    server.EndCapture();
+    Check(
+        client.RequestExecutorStop().Succeeded(),
+        "DebugClient requests executor stop");
+    Check(
+        WaitUntil([&] {
+            return callbacks.stopRequested.load(std::memory_order_acquire);
+        }),
+        "DebugClient executor-stop command reaches the callback");
+    client.Disconnect();
+    server.Stop();
+}
+
 } // namespace
 
 int main()
 {
     TestPipeSession();
+    TestDebugClientIntegration();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " Windows debug server test(s) failed.\n";
         return 1;
