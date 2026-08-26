@@ -166,6 +166,7 @@ int RunCompiledInstance(
     inputweaver::WindowsProgramRuntimeSession runtime(
         {
             options.traceInput,
+            options.dryRun,
             options.allowExec,
             selfTag,
             effectiveTargetKind,
@@ -183,6 +184,9 @@ int RunCompiledInstance(
                << (targetContext == nullptr
                     ? L" globally.\n"
                     : L" only while the selected process is foreground.\n")
+               << (options.dryRun
+                    ? L"Dry-run is active; physical input is forwarded and output effects are simulated.\n"
+                    : L"")
                << L"Use the configured physical exit event to stop.\n" << std::flush;
     DWORD waitError = ERROR_SUCCESS;
     const DWORD waitResult = WaitForProgramRuntime(runtime, waitError);

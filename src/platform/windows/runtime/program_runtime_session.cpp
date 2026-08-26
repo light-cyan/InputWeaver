@@ -112,7 +112,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         : options(sessionOptions),
           targetContext(sessionTargetContext),
           diagnosticLog(sessionDiagnosticLog),
-          injector(sessionOptions.selfTag),
+          injector(sessionOptions.selfTag, &::SendInput, sessionOptions.dryRun),
           injectionCircuitBreaker(3U)
     {
         LARGE_INTEGER frequency{};
@@ -355,7 +355,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             record,
             startCounter,
             normalized.control.IsValid());
-        return decision;
+        return options.dryRun ? InputDecision::Forward : decision;
     }
 
     void SetTargetEligible(bool eligible) noexcept override
@@ -628,7 +628,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             routePort = std::make_unique<win32::WindowsRuntimeRoutePort>(
                 targetContext);
             processLauncher = std::make_unique<win32::WindowsProcessLauncher>(
-                options.permitProcessLaunch);
+                options.permitProcessLaunch,
+                options.dryRun);
             clock = std::make_unique<SteadyRuntimeClock>();
             outputPort = std::make_unique<win32::WindowsRuntimeOutputPort>(
                 *controlCatalog,

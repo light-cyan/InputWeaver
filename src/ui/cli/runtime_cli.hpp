@@ -10,6 +10,7 @@ namespace inputweaver::ui::cli {
 struct RuntimeCliOptions final {
     bool showHelp{};
     bool traceInput{};
+    bool dryRun{};
     bool allowExec{};
     bool targetGlobal{};
     std::filesystem::path targetSelector;

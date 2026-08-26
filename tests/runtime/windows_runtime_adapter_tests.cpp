@@ -827,7 +827,7 @@ void TestExecutableResolutionAndCreateContract()
         "resolution failure is reported before process creation");
 
     g_createProcess = {};
-    WindowsProcessLauncher deniedLauncher(false, &FakeCreateProcessW);
+    WindowsProcessLauncher deniedLauncher(false, false, &FakeCreateProcessW);
     const inputweaver::RuntimeLaunchOutcome deniedOutcome =
         deniedLauncher.Launch("cmd.exe /d /c echo denied", {});
     Check(
@@ -837,7 +837,19 @@ void TestExecutableResolutionAndCreateContract()
             && deniedOutcome.platformError == ERROR_ACCESS_DISABLED_BY_POLICY
             && g_createProcess.calls == 0U,
         "denied process launcher never reaches native process creation");
-    WindowsProcessLauncher fakeLauncher(true, &FakeCreateProcessW);
+    WindowsProcessLauncher deniedDryRunLauncher(
+        false,
+        true,
+        &FakeCreateProcessW);
+    const inputweaver::RuntimeLaunchOutcome deniedDryRunOutcome =
+        deniedDryRunLauncher.Launch("cmd.exe /d /c echo denied", {});
+    Check(
+        !deniedDryRunOutcome.Succeeded()
+            && deniedDryRunOutcome.platformError
+                == ERROR_ACCESS_DISABLED_BY_POLICY
+            && g_createProcess.calls == 0U,
+        "dry-run preserves explicit process-launch permission");
+    WindowsProcessLauncher fakeLauncher(true, false, &FakeCreateProcessW);
     const inputweaver::RuntimeLaunchOutcome invalidOutcome =
         fakeLauncher.Launch("\"C:\\missing.exe --arg", {});
     Check(
@@ -870,6 +882,15 @@ void TestExecutableResolutionAndCreateContract()
             && g_createProcess.creationFlags == 0U
             && g_createProcess.environmentNull,
         "CreateProcess inherits environment without inheriting handles or adding flags");
+    const std::size_t createCallsBeforeDryRun = g_createProcess.calls;
+    WindowsProcessLauncher dryRunLauncher(true, true, &FakeCreateProcessW);
+    const inputweaver::RuntimeLaunchOutcome dryRunOutcome =
+        dryRunLauncher.Launch("InputWeaver.NoSuchExecutable.exe --arg", {});
+    Check(
+        dryRunOutcome.Succeeded()
+            && dryRunOutcome.platformError == ERROR_SUCCESS
+            && g_createProcess.calls == createCallsBeforeDryRun,
+        "dry-run process launch succeeds without resolution or CreateProcess");
     const std::size_t successfulCreateCalls = g_createProcess.calls;
     CancellationProbeState cancellation{};
     const inputweaver::RuntimeLaunchOutcome cancelledOutcome =

@@ -11,9 +11,10 @@ void PrintRuntimeUsage(std::ostream& output) {
         << "Usage:\n"
         << "  InputWeaver --program <file.weavec>"
            " [--target <exe-name-or-absolute-path> | --target-global]"
-           " [--allow-exec] [--log <jsonl-path>] [--trace-input]"
+           " [--allow-exec] [--dry-run] [--log <jsonl-path>] [--trace-input]"
            " [--debug-session <opaque-token>]\n\n"
         << "The command-line target overrides the compiled TARGET declaration.\n"
+        << "The --dry-run option forwards physical input and simulates output effects.\n"
         << "Compiled exit rules stop the program; the default is physical Ctrl+Shift+F12.\n";
 }
 
@@ -28,6 +29,8 @@ bool ParseRuntimeCommandLine(
             options.showHelp = true;
         } else if (argument == std::filesystem::path{"--trace-input"}) {
             options.traceInput = true;
+        } else if (argument == std::filesystem::path{"--dry-run"}) {
+            options.dryRun = true;
         } else if (argument == std::filesystem::path{"--allow-exec"}) {
             options.allowExec = true;
         } else if (argument == std::filesystem::path{"--target-global"}) {
@@ -83,6 +86,10 @@ bool ParseRuntimeCommandLine(
     }
     if (options.allowExec && options.programPath.empty()) {
         errorMessage = "--allow-exec is valid only with --program.";
+        return false;
+    }
+    if (options.dryRun && options.programPath.empty()) {
+        errorMessage = "--dry-run is valid only with --program.";
         return false;
     }
     if (options.traceInput && options.jsonlPath.empty()) {

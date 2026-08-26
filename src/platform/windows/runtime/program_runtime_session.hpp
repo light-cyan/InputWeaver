@@ -24,6 +24,7 @@ class TargetProcessContext;
 
 struct WindowsProgramRuntimeSessionOptions final {
     bool traceInput{};
+    bool dryRun{};
     bool permitProcessLaunch{};
     WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};

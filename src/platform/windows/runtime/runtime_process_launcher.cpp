@@ -435,8 +435,9 @@ ExecutableResolutionResult ResolveExecutableCommand(
 
 WindowsProcessLauncher::WindowsProcessLauncher(
     bool permitted,
+    bool dryRun,
     CreateProcessWFunction createProcess) noexcept
-    : permitted_(permitted), createProcess_(createProcess)
+    : permitted_(permitted), dryRun_(dryRun), createProcess_(createProcess)
 {
 }
 
@@ -449,13 +450,21 @@ RuntimeLaunchOutcome WindowsProcessLauncher::Launch(
     std::string_view command,
     RuntimeCancellationProbe cancellation) noexcept
 {
-    if (!permitted_ || createProcess_ == nullptr) {
+    if (!permitted_) {
         return {
             RuntimeLaunchResult::CreationFailed,
             ERROR_ACCESS_DISABLED_BY_POLICY};
     }
     if (cancellation.Invoke()) {
         return {RuntimeLaunchResult::Cancelled, ERROR_SUCCESS};
+    }
+    if (dryRun_) {
+        return {RuntimeLaunchResult::Launched, ERROR_SUCCESS};
+    }
+    if (createProcess_ == nullptr) {
+        return {
+            RuntimeLaunchResult::CreationFailed,
+            ERROR_ACCESS_DISABLED_BY_POLICY};
     }
     ExecutableResolutionResult resolved = ResolveExecutableCommand(command);
     if (!resolved.Succeeded()) {

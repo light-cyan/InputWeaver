@@ -33,6 +33,7 @@ int wmain(int argumentCount, wchar_t** arguments) {
 
     inputweaver::win32::WindowsExecutorOptions executor;
     executor.traceInput = options.traceInput;
+    executor.dryRun = options.dryRun;
     executor.allowExec = options.allowExec;
     executor.targetGlobal = options.targetGlobal;
     executor.targetSelector = options.targetSelector.wstring();

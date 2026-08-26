@@ -280,6 +280,20 @@ void TestInjectorSafety() {
             && g_fakeSendState.count == 1U,
         "one output uses one SendInput call");
 
+    ResetFakeSend();
+    const inputweaver::InputInjector dryRunInjector(
+        selfTag,
+        &FakeSendInput,
+        true);
+    const inputweaver::InjectionResult simulated =
+        dryRunInjector.Inject(keyboardOutput);
+    Check(
+        simulated.Succeeded()
+            && simulated.requested == 0U
+            && simulated.sent == 0U
+            && g_fakeSendState.callCount == 0U,
+        "dry-run output succeeds without calling SendInput");
+
     ResetFakeSend(true);
     const inputweaver::InjectionResult failed = injector.Inject(keyboardOutput);
     Check(

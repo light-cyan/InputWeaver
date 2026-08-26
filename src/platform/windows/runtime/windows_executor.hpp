@@ -7,6 +7,7 @@ namespace inputweaver::win32 {
 
 struct WindowsExecutorOptions final {
     bool traceInput{};
+    bool dryRun{};
     bool allowExec{};
     bool targetGlobal{};
     std::wstring targetSelector;

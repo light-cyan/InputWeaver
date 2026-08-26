@@ -71,7 +71,8 @@ class InputInjector final {
 public:
     explicit InputInjector(
         WindowsSelfTag selfTag,
-        SendInputFunction sendInput = &::SendInput) noexcept;
+        SendInputFunction sendInput = &::SendInput,
+        bool dryRun = false) noexcept;
 
     [[nodiscard]] PreparedInput Prepare(
         const WindowsOutputItem& item) const noexcept;
@@ -81,6 +82,7 @@ public:
 private:
     WindowsSelfTag selfTag_;
     SendInputFunction sendInput_;
+    bool dryRun_;
 };
 
 }  // namespace inputweaver

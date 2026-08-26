@@ -50,11 +50,32 @@ void TestDebugSessionOption()
         "missing debug session token is rejected");
 }
 
+void TestDryRunOption()
+{
+    const std::vector<std::filesystem::path> arguments = {
+        "InputWeaver",
+        "--program",
+        "test.weavec",
+        "--dry-run",
+        "--allow-exec"};
+    inputweaver::ui::cli::RuntimeCliOptions options{};
+    std::string error;
+    Check(
+        inputweaver::ui::cli::ParseRuntimeCommandLine(
+            std::span<const std::filesystem::path>{arguments},
+            options,
+            error)
+            && options.dryRun
+            && options.allowExec,
+        "dry-run composes with explicit process-launch permission");
+}
+
 } // namespace
 
 int main()
 {
     TestDebugSessionOption();
+    TestDryRunOption();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " runtime CLI test(s) failed.\n";
         return 1;

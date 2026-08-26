@@ -84,8 +84,9 @@ namespace {
 
 InputInjector::InputInjector(
     WindowsSelfTag selfTag,
-    SendInputFunction sendInput) noexcept
-    : selfTag_(selfTag), sendInput_(sendInput) {}
+    SendInputFunction sendInput,
+    bool dryRun) noexcept
+    : selfTag_(selfTag), sendInput_(sendInput), dryRun_(dryRun) {}
 
 PreparedInput InputInjector::Prepare(
     const WindowsOutputItem& item) const noexcept {
@@ -107,6 +108,10 @@ InjectionResult InputInjector::Inject(
     if (selfTag_ == 0) {
         result.outcome = InjectionOutcome::InvalidSelfTag;
         result.error = ERROR_INVALID_PARAMETER;
+        return result;
+    }
+    if (dryRun_) {
+        result.outcome = InjectionOutcome::Succeeded;
         return result;
     }
     if (sendInput_ == nullptr) {

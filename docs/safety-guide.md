@@ -29,6 +29,14 @@ bin\InputWeaver.exe --program path\to\config.weavec --allow-exec
 
 `--allow-exec` 只对当前编译程序运行生效，并且只能和 `--program` 一起使用；没有这个选项时，执行器会在安装输入钩子之前拒绝需要启动进程的程序，也不会解析可执行文件或调用系统进程创建接口。
 
+可以使用无注入模拟运行检查规则、动作轨迹和调试输出：
+
+```bat
+bin\InputWeaver.exe --program path\to\config.weavec --dry-run
+```
+
+`--dry-run` 始终放行物理输入，不调用 `SendInput`。`exec` 动作仍需同时传入 `--allow-exec`，但通过权限检查后只模拟成功，不解析或启动外部进程。编译的退出规则仍可停止模拟运行。
+
 可以用 `--target <exe-name-or-absolute-path>` 把本次运行覆盖为目标进程模式，或用 `--target-global` 把本次运行覆盖为全局模式；两个选项互斥。也可以用 `--log <jsonl-path> --trace-input` 记录运行时、安全状态、物理输入和输出注入信息。
 
 ## 目标窗口切换

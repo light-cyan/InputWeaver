@@ -51,6 +51,7 @@ class WindowsProcessLauncher final : public RuntimeProcessLauncher {
 public:
     explicit WindowsProcessLauncher(
         bool permitted = true,
+        bool dryRun = false,
         CreateProcessWFunction createProcess = &::CreateProcessW) noexcept;
 
     [[nodiscard]] bool Permitted() const noexcept override;
@@ -60,6 +61,7 @@ public:
 
 private:
     bool permitted_;
+    bool dryRun_;
     CreateProcessWFunction createProcess_;
 };
 
