@@ -2,7 +2,7 @@
 
 ## 状态
 
-Input debug development started from commit `3aed66f2d424384dc7c7c52dbffe19e1cd53bfbd` or a successor. Phase 7 and Phase 8 are complete and archived; Phase 9 App and Phase 10 TUI retain partial proposals.
+Input debug development started from commit `3aed66f2d424384dc7c7c52dbffe19e1cd53bfbd` or a successor. Phase 7 and Phase 8 are complete and archived; Phase 9 App and Phase 10 TUI have a unified current product design.
 
 ## 简化结构
 
@@ -10,8 +10,8 @@ Input debug development started from commit `3aed66f2d424384dc7c7c52dbffe19e1cd5
 InputWeaver.exe --debug-session <token>
     -> 调试管道
     -> 进程内 DebugClient
-    -> App（提案）
-    -> TUI（提案）
+    -> App
+    -> TUI
 ```
 
 App 负责启动调试执行器并持有 `DebugClient`。`InputWeaver.exe` 只发送调试事件；`DebugClient` 解释事件流并形成只读派生状态，不形成独立进程。
@@ -33,14 +33,15 @@ App 负责启动调试执行器并持有 `DebugClient`。`InputWeaver.exe` 只�
 | --- | --- | --- |
 | Phase 7: Input Debug Producer | 完成并归档 | `InputWeaver.exe` 发布有界的追加型调试事件。 |
 | Phase 8: Debug Client | Complete and archived | Connects to the debug pipe and reduces the event stream into read-only state. |
-| Phase 9: App | 部分提案 | 设计程序模型、进程生命周期和单一调试会话。 |
-| Phase 10: TUI | 部分提案 | 设计终端交互和显示方式。 |
+| Phase 9: App | 设计完成 | 程序模型、持久化、进程生命周期和单一调试会话。 |
+| Phase 10: TUI | 设计完成 | Programs、Console、Debug 页面及终端交互。 |
 
 ## 文档入口
 
 - Phase 7：`development/legacy/phase-7-input-debug-producer/Plan.md`、`TargetDataContract.md` 与 `Verification.md`。
 - Phase 8: `development/legacy/phase-8-debug-client/Plan.md` and `Verification.md`.
+- App 与 TUI 统一设计：`development/InputWeaverAppDesign/README.md`。
 - Phase 9：`development/phase-9-app/Proposal.md`。
 - Phase 10：`development/phase-10-tui/Proposal.md`。
 
-Phase 7 不依赖后续模块。Phase 8 只依赖 Phase 7 协议。Phase 9 和 Phase 10 在形成各自的 `Plan.md` 前不进入实现。
+Phase 7 不依赖后续模块。Phase 8 只依赖 Phase 7 协议。App 与 TUI 的当前产品行为以统一设计目录为准。

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "colors": {
+    "text": "#D0D0D0",
+    "muted_text": "#808080",
+    "unfocused_border": "#666666",
+    "focus_console": "#5C9EFF",
+    "focus_programs": "#4DD0E1",
+    "focus_program_information": "#FFD54F",
+    "focus_compiled_dump": "#CE93D8",
+    "focus_events": "#4DD0E1",
+    "focus_pressed": "#81C784",
+    "focus_action_executions": "#CE93D8",
+    "selection_active_foreground": "#101010",
+    "selection_active_background": "#B2EBF2",
+    "selection_inactive_foreground": "#D0D0D0",
+    "selection_inactive_background": "#455A64",
+    "status_running": "#26C6DA",
+    "status_debug": "#80DEEA",
+    "status_dry_run": "#66BB6A",
+    "status_exec_permission": "#CE93D8",
+    "execution_running": "#26C6DA",
+    "execution_completed": "#66BB6A",
+    "execution_failed": "#EF5350",
+    "execution_cancelled": "#FFCA28",
+    "instruction_recent_oldest": "#006064",
+    "instruction_recent": "#00ACC1",
+    "instruction_current": "#84FFFF",
+    "health_trusted": "#66BB6A",
+    "health_recovering": "#FFCA28",
+    "health_fault": "#EF5350"
+  }
+}

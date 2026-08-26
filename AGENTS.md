@@ -99,8 +99,8 @@ all modules -> support only for domain-independent primitives
 - Phase 6: Declarative Runtime Controls is complete and archived under `development/legacy/phase-6-declarative-runtime-controls/`.
 - Phase 7: Input Debug Producer is complete and archived under `development/legacy/phase-7-input-debug-producer/`.
 - Phase 8: Debug Client is complete and archived under `development/legacy/phase-8-debug-client/`.
-- Phase 9 App material under `development/phase-9-app/` and Phase 10 TUI material under `development/phase-10-tui/` remain partial proposals rather than implementation plans.
-- `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and the proposed `InputWeaverTUI.exe`.
+- The current App and TUI product design is under `development/InputWeaverAppDesign/`; `development/phase-9-app/Proposal.md` and `development/phase-10-tui/Proposal.md` are phase entry points.
+- `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and `InputWeaverTUI.exe`.
 - The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls; its compiler/runtime integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
