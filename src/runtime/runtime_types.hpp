@@ -2,6 +2,7 @@
 
 #include "input/input_types.hpp"
 #include "program/compiled_program.hpp"
+#include "support/callback_ref.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -143,14 +144,7 @@ struct RuntimeLaunchOutcome final {
     }
 };
 
-struct RuntimeCancellationProbe final {
-    void* context{};
-    bool (*invoke)(void*) noexcept{};
-
-    [[nodiscard]] bool Cancelled() const noexcept {
-        return invoke != nullptr && invoke(context);
-    }
-};
+using RuntimeCancellationProbe = support::CallbackRef<bool() noexcept>;
 
 class RuntimeProcessLauncher {
 public:

@@ -66,8 +66,9 @@ platform/windows/cli/compiler_main -> ui/cli/compiler_cli
 platform/windows/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
 platform/windows/compiler -> compiler artifact-file interface
 platform/windows/diagnostics -> input + runtime diagnostic types
-platform/windows/debug -> debug + runtime + program + input
-platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics
+platform/windows/debug -> debug + runtime + program + input + platform/windows/support
+platform/windows/support -> Windows API
+platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics + platform/windows/support
 all modules -> support only for domain-independent primitives
 ```
 
@@ -86,6 +87,7 @@ all modules -> support only for domain-independent primitives
 - `src/platform/windows/compiler/` owns Windows sibling-temporary naming and atomic destination replacement for compiled artifacts.
 - `src/platform/windows/diagnostics/` owns bounded Windows diagnostic records, privacy redaction, JSONL formatting, transport, and file output.
 - `src/platform/windows/debug/` owns the local same-user named-pipe server and client, capture commands, process and endpoint validation, cancellable pipe I/O, and bounded debug event transport.
+- `src/platform/windows/support/` owns Windows resource and API primitives that are independent of compiler, runtime, debug, diagnostics, and application policy.
 - `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the CLI module.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.

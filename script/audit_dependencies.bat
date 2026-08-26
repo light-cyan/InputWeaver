@@ -26,6 +26,18 @@ if not errorlevel 1 (
     exit /b 1
 )
 
+findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*platform[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\support\*.cpp" "src\support\*.hpp" >nul 2>nul
+if not errorlevel 1 (
+    echo Platform-independent support dependency boundary failed.
+    exit /b 1
+)
+
+findstr /s /i /r /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*diagnostics[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
+if not errorlevel 1 (
+    echo Windows support depends on a product module.
+    exit /b 1
+)
+
 findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" "src\runtime\*.cpp" "src\runtime\*.hpp" >nul
 if not errorlevel 1 (
     echo Runtime core contains a native Windows include.

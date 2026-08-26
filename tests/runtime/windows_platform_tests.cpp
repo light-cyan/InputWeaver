@@ -5,6 +5,8 @@
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/process_locator.hpp"
 #include "platform/windows/runtime/windows_output_queue.hpp"
+#include "support/bounded_mpmc_queue.hpp"
+#include "support/callback_ref.hpp"
 
 #include <algorithm>
 #include <array>
@@ -157,6 +159,89 @@ void TestWindowsOutputQueueConcurrency() {
     Check(ordered && queue.Empty(), "concurrent output queue remains ordered and drains");
 }
 
+void TestCallbackRef() {
+    inputweaver::support::CallbackRef<void() noexcept> empty;
+    empty.Invoke();
+    bool invoked = false;
+    const inputweaver::support::CallbackRef<void() noexcept> callback{
+        &invoked,
+        [](void* context) noexcept {
+            *static_cast<bool*>(context) = true;
+        }};
+    callback.Invoke();
+    const inputweaver::support::CallbackRef<bool() noexcept> emptyResult;
+    Check(
+        invoked && !emptyResult.Invoke(),
+        "callback references invoke bound targets and default empty results");
+}
+
+void TestBoundedMpmcQueue() {
+    inputweaver::support::BoundedMpmcQueue<std::size_t, 4U> bounded;
+    std::size_t item{};
+    Check(!bounded.TryPop(item), "MPMC queue starts empty");
+    for (std::size_t value = 0U; value < 4U; ++value) {
+        Check(bounded.TryPush(value), "MPMC queue accepts each capacity slot");
+    }
+    Check(!bounded.TryPush(4U), "MPMC queue rejects overflow");
+    for (std::size_t value = 0U; value < 4U; ++value) {
+        Check(
+            bounded.TryPop(item) && item == value,
+            "MPMC queue preserves single-thread FIFO order");
+    }
+
+    constexpr std::size_t itemCount = 20'000U;
+    inputweaver::support::BoundedMpmcQueue<std::size_t, 64U> concurrent;
+    std::array<std::atomic<std::uint8_t>, itemCount> observed{};
+    std::atomic<std::size_t> nextProduced{};
+    std::atomic<std::size_t> consumed{};
+    std::atomic<bool> valid{true};
+    std::array<std::thread, 2U> consumers;
+    for (auto& consumer : consumers) {
+        consumer = std::thread([&] {
+            while (consumed.load(std::memory_order_acquire) < itemCount) {
+                std::size_t value{};
+                if (!concurrent.TryPop(value)) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                if (value >= itemCount
+                    || observed[value].fetch_add(
+                        1U,
+                        std::memory_order_relaxed) != 0U) {
+                    valid.store(false, std::memory_order_relaxed);
+                }
+                consumed.fetch_add(1U, std::memory_order_release);
+            }
+        });
+    }
+    std::array<std::thread, 2U> producers;
+    for (auto& producer : producers) {
+        producer = std::thread([&] {
+            for (;;) {
+                const std::size_t value = nextProduced.fetch_add(
+                    1U,
+                    std::memory_order_relaxed);
+                if (value >= itemCount) {
+                    break;
+                }
+                while (!concurrent.TryPush(value)) {
+                    std::this_thread::yield();
+                }
+            }
+        });
+    }
+    for (auto& producer : producers) {
+        producer.join();
+    }
+    for (auto& consumer : consumers) {
+        consumer.join();
+    }
+    Check(
+        valid.load(std::memory_order_relaxed)
+            && consumed.load(std::memory_order_relaxed) == itemCount,
+        "concurrent MPMC queue delivers every item exactly once");
+}
+
 void TestInjectorSafety() {
     constexpr inputweaver::WindowsSelfTag selfTag = 0x6B524D31U;
     inputweaver::InputInjector injector(selfTag, &FakeSendInput);
@@ -268,7 +353,9 @@ void TestDiagnosticPrivacyAndBounds() {
                 == inputweaver::ExtraInfoCategory::OtherNonzero,
         "diagnostic extra information is reduced to non-raw categories");
 
-    inputweaver::SpscDiagnosticRing<inputweaver::HookDiagnosticRecord, 3U> ring;
+    inputweaver::support::FixedSpscRing<
+        inputweaver::HookDiagnosticRecord,
+        3U> ring;
     for (std::uint64_t sequence = 1U; sequence <= 3U; ++sequence) {
         inputweaver::HookDiagnosticRecord record{};
         record.sequence = sequence;
@@ -566,6 +653,8 @@ int main() {
     TestOriginClassification();
     TestWindowsOutputQueueBoundaries();
     TestWindowsOutputQueueConcurrency();
+    TestCallbackRef();
+    TestBoundedMpmcQueue();
     TestInjectorSafety();
     TestInjectionCircuitBreaker();
     TestDiagnosticPrivacyAndBounds();

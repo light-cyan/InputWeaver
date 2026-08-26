@@ -2,6 +2,7 @@
 
 #include "debug/debug_protocol.hpp"
 #include "runtime/runtime_types.hpp"
+#include "support/callback_ref.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -31,12 +32,9 @@ struct DebugInputCorrelation final {
     }
 };
 
-using DebugServerCallback = void (*)(void* context) noexcept;
-
 struct DebugServerCallbacks final {
-    void* context{};
-    DebugServerCallback wakeInputThread{};
-    DebugServerCallback requestExecutorStop{};
+    support::CallbackRef<void() noexcept> wakeInputThread{};
+    support::CallbackRef<void() noexcept> requestExecutorStop{};
 };
 
 class WindowsDebugServer final : public RuntimeDebugEventPort {

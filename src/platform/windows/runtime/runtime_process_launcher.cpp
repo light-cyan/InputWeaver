@@ -1,5 +1,7 @@
 #include "runtime_process_launcher.hpp"
 
+#include "platform/windows/support/unique_handle.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -452,7 +454,7 @@ RuntimeLaunchOutcome WindowsProcessLauncher::Launch(
             RuntimeLaunchResult::CreationFailed,
             ERROR_ACCESS_DISABLED_BY_POLICY};
     }
-    if (cancellation.Cancelled()) {
+    if (cancellation.Invoke()) {
         return {RuntimeLaunchResult::Cancelled, ERROR_SUCCESS};
     }
     ExecutableResolutionResult resolved = ResolveExecutableCommand(command);
@@ -479,7 +481,7 @@ RuntimeLaunchOutcome WindowsProcessLauncher::Launch(
             RuntimeLaunchResult::CreationFailed,
             ERROR_NOT_ENOUGH_MEMORY};
     }
-    if (cancellation.Cancelled()) {
+    if (cancellation.Invoke()) {
         return {RuntimeLaunchResult::Cancelled, ERROR_SUCCESS};
     }
     STARTUPINFOW startup{};
@@ -500,8 +502,8 @@ RuntimeLaunchOutcome WindowsProcessLauncher::Launch(
     if (created == FALSE) {
         return {RuntimeLaunchResult::CreationFailed, GetLastError()};
     }
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
+    const UniqueHandle threadHandle(process.hThread);
+    const UniqueHandle processHandle(process.hProcess);
     return {RuntimeLaunchResult::Launched, ERROR_SUCCESS};
 }
 

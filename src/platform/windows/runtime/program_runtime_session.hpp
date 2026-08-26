@@ -10,7 +10,7 @@
 
 #include "windows_input_types.hpp"
 #include "runtime/runtime_types.hpp"
-#include "support/stop_request.hpp"
+#include "stop_request.hpp"
 
 #include <cstdint>
 #include <memory>

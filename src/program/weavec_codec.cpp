@@ -1,5 +1,7 @@
 #include "weavec_codec.hpp"
 
+#include "support/little_endian.hpp"
+
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -36,18 +38,12 @@ public:
 
     void U32(std::uint32_t value)
     {
-        for (std::size_t index = 0; index < 4U; ++index) {
-            const unsigned int shift = static_cast<unsigned int>(index * 8U);
-            U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        }
+        support::AppendLittleEndian(bytes_, value);
     }
 
     void U64(std::uint64_t value)
     {
-        for (std::size_t index = 0; index < 8U; ++index) {
-            const unsigned int shift = static_cast<unsigned int>(index * 8U);
-            U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        }
+        support::AppendLittleEndian(bytes_, value);
     }
 
     void I64(std::int64_t value)
@@ -75,11 +71,7 @@ public:
 
     void PatchU64(std::size_t offset, std::uint64_t value)
     {
-        for (std::size_t index = 0; index < 8U; ++index) {
-            const unsigned int shift = static_cast<unsigned int>(index * 8U);
-            bytes_[offset + index] = static_cast<std::uint8_t>(
-                (value >> shift) & 0xffU);
-        }
+        support::StoreLittleEndian<std::uint64_t>(bytes_, offset, value);
     }
 
     [[nodiscard]] std::size_t Size() const noexcept
@@ -120,33 +112,21 @@ public:
 
     [[nodiscard]] bool U32(std::uint32_t& value)
     {
-        if (Remaining() < 4U) {
+        if (!support::ReadLittleEndian(bytes_, cursor_, value)) {
             return Fail(
                 WeavecDecodeErrorCode::Truncated,
                 "32-bit field extends beyond the declared payload");
         }
-        value = 0U;
-        for (std::size_t index = 0; index < 4U; ++index) {
-            const unsigned int shift = static_cast<unsigned int>(index * 8U);
-            value |= static_cast<std::uint32_t>(bytes_[cursor_ + index]) << shift;
-        }
-        cursor_ += 4U;
         return true;
     }
 
     [[nodiscard]] bool U64(std::uint64_t& value)
     {
-        if (Remaining() < 8U) {
+        if (!support::ReadLittleEndian(bytes_, cursor_, value)) {
             return Fail(
                 WeavecDecodeErrorCode::Truncated,
                 "64-bit field extends beyond the declared payload");
         }
-        value = 0U;
-        for (std::size_t index = 0; index < 8U; ++index) {
-            const unsigned int shift = static_cast<unsigned int>(index * 8U);
-            value |= static_cast<std::uint64_t>(bytes_[cursor_ + index]) << shift;
-        }
-        cursor_ += 8U;
         return true;
     }
 
@@ -892,11 +872,9 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 [[nodiscard]] std::uint64_t ReadHeaderPayloadLength(
     std::span<const std::uint8_t> bytes) noexcept
 {
-    std::uint64_t value = 0U;
-    for (std::size_t index = 0; index < 8U; ++index) {
-        const unsigned int shift = static_cast<unsigned int>(index * 8U);
-        value |= static_cast<std::uint64_t>(bytes[8U + index]) << shift;
-    }
+    std::size_t offset = 8U;
+    std::uint64_t value{};
+    (void)support::ReadLittleEndian(bytes, offset, value);
     return value;
 }
 

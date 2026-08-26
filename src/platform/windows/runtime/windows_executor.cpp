@@ -6,6 +6,7 @@
 #include "platform/windows/runtime/process_locator.hpp"
 #include "program_runtime_session.hpp"
 #include "runtime/artifact_loader.hpp"
+#include "support/bit_mix.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -38,15 +39,6 @@ BOOL WINAPI ConsoleControlHandler(DWORD controlType) noexcept {
     }
 }
 
-std::uint64_t Mix64(std::uint64_t value) noexcept {
-    value ^= value >> 30U;
-    value *= 0xBF58476D1CE4E5B9ULL;
-    value ^= value >> 27U;
-    value *= 0x94D049BB133111EBULL;
-    value ^= value >> 31U;
-    return value;
-}
-
 inputweaver::WindowsSelfTag GenerateSelfTag() noexcept {
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
@@ -54,7 +46,8 @@ inputweaver::WindowsSelfTag GenerateSelfTag() noexcept {
     seed ^= static_cast<std::uint64_t>(GetTickCount64());
     seed ^= static_cast<std::uint64_t>(GetCurrentProcessId()) << 32U;
     seed ^= static_cast<std::uint64_t>(GetCurrentThreadId()) << 16U;
-    const std::uint64_t mixed = Mix64(seed + 0x9E3779B97F4A7C15ULL);
+    const std::uint64_t mixed = inputweaver::support::Mix64(
+        seed + 0x9E3779B97F4A7C15ULL);
     const auto tag = static_cast<inputweaver::WindowsSelfTag>(mixed);
     return tag == 0U
         ? static_cast<inputweaver::WindowsSelfTag>(0x49575631U)

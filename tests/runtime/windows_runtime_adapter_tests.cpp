@@ -180,7 +180,7 @@ public:
         inputweaver::RuntimeCancellationProbe cancellation) noexcept override
     {
         (void)command;
-        if (cancellation.Cancelled()) {
+        if (cancellation.Invoke()) {
             return {inputweaver::RuntimeLaunchResult::Cancelled, 0U};
         }
         return {inputweaver::RuntimeLaunchResult::Launched, 0U};

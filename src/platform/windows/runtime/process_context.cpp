@@ -1,6 +1,7 @@
 #include "process_context.hpp"
 
-#include "windows_support.hpp"
+#include "platform/windows/support/ordinal_string.hpp"
+#include "platform/windows/support/unique_handle.hpp"
 
 #include <array>
 #include <cstddef>

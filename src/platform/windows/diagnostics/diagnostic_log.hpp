@@ -2,8 +2,8 @@
 
 #include "input/input_types.hpp"
 #include "runtime/runtime_types.hpp"
+#include "support/fixed_spsc_ring.hpp"
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -110,43 +110,6 @@ std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record);
            appendBytes <= maximumBytes - currentBytes;
 }
 
-template <typename T, std::size_t Capacity>
-class SpscDiagnosticRing final {
-public:
-    static_assert(Capacity > 0);
-
-    bool TryPush(const T& value) noexcept {
-        const std::uint64_t write = writeIndex_.load(std::memory_order_relaxed);
-        const std::uint64_t read = readIndex_.load(std::memory_order_acquire);
-        if (write - read >= Capacity) {
-            return false;
-        }
-        records_[write % Capacity] = value;
-        writeIndex_.store(write + 1, std::memory_order_release);
-        return true;
-    }
-
-    bool TryPop(T& value) noexcept {
-        const std::uint64_t read = readIndex_.load(std::memory_order_relaxed);
-        const std::uint64_t write = writeIndex_.load(std::memory_order_acquire);
-        if (read == write) {
-            return false;
-        }
-        value = records_[read % Capacity];
-        readIndex_.store(read + 1, std::memory_order_release);
-        return true;
-    }
-
-    bool Empty() const noexcept {
-        return readIndex_.load(std::memory_order_acquire) == writeIndex_.load(std::memory_order_acquire);
-    }
-
-private:
-    std::array<T, Capacity> records_{};
-    alignas(64) std::atomic<std::uint64_t> writeIndex_{0};
-    alignas(64) std::atomic<std::uint64_t> readIndex_{0};
-};
-
 class RuntimeDiagnosticRing final {
 public:
     bool TryPush(const RuntimeDiagnosticRecord& value) noexcept {
@@ -176,7 +139,7 @@ public:
 
 private:
     std::atomic_flag producerAdmission_ = ATOMIC_FLAG_INIT;
-    SpscDiagnosticRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> ring_;
+    support::FixedSpscRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> ring_;
     std::atomic<std::uint64_t> rejectedPushCount_{0U};
 };
 
@@ -210,8 +173,8 @@ private:
     void EmitLine(const std::string& line);
 
     // The hook and injection rings each have one owning producer thread.
-    SpscDiagnosticRing<HookDiagnosticRecord, kHookDiagnosticCapacity> hookRing_;
-    SpscDiagnosticRing<InjectionDiagnosticRecord, kInjectionDiagnosticCapacity> injectionRing_;
+    support::FixedSpscRing<HookDiagnosticRecord, kHookDiagnosticCapacity> hookRing_;
+    support::FixedSpscRing<InjectionDiagnosticRecord, kInjectionDiagnosticCapacity> injectionRing_;
     // Hook and output paths can both drain runtime records; producer admission is nonblocking.
     RuntimeDiagnosticRing runtimeRing_;
     std::atomic<std::uint64_t> droppedHookRecords_{0};

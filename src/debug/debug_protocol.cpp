@@ -1,5 +1,7 @@
 #include "debug_protocol.hpp"
 
+#include "support/little_endian.hpp"
+
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -21,22 +23,17 @@ public:
 
     void U16(std::uint16_t value)
     {
-        U8(static_cast<std::uint8_t>(value & 0xffU));
-        U8(static_cast<std::uint8_t>((value >> 8U) & 0xffU));
+        support::AppendLittleEndian(bytes_, value);
     }
 
     void U32(std::uint32_t value)
     {
-        for (unsigned int shift = 0U; shift < 32U; shift += 8U) {
-            U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        }
+        support::AppendLittleEndian(bytes_, value);
     }
 
     void U64(std::uint64_t value)
     {
-        for (unsigned int shift = 0U; shift < 64U; shift += 8U) {
-            U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        }
+        support::AppendLittleEndian(bytes_, value);
     }
 
     void I64(std::int64_t value)
@@ -71,41 +68,17 @@ public:
 
     [[nodiscard]] bool U16(std::uint16_t& value) noexcept
     {
-        std::uint8_t low{};
-        std::uint8_t high{};
-        if (!U8(low) || !U8(high)) {
-            return false;
-        }
-        value = static_cast<std::uint16_t>(low)
-            | static_cast<std::uint16_t>(
-                static_cast<std::uint16_t>(high) << 8U);
-        return true;
+        return support::ReadLittleEndian(bytes_, position_, value);
     }
 
     [[nodiscard]] bool U32(std::uint32_t& value) noexcept
     {
-        value = 0U;
-        for (unsigned int shift = 0U; shift < 32U; shift += 8U) {
-            std::uint8_t byte{};
-            if (!U8(byte)) {
-                return false;
-            }
-            value |= static_cast<std::uint32_t>(byte) << shift;
-        }
-        return true;
+        return support::ReadLittleEndian(bytes_, position_, value);
     }
 
     [[nodiscard]] bool U64(std::uint64_t& value) noexcept
     {
-        value = 0U;
-        for (unsigned int shift = 0U; shift < 64U; shift += 8U) {
-            std::uint8_t byte{};
-            if (!U8(byte)) {
-                return false;
-            }
-            value |= static_cast<std::uint64_t>(byte) << shift;
-        }
-        return true;
+        return support::ReadLittleEndian(bytes_, position_, value);
     }
 
     [[nodiscard]] bool I64(std::int64_t& value) noexcept

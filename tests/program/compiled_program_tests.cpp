@@ -3,6 +3,7 @@
 #include "program/program_dump.hpp"
 #include "program/program_validator.hpp"
 #include "program/weavec_codec.hpp"
+#include "support/little_endian.hpp"
 
 #include <algorithm>
 #include <array>
@@ -51,11 +52,8 @@ void Check(bool condition, std::string_view name)
     std::span<const std::uint8_t> bytes,
     std::size_t offset) noexcept
 {
-    std::uint64_t value = 0U;
-    for (std::size_t index = 0; index < 8U; ++index) {
-        const unsigned int shift = static_cast<unsigned int>(index * 8U);
-        value |= static_cast<std::uint64_t>(bytes[offset + index]) << shift;
-    }
+    std::uint64_t value{};
+    (void)inputweaver::support::ReadLittleEndian(bytes, offset, value);
     return value;
 }
 
@@ -64,11 +62,10 @@ void WriteLittleEndianU64(
     std::size_t offset,
     std::uint64_t value) noexcept
 {
-    for (std::size_t index = 0; index < 8U; ++index) {
-        const unsigned int shift = static_cast<unsigned int>(index * 8U);
-        bytes[offset + index] = static_cast<std::uint8_t>(
-            (value >> shift) & 0xffU);
-    }
+    inputweaver::support::StoreLittleEndian<std::uint64_t>(
+        bytes,
+        offset,
+        value);
 }
 
 [[nodiscard]] std::uint64_t Fnv1a64(std::string_view text) noexcept

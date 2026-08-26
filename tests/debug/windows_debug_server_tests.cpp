@@ -248,7 +248,7 @@ void TestPipeSession()
         server.Start(
             token,
             finalized.program,
-            {&callbacks, &Wake, &Stop},
+            {{&callbacks, &Wake}, {&callbacks, &Stop}},
             error),
         "debug server starts");
     if (!error.empty()) {
@@ -462,7 +462,7 @@ void TestDebugClientIntegration()
         server.Start(
             token,
             finalized.program,
-            {&callbacks, &Wake, &Stop},
+            {{&callbacks, &Wake}, {&callbacks, &Stop}},
             error),
         "debug server starts for DebugClient integration");
     if (!error.empty()) {

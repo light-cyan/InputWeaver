@@ -11,7 +11,6 @@
 #include "platform/windows/runtime/windows_output_queue.hpp"
 #include "program/compiled_program.hpp"
 #include "runtime/program_runtime.hpp"
-#include "support/stop_request.hpp"
 
 #include <algorithm>
 #include <array>
@@ -176,9 +175,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 options.debugSessionToken,
                 activeProgram,
                 {
-                    this,
-                    &Impl::WakeDebugInputThreadThunk,
-                    &Impl::RequestExecutorStopThunk},
+                    {this, &Impl::WakeDebugInputThreadThunk},
+                    {this, &Impl::RequestExecutorStopThunk}},
                 errorMessage)) {
             return false;
         }
@@ -442,7 +440,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             return;
         }
         Impl& session = *static_cast<Impl*>(context);
-        session.options.executorStopRequest.Request();
+        session.options.executorStopRequest.Invoke();
         session.RequestStop();
     }
 

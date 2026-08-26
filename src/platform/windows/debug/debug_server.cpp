@@ -8,7 +8,10 @@
 #endif
 #include <windows.h>
 
+#include "platform/windows/support/unique_handle.hpp"
 #include "program/compiled_program.hpp"
+#include "support/bit_mix.hpp"
+#include "support/bounded_mpmc_queue.hpp"
 
 #include <algorithm>
 #include <array>
@@ -43,97 +46,6 @@ struct ProducerRecord final {
     RuntimeDebugEvent runtime{};
 };
 
-template <typename Item, std::size_t Capacity>
-class BoundedMpmcQueue final {
-public:
-    BoundedMpmcQueue() noexcept
-    {
-        static_assert(Capacity >= 2U);
-        static_assert((Capacity & (Capacity - 1U)) == 0U);
-        for (std::size_t index = 0U; index < Capacity; ++index) {
-            cells_[index].sequence.store(index, std::memory_order_relaxed);
-        }
-    }
-
-    [[nodiscard]] bool TryPush(const Item& item) noexcept
-    {
-        std::size_t position = enqueuePosition_.load(std::memory_order_relaxed);
-        Cell* cell = nullptr;
-        for (;;) {
-            cell = &cells_[position & (Capacity - 1U)];
-            const std::size_t sequence = cell->sequence.load(
-                std::memory_order_acquire);
-            const std::intptr_t difference = static_cast<std::intptr_t>(sequence)
-                - static_cast<std::intptr_t>(position);
-            if (difference == 0) {
-                if (enqueuePosition_.compare_exchange_weak(
-                        position,
-                        position + 1U,
-                        std::memory_order_relaxed,
-                        std::memory_order_relaxed)) {
-                    break;
-                }
-            } else if (difference < 0) {
-                return false;
-            } else {
-                position = enqueuePosition_.load(std::memory_order_relaxed);
-            }
-        }
-        cell->item = item;
-        cell->sequence.store(position + 1U, std::memory_order_release);
-        return true;
-    }
-
-    [[nodiscard]] bool TryPop(Item& item) noexcept
-    {
-        std::size_t position = dequeuePosition_.load(std::memory_order_relaxed);
-        Cell* cell = nullptr;
-        for (;;) {
-            cell = &cells_[position & (Capacity - 1U)];
-            const std::size_t sequence = cell->sequence.load(
-                std::memory_order_acquire);
-            const std::intptr_t difference = static_cast<std::intptr_t>(sequence)
-                - static_cast<std::intptr_t>(position + 1U);
-            if (difference == 0) {
-                if (dequeuePosition_.compare_exchange_weak(
-                        position,
-                        position + 1U,
-                        std::memory_order_relaxed,
-                        std::memory_order_relaxed)) {
-                    break;
-                }
-            } else if (difference < 0) {
-                return false;
-            } else {
-                position = dequeuePosition_.load(std::memory_order_relaxed);
-            }
-        }
-        item = cell->item;
-        cell->sequence.store(position + Capacity, std::memory_order_release);
-        return true;
-    }
-
-private:
-    struct Cell final {
-        std::atomic<std::size_t> sequence{};
-        Item item{};
-    };
-
-    std::array<Cell, Capacity> cells_{};
-    alignas(64) std::atomic<std::size_t> enqueuePosition_{};
-    alignas(64) std::atomic<std::size_t> dequeuePosition_{};
-};
-
-[[nodiscard]] std::uint64_t Mix64(std::uint64_t value) noexcept
-{
-    value ^= value >> 30U;
-    value *= 0xBF58476D1CE4E5B9ULL;
-    value ^= value >> 27U;
-    value *= 0x94D049BB133111EBULL;
-    value ^= value >> 31U;
-    return value;
-}
-
 [[nodiscard]] bool ReadExact(
     HANDLE pipe,
     std::span<std::uint8_t> destination) noexcept
@@ -148,6 +60,7 @@ private:
         if (event == nullptr) {
             return false;
         }
+        const UniqueHandle eventOwner(event);
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         DWORD read{};
@@ -166,7 +79,6 @@ private:
                     &read,
                     FALSE) != FALSE;
         }
-        CloseHandle(event);
         if (!completed || read == 0U) {
             return false;
         }
@@ -189,6 +101,7 @@ private:
         if (event == nullptr) {
             return false;
         }
+        const UniqueHandle eventOwner(event);
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         DWORD written{};
@@ -207,7 +120,6 @@ private:
                     &written,
                     FALSE) != FALSE;
         }
-        CloseHandle(event);
         if (!completed || written == 0U) {
             return false;
         }
@@ -222,6 +134,7 @@ private:
     if (event == nullptr) {
         return false;
     }
+    const UniqueHandle eventOwner(event);
     OVERLAPPED overlapped{};
     overlapped.hEvent = event;
     const BOOL started = ConnectNamedPipe(pipe, &overlapped);
@@ -240,7 +153,6 @@ private:
                     FALSE) != FALSE;
         }
     }
-    CloseHandle(event);
     return connected;
 }
 
@@ -306,16 +218,15 @@ private:
     if (OpenProcessToken(process, TOKEN_QUERY, &token) == FALSE) {
         return false;
     }
+    const UniqueHandle tokenOwner(token);
     DWORD required{};
     (void)GetTokenInformation(token, TokenUser, nullptr, 0U, &required);
     if (required == 0U) {
-        CloseHandle(token);
         return false;
     }
     try {
         storage.resize(required);
     } catch (...) {
-        CloseHandle(token);
         return false;
     }
     const BOOL read = GetTokenInformation(
@@ -324,7 +235,6 @@ private:
         storage.data(),
         required,
         &required);
-    CloseHandle(token);
     if (read == FALSE) {
         return false;
     }
@@ -345,6 +255,7 @@ private:
     if (client == nullptr) {
         return false;
     }
+    const UniqueHandle clientOwner(client);
     std::vector<std::uint8_t> currentStorage;
     std::vector<std::uint8_t> clientStorage;
     TOKEN_USER* currentUser{};
@@ -354,7 +265,6 @@ private:
         currentStorage,
         currentUser);
     const bool clientRead = ReadTokenUser(client, clientStorage, clientUser);
-    CloseHandle(client);
     return currentRead
         && clientRead
         && EqualSid(currentUser->User.Sid, clientUser->User.Sid) != FALSE;
@@ -691,9 +601,7 @@ struct WindowsDebugServer::Impl final {
     void RequestCapture(DebugCaptureRequest request) noexcept
     {
         pendingCaptureRequest.store(request, std::memory_order_release);
-        if (callbacks.wakeInputThread != nullptr) {
-            callbacks.wakeInputThread(callbacks.context);
-        }
+        callbacks.wakeInputThread.Invoke();
     }
 
     void HandleConnection(HANDLE pipe) noexcept
@@ -734,9 +642,7 @@ struct WindowsDebugServer::Impl final {
                 RequestCapture(DebugCaptureRequest::Stop);
             } else if (command.header.kind
                     == debug::MessageKind::RequestExecutorStop) {
-                if (callbacks.requestExecutorStop != nullptr) {
-                    callbacks.requestExecutorStop(callbacks.context);
-                }
+                callbacks.requestExecutorStop.Invoke();
             } else {
                 break;
             }
@@ -789,7 +695,7 @@ struct WindowsDebugServer::Impl final {
     std::int64_t performanceFrequency{1};
     HANDLE queueEvent{};
     HANDLE connectionStopEvent{};
-    BoundedMpmcQueue<ProducerRecord, kDebugQueueCapacity> queue;
+    support::BoundedMpmcQueue<ProducerRecord, kDebugQueueCapacity> queue;
     std::atomic<DebugCaptureRequest> pendingCaptureRequest{
         DebugCaptureRequest::None};
     std::atomic<bool> captureActive{false};
@@ -850,7 +756,7 @@ bool WindowsDebugServer::Start(
     }
     LARGE_INTEGER counter{};
     QueryPerformanceCounter(&counter);
-    impl_->targetSessionId = Mix64(
+    impl_->targetSessionId = support::Mix64(
         static_cast<std::uint64_t>(counter.QuadPart)
         ^ (static_cast<std::uint64_t>(GetCurrentProcessId()) << 32U)
         ^ static_cast<std::uint64_t>(GetTickCount64()));

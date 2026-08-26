@@ -180,7 +180,7 @@ public:
         std::string_view command,
         inputweaver::RuntimeCancellationProbe cancellation) noexcept override
     {
-        if (cancellation.Cancelled()) {
+        if (cancellation.Invoke()) {
             return {inputweaver::RuntimeLaunchResult::Cancelled, 0U};
         }
         try {

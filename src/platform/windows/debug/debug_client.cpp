@@ -8,6 +8,9 @@
 #endif
 #include <windows.h>
 
+#include "platform/windows/support/unique_handle.hpp"
+#include "support/little_endian.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -122,6 +125,7 @@ enum class FrameResult : std::uint8_t {
         if (event == nullptr) {
             return IoResult::Failed;
         }
+        const UniqueHandle eventOwner(event);
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         const std::size_t remaining = destination.size() - offset;
@@ -146,7 +150,6 @@ enum class FrameResult : std::uint8_t {
                     transferred)
                 : IoResult::Failed;
         }
-        CloseHandle(event);
         if (result != IoResult::Succeeded || transferred == 0U) {
             return result == IoResult::Succeeded ? IoResult::Failed : result;
         }
@@ -167,6 +170,7 @@ enum class FrameResult : std::uint8_t {
         if (event == nullptr) {
             return IoResult::Failed;
         }
+        const UniqueHandle eventOwner(event);
         OVERLAPPED overlapped{};
         overlapped.hEvent = event;
         const std::size_t remaining = source.size() - offset;
@@ -191,7 +195,6 @@ enum class FrameResult : std::uint8_t {
                     transferred)
                 : IoResult::Failed;
         }
-        CloseHandle(event);
         if (result != IoResult::Succeeded || transferred == 0U) {
             return result == IoResult::Succeeded ? IoResult::Failed : result;
         }
@@ -203,10 +206,10 @@ enum class FrameResult : std::uint8_t {
 [[nodiscard]] std::uint32_t ReadPayloadLength(
     const std::array<std::uint8_t, debug::kWireHeaderBytes>& bytes) noexcept
 {
-    return static_cast<std::uint32_t>(bytes[8U])
-        | (static_cast<std::uint32_t>(bytes[9U]) << 8U)
-        | (static_cast<std::uint32_t>(bytes[10U]) << 16U)
-        | (static_cast<std::uint32_t>(bytes[11U]) << 24U);
+    std::size_t offset = 8U;
+    std::uint32_t value{};
+    (void)support::ReadLittleEndian(bytes, offset, value);
+    return value;
 }
 
 [[nodiscard]] FrameResult ReadFrame(

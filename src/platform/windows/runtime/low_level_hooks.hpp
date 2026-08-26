@@ -8,9 +8,9 @@
 #endif
 #include <windows.h>
 
-#include "windows_input_types.hpp"
-#include "support/stop_request.hpp"
 #include "process_context.hpp"
+#include "stop_request.hpp"
+#include "windows_input_types.hpp"
 
 #include <algorithm>
 #include <atomic>

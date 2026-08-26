@@ -129,7 +129,7 @@ LowLevelHooks::LowLevelHooks(
 
 LowLevelHooks::~LowLevelHooks() {
     if (thread_.joinable()) {
-        stopRequest_.Request();
+        stopRequest_.Invoke();
         Wake();
         Wait();
     }
@@ -158,7 +158,7 @@ bool LowLevelHooks::Start(std::wstring& errorMessage) {
     }
 
     if (WaitForSingleObject(readyEvent_, 10000) != WAIT_OBJECT_0) {
-        stopRequest_.Request();
+        stopRequest_.Invoke();
         Wake();
         Wait();
         errorMessage = L"The low-level hook thread did not become ready within ten seconds.";
@@ -167,7 +167,7 @@ bool LowLevelHooks::Start(std::wstring& errorMessage) {
 
     const DWORD startupError = startupError_.load(std::memory_order_acquire);
     if (startupError != ERROR_SUCCESS) {
-        stopRequest_.Request();
+        stopRequest_.Invoke();
         Wake();
         Wait();
         errorMessage = L"Cannot start the low-level hooks. Win32 error " +
@@ -334,7 +334,7 @@ void LowLevelHooks::ThreadMain() noexcept {
         sink_.ProcessControlRequests();
     }
     if (startupError_.load(std::memory_order_acquire) != ERROR_SUCCESS) {
-        stopRequest_.Request();
+        stopRequest_.Invoke();
     }
     SetEvent(readyEvent_);
 
@@ -358,11 +358,11 @@ void LowLevelHooks::ThreadMain() noexcept {
                 shuttingDown = true;
                 shutdownGrace.Begin(GetTickCount64());
             } else if (handleCount == 2 && waitResult == WAIT_OBJECT_0 + 1) {
-                stopRequest_.Request();
+                stopRequest_.Invoke();
                 shuttingDown = true;
                 shutdownGrace.Begin(GetTickCount64());
             } else if (waitResult == WAIT_FAILED) {
-                stopRequest_.Request();
+                stopRequest_.Invoke();
                 shuttingDown = true;
                 shutdownGrace.Begin(GetTickCount64());
             }
