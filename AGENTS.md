@@ -36,8 +36,7 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
 - `validation/` is the tracked location for validation assets.
-- `development/CompilerRuntimeCompletionHandoff.md` is the interface handoff for the completed compiler and runtime stage.
-- Read the relevant language specification, compiler/runtime handoff, shared program contract in `src/program/`, and open-issue register before changing an owned subsystem.
+- Read the relevant language specification, shared program contract in `src/program/`, current operational documentation, and open-issue register before changing an owned subsystem.
 - Record a new decision in its owning document instead of duplicating phase history or handoff logs in `AGENTS.md`.
 
 ## Dependency Model
@@ -101,11 +100,10 @@ all modules -> support only for domain-independent primitives
 - Phase 8: Debug Client is complete and archived under `development/legacy/phase-8-debug-client/`.
 - The current App and TUI product design is under `development/InputWeaverAppDesign/`; `development/phase-9-app/Proposal.md` and `development/phase-10-tui/Proposal.md` are phase entry points.
 - `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and `InputWeaverTUI.exe`.
-- The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls; its compiler/runtime integration interface is recorded in `development/CompilerRuntimeCompletionHandoff.md`.
+- The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
 - `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
-- `development/CompilerRuntimeCompletionHandoff.md` records the delivered artifacts, command-line interfaces, language boundary, runtime contract, canonical workflow, and operating requirements for this stage.
 - Completed Phase 2 through Phase 8 records are archived under `development/legacy/`.
 - Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 

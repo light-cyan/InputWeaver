@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This register contains unresolved design decisions that can change current compiler, runtime, platform, or user-visible behavior. The language specifications, the shared program implementation under `src/program/`, and `development/CompilerRuntimeCompletionHandoff.md` describe settled current behavior. Work may proceed outside an issue's affected boundary, but an affected verification gate cannot pass until the decision is incorporated into its owning specification, implementation, and tests.
+This register contains unresolved design decisions that can change current compiler, runtime, platform, or user-visible behavior. The language specifications, shared program implementation under `src/program/`, current operational documentation, implementation, and tests describe settled current behavior. Work may proceed outside an issue's affected boundary, but an affected verification gate cannot pass until the decision is incorporated into its owning specification, implementation, and tests.
 
 ## Resolution procedure
 
