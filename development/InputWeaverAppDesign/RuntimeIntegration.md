@@ -43,7 +43,7 @@ App 为每个条目最多持有一个受管执行器。不同条目可以同时�
 
 普通执行器停止使用独立进程组和控制台控制事件请求有序退出；超时后的错误进入 Console。TUI 退出时依次停止所有由它启动且仍在运行的执行器。
 
-## 新增 `--dry-run`
+## `--dry-run`
 
 `--dry-run` 是无注入模拟运行模式。程序仍加载 `.weavec`，仍建立目标监听、输入状态、规则匹配、变量、`PAUSE`、动作任务、调试事件和诊断输出，但不对系统产生输入注入或外部进程启动效果。
 
@@ -59,9 +59,9 @@ App 为每个条目最多持有一个受管执行器。不同条目可以同时�
 
 ## 调试墙钟时间
 
-现有协议只传递基于高精度计时器的单调纳秒时间，不能直接显示真实时刻。Debug 页需要 `HH:MM:SS.mmm`，因此调试协议升级一个版本，并在每个捕获周期建立单调时间与 UTC 墙钟时间的锚点。
+调试协议版本 2 在每个捕获周期建立单调时间与 UTC 墙钟时间的锚点，使 Debug 页可以显示 `HH:MM:SS.mmm`。
 
-`CaptureStarted` 新增 UTC Unix 毫秒锚点，其消息头中的 `captureTimeNanoseconds` 作为同一时刻的单调时间锚点。客户端按下式换算每条事件的 UTC Unix 毫秒：
+`CaptureStarted` 携带 UTC Unix 毫秒锚点，其消息头中的 `captureTimeNanoseconds` 作为同一时刻的单调时间锚点。客户端按下式换算每条事件的 UTC Unix 毫秒：
 
 ```text
 eventUnixMilliseconds = captureStartUnixMilliseconds
@@ -72,9 +72,9 @@ eventUnixMilliseconds = captureStartUnixMilliseconds
 
 这项改动涉及调试协议编解码、Windows 调试服务端、`DebugClient` 派生状态及相应测试，不改变 `.weavec`，也不改变输入事件、规则匹配和动作执行的已有含义。
 
-## 现有源码改动结论
+## 现有源码扩展结果
 
-为了实现当前 App 设计，现有编译器、运行时与 Debug 组件只需要两项功能性扩展：
+当前 App 设计依赖的两项源码扩展为：
 
 1. 为 `InputWeaver.exe` 增加 `--dry-run` 及其无效果输出边界。
 2. 为调试协议和 `DebugClient` 增加可换算真实时间的捕获锚点。

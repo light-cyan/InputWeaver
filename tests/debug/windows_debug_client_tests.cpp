@@ -255,6 +255,9 @@ private:
         started.header.targetSessionId = kSessionId;
         started.header.captureEpoch = epoch;
         started.header.protocolSequence = protocolSequence;
+        started.header.captureTimeNanoseconds = 1'000'000;
+        started.captureStarted.captureUnixTimeMilliseconds =
+            1'725'000'000'000LL;
         std::lock_guard lock(writeMutex_);
         if (!Send(pipe, started)) {
             return false;
@@ -267,6 +270,7 @@ private:
         input.header.targetSessionId = kSessionId;
         input.header.captureEpoch = epoch;
         input.header.protocolSequence = protocolSequence + 1U;
+        input.header.captureTimeNanoseconds = 2'000'000;
         input.inputEvent.inputSequence = 1U;
         input.inputEvent.device = inputweaver::DeviceKind::Keyboard;
         input.inputEvent.transition = inputweaver::Transition::Down;
@@ -431,7 +435,11 @@ void TestFakeServerSession()
                 const auto state = client.ReadState();
                 return state->capturing && state->captureTrusted
                     && state->captureEpoch == 1U
-                    && state->pressedControls.size() == 1U;
+                    && state->pressedControls.size() == 1U
+                    && state->recentInputEvents.size() == 1U
+                    && state->recentInputEvents[0]
+                            .captureUnixTimeMilliseconds
+                        == 1'725'000'000'001LL;
             },
             5'000U),
         "client reads CaptureStarted and INIT from fake server");

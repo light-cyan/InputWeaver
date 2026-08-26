@@ -347,6 +347,12 @@ void TestPipeSession()
             "producer stream preserves queue order");
         if (received.Succeeded()) {
             previousSequence = received.message.header.protocolSequence;
+            if (index == 0U) {
+                Check(
+                    received.message.captureStarted
+                            .captureUnixTimeMilliseconds > 0,
+                    "capture start includes a wall-clock anchor");
+            }
             if (index == 1U) {
                 Check(
                     received.message.inputEvent.origin

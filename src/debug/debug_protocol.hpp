@@ -12,7 +12,7 @@
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 1U;
+inline constexpr std::uint16_t kProtocolVersion = 2U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugInstructions = 262'144U;
@@ -61,6 +61,10 @@ struct HelloAcceptedPayload final {
     std::uint32_t processId{};
 };
 
+struct CaptureStartedPayload final {
+    std::int64_t captureUnixTimeMilliseconds{};
+};
+
 struct InputEventPayload final {
     std::uint64_t inputSequence{};
     DeviceKind device{DeviceKind::Keyboard};
@@ -104,6 +108,7 @@ struct Message final {
     MessageHeader header{};
     HelloPayload hello{};
     HelloAcceptedPayload helloAccepted{};
+    CaptureStartedPayload captureStarted{};
     InputEventPayload inputEvent{};
     RuleMatchedPayload ruleMatched{};
     ActionStartedPayload actionStarted{};

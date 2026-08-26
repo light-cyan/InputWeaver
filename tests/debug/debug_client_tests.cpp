@@ -29,7 +29,11 @@ void Check(bool condition, std::string_view name)
     message.header.captureEpoch = epoch;
     message.header.protocolSequence = sequence;
     message.header.captureTimeNanoseconds = static_cast<std::int64_t>(
-        sequence * 100U);
+        sequence * 1'000'000U);
+    if (kind == inputweaver::debug::MessageKind::CaptureStarted) {
+        message.captureStarted.captureUnixTimeMilliseconds =
+            1'725'000'000'000LL;
+    }
     return message;
 }
 
@@ -355,8 +359,11 @@ void TestRuleCorrelationAndInterleaving()
     const auto* second = FindExecution(*state, 22U);
     Check(
         first != nullptr && first->program != nullptr
-            && first->matchedTimeNanoseconds == 200
-            && first->triggerInput.captureTimeNanoseconds == 1200
+            && first->matchedTimeNanoseconds == 2'000'000
+            && first->matchedUnixTimeMilliseconds == 1'725'000'000'001LL
+            && first->triggerInput.captureTimeNanoseconds == 12'000'000
+            && first->triggerInput.captureUnixTimeMilliseconds
+                == 1'725'000'000'011LL
             && first->program->conditionInstructions.size() == 1U
             && first->program->actionInstructions.size() == 5U,
         "execution keeps display times, condition, and complete action program");

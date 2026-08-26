@@ -73,6 +73,7 @@ struct DebugControlIdentity final {
 struct DebugInputEvent final {
     std::uint64_t inputSequence{};
     std::int64_t captureTimeNanoseconds{};
+    std::int64_t captureUnixTimeMilliseconds{};
     DebugControlIdentity control{};
     Transition transition{Transition::Down};
     InputOrigin origin{InputOrigin::PhysicalCandidate};
@@ -98,6 +99,7 @@ struct DebugRuleExecution final {
     DebugInputEvent triggerInput{};
     std::shared_ptr<const DebugRuleProgram> program;
     std::int64_t matchedTimeNanoseconds{};
+    std::int64_t matchedUnixTimeMilliseconds{};
     std::optional<std::uint32_t> currentInstructionIndex;
     std::vector<std::uint32_t> recentInstructionIndices;
     std::optional<RuntimeExecutionResult> result;
@@ -105,6 +107,7 @@ struct DebugRuleExecution final {
 
 struct DebugRuntimeIssue final {
     std::int64_t captureTimeNanoseconds{};
+    std::int64_t captureUnixTimeMilliseconds{};
     RuntimeIssuePayload payload{};
 };
 

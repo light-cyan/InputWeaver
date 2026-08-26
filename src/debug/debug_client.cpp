@@ -70,6 +70,7 @@ struct DebugStateReducer::Impl final {
         std::uint64_t triggerInputSequence{};
         std::shared_ptr<const DebugRuleProgram> program;
         std::int64_t matchedTimeNanoseconds{};
+        std::int64_t matchedUnixTimeMilliseconds{};
         std::optional<std::uint32_t> currentInstructionIndex;
         std::vector<std::uint32_t> recentInstructionIndices;
         std::optional<RuntimeExecutionResult> result;
@@ -97,6 +98,30 @@ struct DebugStateReducer::Impl final {
         pendingExecutions.clear();
         lastInputSequence = 0U;
         storedInstructions = 0U;
+        captureStartTimeNanoseconds = 0;
+        captureStartUnixTimeMilliseconds = 0;
+    }
+
+    [[nodiscard]] bool CaptureUnixTime(
+        std::int64_t captureTimeNanoseconds,
+        std::int64_t& captureUnixTimeMilliseconds) const noexcept
+    {
+        if (captureStartTimeNanoseconds < 0
+            || captureStartUnixTimeMilliseconds <= 0
+            || captureTimeNanoseconds < captureStartTimeNanoseconds) {
+            return false;
+        }
+        const std::int64_t elapsedMilliseconds =
+            (captureTimeNanoseconds - captureStartTimeNanoseconds)
+            / 1'000'000LL;
+        if (captureStartUnixTimeMilliseconds
+            > (std::numeric_limits<std::int64_t>::max)()
+                - elapsedMilliseconds) {
+            return false;
+        }
+        captureUnixTimeMilliseconds = captureStartUnixTimeMilliseconds
+            + elapsedMilliseconds;
+        return true;
     }
 
     [[nodiscard]] DebugReductionAction Recover(DebugClientFault fault)
@@ -248,6 +273,8 @@ struct DebugStateReducer::Impl final {
         execution.triggerInput = trigger;
         execution.program = std::move(pending.program);
         execution.matchedTimeNanoseconds = pending.matchedTimeNanoseconds;
+        execution.matchedUnixTimeMilliseconds =
+            pending.matchedUnixTimeMilliseconds;
         execution.currentInstructionIndex = pending.currentInstructionIndex;
         execution.recentInstructionIndices = std::move(
             pending.recentInstructionIndices);
@@ -282,7 +309,14 @@ struct DebugStateReducer::Impl final {
                 && message.header.captureEpoch <= state.captureEpoch)) {
             return Recover(DebugClientFault::CaptureEpochMismatch);
         }
+        if (message.header.captureTimeNanoseconds < 0
+            || message.captureStarted.captureUnixTimeMilliseconds <= 0) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
         ClearCapture();
+        captureStartTimeNanoseconds = message.header.captureTimeNanoseconds;
+        captureStartUnixTimeMilliseconds =
+            message.captureStarted.captureUnixTimeMilliseconds;
         state.captureEpoch = message.header.captureEpoch;
         state.capturing = true;
         state.captureTrusted = true;
@@ -315,6 +349,11 @@ struct DebugStateReducer::Impl final {
             return Recover(DebugClientFault::CapacityExceeded);
         }
         DebugInputEvent input{};
+        if (!CaptureUnixTime(
+                message.header.captureTimeNanoseconds,
+                input.captureUnixTimeMilliseconds)) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
         input.inputSequence = payload.inputSequence;
         input.captureTimeNanoseconds = message.header.captureTimeNanoseconds;
         input.control = MakeControl(payload);
@@ -375,6 +414,12 @@ struct DebugStateReducer::Impl final {
             || MarkerExists(matched.executionMarker)) {
             return Recover(DebugClientFault::InconsistentState);
         }
+        std::int64_t matchedUnixTimeMilliseconds{};
+        if (!CaptureUnixTime(
+                message.header.captureTimeNanoseconds,
+                matchedUnixTimeMilliseconds)) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
         const std::size_t instructions = matched.conditionInstructions.size()
             + matched.actionInstructions.size();
         if (instructions > capacities.maximumStoredInstructions
@@ -412,6 +457,7 @@ struct DebugStateReducer::Impl final {
         pending.triggerInputSequence = matched.triggerInputSequence;
         pending.program = std::move(program);
         pending.matchedTimeNanoseconds = message.header.captureTimeNanoseconds;
+        pending.matchedUnixTimeMilliseconds = matchedUnixTimeMilliseconds;
         storedInstructions += instructions;
         pendingExecutions.push_back(std::move(pending));
         DebugInputEvent* trigger = FindInput(matched.triggerInputSequence);
@@ -511,10 +557,17 @@ struct DebugStateReducer::Impl final {
         if (capacities.maximumRuntimeIssues == 0U) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
+        std::int64_t captureUnixTimeMilliseconds{};
+        if (!CaptureUnixTime(
+                message.header.captureTimeNanoseconds,
+                captureUnixTimeMilliseconds)) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
         AppendRecent(
             state.runtimeIssues,
             DebugRuntimeIssue{
                 message.header.captureTimeNanoseconds,
+                captureUnixTimeMilliseconds,
                 message.runtimeIssue},
             capacities.maximumRuntimeIssues);
         if (message.runtimeIssue.code == IssueCode::DebugStreamOverflow) {
@@ -596,6 +649,8 @@ struct DebugStateReducer::Impl final {
     std::uint64_t nextProtocolSequence{1U};
     std::uint64_t lastInputSequence{};
     std::size_t storedInstructions{};
+    std::int64_t captureStartTimeNanoseconds{};
+    std::int64_t captureStartUnixTimeMilliseconds{};
     bool recoveryPending{};
     bool sequenceUnknown{};
 };
@@ -614,6 +669,8 @@ void DebugStateReducer::Connected(std::uint64_t targetSessionId)
     impl_->pendingExecutions.clear();
     impl_->storedInstructions = 0U;
     impl_->lastInputSequence = 0U;
+    impl_->captureStartTimeNanoseconds = 0;
+    impl_->captureStartUnixTimeMilliseconds = 0;
     impl_->nextProtocolSequence = 1U;
     impl_->recoveryPending = false;
     impl_->sequenceUnknown = false;

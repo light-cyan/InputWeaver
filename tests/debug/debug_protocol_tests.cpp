@@ -62,6 +62,22 @@ void TestInputEvent()
         "compiled control identity round trips");
 }
 
+void TestCaptureStarted()
+{
+    inputweaver::debug::Message message{};
+    message.header.kind = inputweaver::debug::MessageKind::CaptureStarted;
+    message.header.captureTimeNanoseconds = 123'456'789;
+    message.captureStarted.captureUnixTimeMilliseconds = 1'725'000'000'123LL;
+
+    const auto decoded = RoundTrip(message);
+    Check(
+        inputweaver::debug::kProtocolVersion == 2U
+            && decoded.Succeeded()
+            && decoded.message.captureStarted.captureUnixTimeMilliseconds
+                == 1'725'000'000'123LL,
+        "capture wall-clock anchor round trips in protocol version 2");
+}
+
 void TestRuleMatched()
 {
     inputweaver::debug::Message message{};
@@ -169,6 +185,7 @@ void TestMalformedFrame()
 
 int main()
 {
+    TestCaptureStarted();
     TestInputEvent();
     TestRuleMatched();
     TestTerminalAndIssueMessages();

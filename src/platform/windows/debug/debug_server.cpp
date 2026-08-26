@@ -42,6 +42,7 @@ struct ProducerRecord final {
     ProducerRecordKind kind{ProducerRecordKind::RuntimeEvent};
     std::uint64_t captureEpoch{};
     std::int64_t captureTimeNanoseconds{};
+    std::int64_t captureUnixTimeMilliseconds{};
     debug::InputEventPayload input{};
     RuntimeDebugEvent runtime{};
 };
@@ -320,6 +321,22 @@ struct WindowsDebugServer::Impl final {
             + (remainder * 1'000'000'000LL) / performanceFrequency;
     }
 
+    [[nodiscard]] std::int64_t CaptureUnixTimeMilliseconds() const noexcept
+    {
+        FILETIME fileTime{};
+        GetSystemTimePreciseAsFileTime(&fileTime);
+        ULARGE_INTEGER ticks{};
+        ticks.LowPart = fileTime.dwLowDateTime;
+        ticks.HighPart = fileTime.dwHighDateTime;
+        constexpr std::uint64_t kUnixEpochFileTimeTicks =
+            116'444'736'000'000'000ULL;
+        if (ticks.QuadPart < kUnixEpochFileTimeTicks) {
+            return 0;
+        }
+        return static_cast<std::int64_t>(
+            (ticks.QuadPart - kUnixEpochFileTimeTicks) / 10'000ULL);
+    }
+
     [[nodiscard]] HANDLE CreateServerPipe(std::wstring& errorMessage) const
     {
         const HANDLE pipe = CreateNamedPipeW(
@@ -522,6 +539,8 @@ struct WindowsDebugServer::Impl final {
                 record.captureEpoch,
                 record.captureTimeNanoseconds,
                 protocolSequence);
+            message.captureStarted.captureUnixTimeMilliseconds =
+                record.captureUnixTimeMilliseconds;
             return WriteMessage(pipe, message);
         }
         if (record.captureEpoch != writerEpoch) {
@@ -861,6 +880,8 @@ bool WindowsDebugServer::BeginCapture(
     started.kind = ProducerRecordKind::CaptureStarted;
     started.captureEpoch = epoch;
     started.captureTimeNanoseconds = impl_->CaptureTimeNanoseconds();
+    started.captureUnixTimeMilliseconds =
+        impl_->CaptureUnixTimeMilliseconds();
     if (!impl_->PushRecord(started, false)) {
         return false;
     }

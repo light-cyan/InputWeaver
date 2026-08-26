@@ -190,7 +190,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StartCapture:
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
+        return true;
     case MessageKind::CaptureStarted:
+        writer.I64(message.captureStarted.captureUnixTimeMilliseconds);
         return true;
     case MessageKind::InputEvent: {
         const InputEventPayload& input = message.inputEvent;
@@ -270,8 +272,10 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StartCapture:
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
-    case MessageKind::CaptureStarted:
         return true;
+    case MessageKind::CaptureStarted:
+        return reader.I64(
+            message.captureStarted.captureUnixTimeMilliseconds);
     case MessageKind::InputEvent: {
         InputEventPayload& input = message.inputEvent;
         return reader.U64(input.inputSequence)
