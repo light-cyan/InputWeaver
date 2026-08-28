@@ -345,15 +345,8 @@ void TestPipeSession()
     matched.captureEpoch = correlation.captureEpoch;
     matched.executionMarker = 27U;
     matched.triggerInputSequence = correlation.inputSequence;
-    matched.eventKey = finalized.program->EventBuckets()[0U].key;
     matched.ruleIndex = 0U;
     Check(server.Publish(matched), "rule match enters event stream");
-    inputweaver::RuntimeDebugEvent action{};
-    action.kind = inputweaver::RuntimeDebugEventKind::ActionStarted;
-    action.captureEpoch = correlation.captureEpoch;
-    action.executionMarker = 27U;
-    action.instructionIndex = 0U;
-    Check(server.Publish(action), "action start enters event stream");
     inputweaver::RuntimeDebugEvent ended{};
     ended.kind = inputweaver::RuntimeDebugEventKind::ExecutionEnded;
     ended.captureEpoch = correlation.captureEpoch;
@@ -364,11 +357,10 @@ void TestPipeSession()
         correlation.Active() && server.PublishInput(correlation, input),
         "ordinary input enters event stream");
 
-    const std::array<inputweaver::debug::MessageKind, 6U> expected = {
+    const std::array<inputweaver::debug::MessageKind, 5U> expected = {
         inputweaver::debug::MessageKind::CaptureStarted,
         inputweaver::debug::MessageKind::InputEvent,
         inputweaver::debug::MessageKind::RuleMatched,
-        inputweaver::debug::MessageKind::ActionStarted,
         inputweaver::debug::MessageKind::ExecutionEnded,
         inputweaver::debug::MessageKind::InputEvent};
     std::uint64_t previousSequence{};
@@ -404,12 +396,10 @@ void TestPipeSession()
             if (index == 2U) {
                 Check(
                     received.message.ruleMatched.conditionText == "always"
-                        && received.message.ruleMatched.actionInstructions.size()
-                            == 2U
                         && received.message.ruleMatched.actionText == "tap(F7)",
                     "pipe worker expands readable condition and action data");
             }
-            if (index == 4U) {
+            if (index == 3U) {
                 Check(
                     received.message.header.captureTimeNanoseconds == 0,
                     "execution end does not sample or publish an end time");
@@ -589,15 +579,8 @@ void TestDebugClientIntegration()
     matched.captureEpoch = correlation.captureEpoch;
     matched.executionMarker = 88U;
     matched.triggerInputSequence = correlation.inputSequence;
-    matched.eventKey = finalized.program->EventBuckets()[0U].key;
     matched.ruleIndex = 0U;
     Check(server.Publish(matched), "integration RuleMatched is published");
-    inputweaver::RuntimeDebugEvent action{};
-    action.kind = inputweaver::RuntimeDebugEventKind::ActionStarted;
-    action.captureEpoch = correlation.captureEpoch;
-    action.executionMarker = 88U;
-    action.instructionIndex = 0U;
-    Check(server.Publish(action), "integration ActionStarted is published");
     inputweaver::RuntimeDebugEvent ended{};
     ended.kind = inputweaver::RuntimeDebugEventKind::ExecutionEnded;
     ended.captureEpoch = correlation.captureEpoch;
@@ -620,11 +603,8 @@ void TestDebugClientIntegration()
                 && state->ruleExecutions[0].executionMarker == 88U
                 && state->ruleExecutions[0].result
                     == inputweaver::RuntimeExecutionResult::Cancelled
-                && state->ruleExecutions[0].program != nullptr
-                && state->ruleExecutions[0].program->actionInstructions.size()
-                    == 1U
-                && state->ruleExecutions[0].program->conditionText == "always"
-                && state->ruleExecutions[0].program->actionText == "F6 -> F7";
+                && state->ruleExecutions[0].conditionText == "always"
+                && state->ruleExecutions[0].actionText == "F6 -> F7";
         }),
         "DebugClient correlates an early RuleMatched from WindowsDebugServer");
 

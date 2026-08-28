@@ -68,11 +68,9 @@ struct DebugStateReducer::Impl final {
     struct PendingExecution final {
         std::uint64_t executionMarker{};
         std::uint64_t triggerInputSequence{};
-        std::shared_ptr<const DebugRuleProgram> program;
-        std::int64_t matchedTimeNanoseconds{};
+        std::string conditionText;
+        std::string actionText;
         std::int64_t matchedUnixTimeMilliseconds{};
-        std::optional<std::uint32_t> currentInstructionIndex;
-        std::vector<std::uint32_t> recentInstructionIndices;
         std::optional<RuntimeExecutionResult> result;
     };
 
@@ -98,7 +96,6 @@ struct DebugStateReducer::Impl final {
         state.runtimeIssues.clear();
         pendingExecutions.clear();
         lastInputSequence = 0U;
-        storedInstructions = 0U;
         captureStartTimeNanoseconds = 0;
         captureStartUnixTimeMilliseconds = 0;
     }
@@ -217,13 +214,6 @@ struct DebugStateReducer::Impl final {
         return FindExecution(marker) != nullptr || FindPending(marker) != nullptr;
     }
 
-    [[nodiscard]] std::size_t InstructionCount(
-        const DebugRuleProgram& program) const noexcept
-    {
-        return program.conditionInstructions.size()
-            + program.actionInstructions.size();
-    }
-
     [[nodiscard]] bool RemoveOldestEndedExecution()
     {
         const auto found = std::find_if(
@@ -235,26 +225,17 @@ struct DebugStateReducer::Impl final {
         if (found == state.ruleExecutions.end()) {
             return false;
         }
-        storedInstructions -= InstructionCount(*found->program);
         state.ruleExecutions.erase(found);
         return true;
     }
 
-    [[nodiscard]] bool ReserveExecutionSpace(std::size_t extraInstructions)
+    [[nodiscard]] bool ReserveExecutionSpace()
     {
-        if (extraInstructions > capacities.maximumStoredInstructions) {
-            return false;
-        }
-        while ((state.ruleExecutions.size()
-                    >= capacities.maximumRuleExecutions
-                || storedInstructions
-                        > capacities.maximumStoredInstructions
-                            - extraInstructions)
+        while (state.ruleExecutions.size()
+                >= capacities.maximumRuleExecutions
             && RemoveOldestEndedExecution()) {
         }
-        return state.ruleExecutions.size() < capacities.maximumRuleExecutions
-            && storedInstructions
-                <= capacities.maximumStoredInstructions - extraInstructions;
+        return state.ruleExecutions.size() < capacities.maximumRuleExecutions;
     }
 
     [[nodiscard]] bool Materialize(
@@ -262,7 +243,7 @@ struct DebugStateReducer::Impl final {
         const DebugInputEvent& trigger)
     {
         if (pendingIndex >= pendingExecutions.size()
-            || !ReserveExecutionSpace(0U)) {
+            || !ReserveExecutionSpace()) {
             return false;
         }
         PendingExecution pending = std::move(pendingExecutions[pendingIndex]);
@@ -272,13 +253,10 @@ struct DebugStateReducer::Impl final {
         DebugRuleExecution execution{};
         execution.executionMarker = pending.executionMarker;
         execution.triggerInput = trigger;
-        execution.program = std::move(pending.program);
-        execution.matchedTimeNanoseconds = pending.matchedTimeNanoseconds;
+        execution.conditionText = std::move(pending.conditionText);
+        execution.actionText = std::move(pending.actionText);
         execution.matchedUnixTimeMilliseconds =
             pending.matchedUnixTimeMilliseconds;
-        execution.currentInstructionIndex = pending.currentInstructionIndex;
-        execution.recentInstructionIndices = std::move(
-            pending.recentInstructionIndices);
         execution.result = pending.result;
         state.ruleExecutions.push_back(std::move(execution));
         return true;
@@ -426,20 +404,6 @@ struct DebugStateReducer::Impl final {
                 matchedUnixTimeMilliseconds)) {
             return Recover(DebugClientFault::InconsistentState);
         }
-        const std::size_t instructions = matched.conditionInstructions.size()
-            + matched.actionInstructions.size();
-        if (instructions > capacities.maximumStoredInstructions
-            || storedInstructions
-                > capacities.maximumStoredInstructions - instructions) {
-            while (storedInstructions
-                    > capacities.maximumStoredInstructions - instructions
-                && RemoveOldestEndedExecution()) {
-            }
-            if (storedInstructions
-                > capacities.maximumStoredInstructions - instructions) {
-                return Recover(DebugClientFault::CapacityExceeded);
-            }
-        }
         if (matched.triggerInputSequence <= lastInputSequence
             && FindInput(matched.triggerInputSequence) == nullptr) {
             return Recover(DebugClientFault::CapacityExceeded);
@@ -448,72 +412,17 @@ struct DebugStateReducer::Impl final {
             >= capacities.maximumPendingRuleExecutions) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
-        std::shared_ptr<DebugRuleProgram> program;
-        try {
-            program = std::make_shared<DebugRuleProgram>();
-            program->eventTransition = matched.eventTransition;
-            program->eventControl = matched.eventControl;
-            program->conditionText = matched.conditionText;
-            program->actionText = matched.actionText;
-            program->conditionInstructions = matched.conditionInstructions;
-            program->actionInstructions = matched.actionInstructions;
-        } catch (...) {
-            return Recover(DebugClientFault::CapacityExceeded);
-        }
         PendingExecution pending{};
         pending.executionMarker = matched.executionMarker;
         pending.triggerInputSequence = matched.triggerInputSequence;
-        pending.program = std::move(program);
-        pending.matchedTimeNanoseconds = message.header.captureTimeNanoseconds;
+        pending.conditionText = matched.conditionText;
+        pending.actionText = matched.actionText;
         pending.matchedUnixTimeMilliseconds = matchedUnixTimeMilliseconds;
-        storedInstructions += instructions;
         pendingExecutions.push_back(std::move(pending));
         DebugInputEvent* trigger = FindInput(matched.triggerInputSequence);
         if (trigger != nullptr
             && !Materialize(pendingExecutions.size() - 1U, *trigger)) {
             return Recover(DebugClientFault::CapacityExceeded);
-        }
-        Publish();
-        return DebugReductionAction::None;
-    }
-
-    template <typename Execution>
-    [[nodiscard]] bool StartAction(
-        Execution& execution,
-        const ActionStartedPayload& started)
-    {
-        if (execution.result.has_value()
-            || execution.program == nullptr
-            || started.instructionIndex
-                >= execution.program->actionInstructions.size()) {
-            return false;
-        }
-        execution.currentInstructionIndex = started.instructionIndex;
-        AppendRecent(
-            execution.recentInstructionIndices,
-            started.instructionIndex,
-            3U);
-        return true;
-    }
-
-    [[nodiscard]] DebugReductionAction AcceptActionStarted(
-        const Message& message)
-    {
-        const ActionStartedPayload& started = message.actionStarted;
-        DebugRuleExecution* execution = FindExecution(started.executionMarker);
-        if (execution != nullptr) {
-            if (!StartAction(*execution, started)) {
-                return Recover(DebugClientFault::InconsistentState);
-            }
-            Publish();
-            return DebugReductionAction::None;
-        }
-        PendingExecution* pending = FindPending(started.executionMarker);
-        if (pending == nullptr) {
-            return Recover(DebugClientFault::UnknownExecutionMarker);
-        }
-        if (!StartAction(*pending, started)) {
-            return Recover(DebugClientFault::InconsistentState);
         }
         Publish();
         return DebugReductionAction::None;
@@ -527,7 +436,6 @@ struct DebugStateReducer::Impl final {
         if (execution.result.has_value()) {
             return false;
         }
-        execution.currentInstructionIndex.reset();
         execution.result = ended.result;
         return true;
     }
@@ -646,8 +554,6 @@ struct DebugStateReducer::Impl final {
             return AcceptInput(message);
         case MessageKind::RuleMatched:
             return AcceptRuleMatched(message);
-        case MessageKind::ActionStarted:
-            return AcceptActionStarted(message);
         case MessageKind::ExecutionEnded:
             return AcceptExecutionEnded(message);
         case MessageKind::RuntimeIssue:
@@ -672,7 +578,6 @@ struct DebugStateReducer::Impl final {
     std::vector<PendingExecution> pendingExecutions;
     std::uint64_t nextProtocolSequence{1U};
     std::uint64_t lastInputSequence{};
-    std::size_t storedInstructions{};
     std::int64_t captureStartTimeNanoseconds{};
     std::int64_t captureStartUnixTimeMilliseconds{};
     bool recoveryPending{};
@@ -691,7 +596,6 @@ void DebugStateReducer::Connected(std::uint64_t targetSessionId)
     std::lock_guard lock(impl_->mutex);
     impl_->state = {};
     impl_->pendingExecutions.clear();
-    impl_->storedInstructions = 0U;
     impl_->lastInputSequence = 0U;
     impl_->captureStartTimeNanoseconds = 0;
     impl_->captureStartUnixTimeMilliseconds = 0;

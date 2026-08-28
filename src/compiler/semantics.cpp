@@ -29,16 +29,6 @@ struct Symbol final {
     SourceSpan declaration{};
 };
 
-[[nodiscard]] ExpressionType ToExpressionType(ValueType type) noexcept
-{
-    switch (type) {
-    case ValueType::State: return ExpressionType::State;
-    case ValueType::Number: return ExpressionType::Number;
-    case ValueType::Duration: return ExpressionType::Duration;
-    }
-    return ExpressionType::None;
-}
-
 [[nodiscard]] bool IsWritable(ValueRef value) noexcept
 {
     return value.domain == ValueDomain::UserState

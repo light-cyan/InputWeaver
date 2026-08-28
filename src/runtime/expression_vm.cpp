@@ -17,19 +17,6 @@ namespace {
     return result;
 }
 
-[[nodiscard]] ExpressionType ToExpressionType(ValueType type) noexcept
-{
-    switch (type) {
-    case ValueType::State:
-        return ExpressionType::State;
-    case ValueType::Number:
-        return ExpressionType::Number;
-    case ValueType::Duration:
-        return ExpressionType::Duration;
-    }
-    return ExpressionType::None;
-}
-
 [[nodiscard]] bool IsFinite(double value) noexcept
 {
     return std::isfinite(value) != 0;

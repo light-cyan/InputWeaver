@@ -149,19 +149,6 @@ template <typename Id>
         || type == ExpressionType::Duration;
 }
 
-[[nodiscard]] ExpressionType ToExpressionType(ValueType type) noexcept
-{
-    switch (type) {
-    case ValueType::State:
-        return ExpressionType::State;
-    case ValueType::Number:
-        return ExpressionType::Number;
-    case ValueType::Duration:
-        return ExpressionType::Duration;
-    }
-    return ExpressionType::None;
-}
-
 [[nodiscard]] bool IsWritableValue(const ValueRef& value) noexcept
 {
     return value.domain == ValueDomain::UserState
@@ -1221,6 +1208,113 @@ void ValidateUserValuesAndDebug(
     }
 }
 
+struct RuleBucketValidationText final {
+    std::string_view buckets;
+    std::string_view rules;
+    std::string_view invalidKey;
+    std::string_view invalidRange;
+    std::string_view overlappingRanges;
+    std::string_view invalidSource;
+    std::string_view invalidCondition;
+    std::string_view incompleteCoverage;
+};
+
+template <typename Buckets, typename Rules, typename ValidateRule>
+void ValidateRuleBuckets(
+    const CompiledProgramStorage& storage,
+    ValidationContext& context,
+    std::vector<std::uint8_t>& expectedControlUses,
+    std::set<std::uint32_t>& sourceOrdinals,
+    const Buckets& buckets,
+    const Rules& rules,
+    const RuleBucketValidationText& text,
+    ValidateRule&& validateRule)
+{
+    std::vector<bool> coveredRules(rules.size(), false);
+    EventKey previousKey{};
+    bool havePreviousKey = false;
+    for (std::size_t bucketIndex = 0; bucketIndex < buckets.size(); ++bucketIndex) {
+        const auto& bucket = buckets[bucketIndex];
+        const std::string bucketLocation = At(text.buckets, bucketIndex);
+        if (!ValidId(bucket.key.control, storage.controls.size())
+            || !ValidEventTransition(bucket.key.transition)
+            || (havePreviousKey && previousKey >= bucket.key)) {
+            context.Add(
+                ProgramValidationErrorCode::Rule,
+                bucketLocation,
+                std::string(text.invalidKey));
+        }
+        previousKey = bucket.key;
+        havePreviousKey = true;
+        AddExpectedControlUse(
+            storage,
+            expectedControlUses,
+            bucket.key.control,
+            ControlUse::EventSource,
+            context,
+            bucketLocation);
+
+        if (!ValidRange(bucket.rules, rules.size())) {
+            context.Add(
+                ProgramValidationErrorCode::Range,
+                bucketLocation + ".rules",
+                std::string(text.invalidRange));
+            continue;
+        }
+        std::uint32_t previousOrdinal = 0U;
+        bool havePreviousOrdinal = false;
+        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
+            + bucket.rules.count;
+        for (std::uint64_t rawIndex = bucket.rules.begin;
+             rawIndex < end;
+             ++rawIndex) {
+            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
+            if (coveredRules[ruleIndex]) {
+                context.Add(
+                    ProgramValidationErrorCode::Range,
+                    bucketLocation + ".rules",
+                    std::string(text.overlappingRanges));
+            }
+            coveredRules[ruleIndex] = true;
+            const auto& rule = rules[ruleIndex];
+            const std::string ruleLocation = At(text.rules, ruleIndex);
+            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
+                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".sourceOrdinal",
+                    "rule source ordinals must be globally unique and increase in a bucket");
+            }
+            previousOrdinal = rule.sourceOrdinal;
+            havePreviousOrdinal = true;
+            if (!ValidSpan(rule.source, storage.source.byteLength)) {
+                context.Add(
+                    ProgramValidationErrorCode::Source,
+                    ruleLocation + ".source",
+                    std::string(text.invalidSource));
+            }
+            if (rule.condition.IsValid()
+                && (!ValidId(rule.condition, storage.expressions.size())
+                    || storage.expressions[rule.condition.value].resultType
+                        != ExpressionType::Boolean)) {
+                context.Add(
+                    ProgramValidationErrorCode::Rule,
+                    ruleLocation + ".condition",
+                    std::string(text.invalidCondition));
+            }
+            validateRule(bucket, rule, ruleLocation);
+        }
+    }
+    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
+            return !value;
+        })) {
+        context.Add(
+            ProgramValidationErrorCode::Range,
+            std::string(text.buckets),
+            std::string(text.incompleteCoverage));
+    }
+}
+
 void ValidateExitControls(
     const CompiledProgramStorage& storage,
     ValidationContext& context,
@@ -1234,90 +1328,24 @@ void ValidateExitControls(
             "a compiled program must contain at least one exit-control rule");
     }
 
-    std::vector<bool> coveredRules(storage.exitControlRules.size(), false);
-    EventKey previousKey{};
-    bool havePreviousKey = false;
-    for (std::size_t bucketIndex = 0;
-         bucketIndex < storage.exitControlBuckets.size();
-         ++bucketIndex) {
-        const ExitControlBucket& bucket = storage.exitControlBuckets[bucketIndex];
-        const std::string bucketLocation = At("exitControlBuckets", bucketIndex);
-        if (!ValidId(bucket.key.control, storage.controls.size())
-            || !ValidEventTransition(bucket.key.transition)
-            || (havePreviousKey && previousKey >= bucket.key)) {
-            context.Add(
-                ProgramValidationErrorCode::Rule,
-                bucketLocation,
-                "exit-control buckets must have strictly sorted valid keys");
-        }
-        previousKey = bucket.key;
-        havePreviousKey = true;
-        AddExpectedControlUse(
-            storage,
-            expectedControlUses,
-            bucket.key.control,
-            ControlUse::EventSource,
-            context,
-            bucketLocation);
-
-        if (!ValidRange(bucket.rules, storage.exitControlRules.size())) {
-            context.Add(
-                ProgramValidationErrorCode::Range,
-                bucketLocation + ".rules",
-                "exit-control rule range is outside its table");
-            continue;
-        }
-        std::uint32_t previousOrdinal = 0U;
-        bool havePreviousOrdinal = false;
-        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
-            + bucket.rules.count;
-        for (std::uint64_t rawIndex = bucket.rules.begin;
-             rawIndex < end;
-             ++rawIndex) {
-            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
-            if (coveredRules[ruleIndex]) {
-                context.Add(
-                    ProgramValidationErrorCode::Range,
-                    bucketLocation + ".rules",
-                    "exit-control bucket rule ranges overlap");
-            }
-            coveredRules[ruleIndex] = true;
-            const ExitControlRule& rule = storage.exitControlRules[ruleIndex];
-            const std::string ruleLocation = At("exitControlRules", ruleIndex);
-            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
-                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".sourceOrdinal",
-                    "rule source ordinals must be globally unique and increase in a bucket");
-            }
-            previousOrdinal = rule.sourceOrdinal;
-            havePreviousOrdinal = true;
-            if (!ValidSpan(rule.source, storage.source.byteLength)) {
-                context.Add(
-                    ProgramValidationErrorCode::Source,
-                    ruleLocation + ".source",
-                    "exit-control source span is outside the source file");
-            }
-            if (rule.condition.IsValid()
-                && (!ValidId(rule.condition, storage.expressions.size())
-                    || storage.expressions[rule.condition.value].resultType
-                        != ExpressionType::Boolean)) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".condition",
-                    "exit-control condition must be invalid or Boolean");
-            }
-        }
-    }
-    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
-            return !value;
-        })) {
-        context.Add(
-            ProgramValidationErrorCode::Range,
+    ValidateRuleBuckets(
+        storage,
+        context,
+        expectedControlUses,
+        sourceOrdinals,
+        storage.exitControlBuckets,
+        storage.exitControlRules,
+        {
             "exitControlBuckets",
-            "exit-control bucket ranges do not cover the complete rule table");
-    }
+            "exitControlRules",
+            "exit-control buckets must have strictly sorted valid keys",
+            "exit-control rule range is outside its table",
+            "exit-control bucket rule ranges overlap",
+            "exit-control source span is outside the source file",
+            "exit-control condition must be invalid or Boolean",
+            "exit-control bucket ranges do not cover the complete rule table",
+        },
+        [](const auto&, const auto&, const std::string&) {});
 }
 
 void ValidatePauseControls(
@@ -1326,80 +1354,27 @@ void ValidatePauseControls(
     std::vector<std::uint8_t>& expectedControlUses,
     std::set<std::uint32_t>& sourceOrdinals)
 {
-    std::vector<bool> coveredRules(storage.pauseControlRules.size(), false);
-    EventKey previousKey{};
-    bool havePreviousKey = false;
-    for (std::size_t bucketIndex = 0;
-         bucketIndex < storage.pauseControlBuckets.size();
-         ++bucketIndex) {
-        const PauseControlBucket& bucket = storage.pauseControlBuckets[bucketIndex];
-        const std::string bucketLocation = At("pauseControlBuckets", bucketIndex);
-        if (!ValidId(bucket.key.control, storage.controls.size())
-            || !ValidEventTransition(bucket.key.transition)
-            || (havePreviousKey && previousKey >= bucket.key)) {
-            context.Add(
-                ProgramValidationErrorCode::Rule,
-                bucketLocation,
-                "pause-control buckets must have strictly sorted valid keys");
-        }
-        previousKey = bucket.key;
-        havePreviousKey = true;
-        AddExpectedControlUse(
-            storage,
-            expectedControlUses,
-            bucket.key.control,
-            ControlUse::EventSource,
-            context,
-            bucketLocation);
-
-        if (!ValidRange(bucket.rules, storage.pauseControlRules.size())) {
-            context.Add(
-                ProgramValidationErrorCode::Range,
-                bucketLocation + ".rules",
-                "pause-control rule range is outside its table");
-            continue;
-        }
-        std::uint32_t previousOrdinal = 0U;
-        bool havePreviousOrdinal = false;
-        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
-            + bucket.rules.count;
-        for (std::uint64_t rawIndex = bucket.rules.begin;
-             rawIndex < end;
-             ++rawIndex) {
-            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
-            if (coveredRules[ruleIndex]) {
-                context.Add(
-                    ProgramValidationErrorCode::Range,
-                    bucketLocation + ".rules",
-                    "pause-control bucket rule ranges overlap");
-            }
-            coveredRules[ruleIndex] = true;
-            const PauseControlRule& rule = storage.pauseControlRules[ruleIndex];
-            const std::string ruleLocation = At("pauseControlRules", ruleIndex);
-            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
-                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".sourceOrdinal",
-                    "rule source ordinals must be globally unique and increase in a bucket");
-            }
-            previousOrdinal = rule.sourceOrdinal;
-            havePreviousOrdinal = true;
-            if (!ValidSpan(rule.source, storage.source.byteLength)) {
-                context.Add(
-                    ProgramValidationErrorCode::Source,
-                    ruleLocation + ".source",
-                    "pause-control source span is outside the source file");
-            }
-            if (rule.condition.IsValid()
-                && (!ValidId(rule.condition, storage.expressions.size())
-                    || storage.expressions[rule.condition.value].resultType
-                        != ExpressionType::Boolean)) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".condition",
-                    "pause-control condition must be invalid or Boolean");
-            }
+    ValidateRuleBuckets(
+        storage,
+        context,
+        expectedControlUses,
+        sourceOrdinals,
+        storage.pauseControlBuckets,
+        storage.pauseControlRules,
+        {
+            "pauseControlBuckets",
+            "pauseControlRules",
+            "pause-control buckets must have strictly sorted valid keys",
+            "pause-control rule range is outside its table",
+            "pause-control bucket rule ranges overlap",
+            "pause-control source span is outside the source file",
+            "pause-control condition must be invalid or Boolean",
+            "pause-control bucket ranges do not cover the complete rule table",
+        },
+        [&context](
+            const PauseControlBucket&,
+            const PauseControlRule& rule,
+            const std::string& ruleLocation) {
             if (rule.delivery != Delivery::Observe
                 && rule.delivery != Delivery::Consume) {
                 context.Add(
@@ -1415,16 +1390,7 @@ void ValidatePauseControls(
                     ruleLocation + ".effect",
                     "pause-control effect is unknown");
             }
-        }
-    }
-    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
-            return !value;
-        })) {
-        context.Add(
-            ProgramValidationErrorCode::Range,
-            "pauseControlBuckets",
-            "pause-control bucket ranges do not cover the complete rule table");
-    }
+        });
 }
 
 void ValidateRulesAndMappings(
@@ -1481,80 +1447,27 @@ void ValidateRulesAndMappings(
             At("mappings", index));
     }
 
-    std::vector<bool> coveredRules(storage.rules.size(), false);
-    EventKey previousKey{};
-    bool havePreviousKey = false;
-    for (std::size_t bucketIndex = 0;
-         bucketIndex < storage.eventBuckets.size();
-         ++bucketIndex) {
-        const EventBucket& bucket = storage.eventBuckets[bucketIndex];
-        const std::string bucketLocation = At("eventBuckets", bucketIndex);
-        if (!ValidId(bucket.key.control, storage.controls.size())
-            || !ValidEventTransition(bucket.key.transition)
-            || (havePreviousKey && previousKey >= bucket.key)) {
-            context.Add(
-                ProgramValidationErrorCode::Rule,
-                bucketLocation,
-                "event buckets must have strictly sorted valid keys");
-        }
-        previousKey = bucket.key;
-        havePreviousKey = true;
-        AddExpectedControlUse(
-            storage,
-            expectedControlUses,
-            bucket.key.control,
-            ControlUse::EventSource,
-            context,
-            bucketLocation);
-
-        if (!ValidRange(bucket.rules, storage.rules.size())) {
-            context.Add(
-                ProgramValidationErrorCode::Range,
-                bucketLocation + ".rules",
-                "rule range is outside the rule table");
-            continue;
-        }
-        std::uint32_t previousOrdinal = 0U;
-        bool havePreviousOrdinal = false;
-        const std::uint64_t end = static_cast<std::uint64_t>(bucket.rules.begin)
-            + bucket.rules.count;
-        for (std::uint64_t rawIndex = bucket.rules.begin;
-             rawIndex < end;
-             ++rawIndex) {
-            const std::size_t ruleIndex = static_cast<std::size_t>(rawIndex);
-            if (coveredRules[ruleIndex]) {
-                context.Add(
-                    ProgramValidationErrorCode::Range,
-                    bucketLocation + ".rules",
-                    "event bucket rule ranges overlap");
-            }
-            coveredRules[ruleIndex] = true;
-            const CompiledRule& rule = storage.rules[ruleIndex];
-            const std::string ruleLocation = At("rules", ruleIndex);
-            if ((havePreviousOrdinal && previousOrdinal >= rule.sourceOrdinal)
-                || !sourceOrdinals.insert(rule.sourceOrdinal).second) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".sourceOrdinal",
-                    "rule source ordinals must be globally unique and increase in a bucket");
-            }
-            previousOrdinal = rule.sourceOrdinal;
-            havePreviousOrdinal = true;
-            if (!ValidSpan(rule.source, storage.source.byteLength)) {
-                context.Add(
-                    ProgramValidationErrorCode::Source,
-                    ruleLocation + ".source",
-                    "rule source span is outside the source file");
-            }
-            if (rule.condition.IsValid()
-                && (!ValidId(rule.condition, storage.expressions.size())
-                    || storage.expressions[rule.condition.value].resultType
-                        != ExpressionType::Boolean)) {
-                context.Add(
-                    ProgramValidationErrorCode::Rule,
-                    ruleLocation + ".condition",
-                    "rule condition must be invalid or a Boolean expression");
-            }
+    ValidateRuleBuckets(
+        storage,
+        context,
+        expectedControlUses,
+        sourceOrdinals,
+        storage.eventBuckets,
+        storage.rules,
+        {
+            "eventBuckets",
+            "rules",
+            "event buckets must have strictly sorted valid keys",
+            "rule range is outside the rule table",
+            "event bucket rule ranges overlap",
+            "rule source span is outside the source file",
+            "rule condition must be invalid or a Boolean expression",
+            "event bucket ranges do not cover the complete rule table",
+        },
+        [&storage, &context, &mappingRuleCounts](
+            const EventBucket& bucket,
+            const CompiledRule& rule,
+            const std::string& ruleLocation) {
             if (rule.delivery != Delivery::Observe
                 && rule.delivery != Delivery::Consume) {
                 context.Add(
@@ -1607,16 +1520,7 @@ void ValidateRulesAndMappings(
                     ruleLocation + ".kind",
                     "rule kind is unknown");
             }
-        }
-    }
-    if (std::any_of(coveredRules.begin(), coveredRules.end(), [](bool value) {
-            return !value;
-        })) {
-        context.Add(
-            ProgramValidationErrorCode::Range,
-            "eventBuckets",
-            "event bucket ranges do not cover the complete rule table");
-    }
+        });
     for (std::size_t index = 0; index < mappingRuleCounts.size(); ++index) {
         if (mappingRuleCounts[index] != 1U) {
             context.Add(

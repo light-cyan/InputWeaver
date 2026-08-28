@@ -6,14 +6,10 @@ if not exist "bin" mkdir "bin"
 if not exist "bin\res" mkdir "bin\res"
 
 set "INPUTWEAVER_CXX=g++"
-set "INPUTWEAVER_WINDRES=windres"
 set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
+set "INPUTWEAVER_PRODUCT_LINK=-static-libgcc -static-libstdc++"
 
-echo [1/3] Compiling the TUI manifest...
-%INPUTWEAVER_WINDRES% -DUNICODE -D_UNICODE "res\InputWeaverTUI.rc" -O coff -o "bin\InputWeaverTUI.res.o"
-if errorlevel 1 exit /b %errorlevel%
-
-echo [2/3] Building InputWeaverTUI.exe...
+echo [1/2] Building InputWeaverTUI.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
     "src\platform\windows\tui\tui_main.cpp" ^
     "src\platform\windows\tui\windows_terminal.cpp" ^
@@ -31,15 +27,17 @@ echo [2/3] Building InputWeaverTUI.exe...
     "src\ui\tui\support\canvas.cpp" ^
     "src\ui\tui\support\color_scheme.cpp" ^
     "src\ui\tui\support\interaction.cpp" ^
+    "src\ui\tui\support\source_editor.cpp" ^
+    "src\ui\tui\support\source_highlighter.cpp" ^
     "src\ui\tui\support\text_layout.cpp" ^
     "src\debug\debug_client.cpp" ^
     "src\debug\debug_protocol.cpp" ^
-    "bin\InputWeaverTUI.res.o" ^
     -o "bin\InputWeaverTUI.exe" ^
+    %INPUTWEAVER_PRODUCT_LINK% ^
     -ladvapi32
 if errorlevel 1 exit /b %errorlevel%
 
-echo [3/3] Copying the TUI color scheme...
+echo [2/2] Copying the TUI color scheme...
 copy /y "res\InputWeaverTUI.colors.json" "bin\res\InputWeaverTUI.colors.json" >nul
 if errorlevel 1 exit /b %errorlevel%
 

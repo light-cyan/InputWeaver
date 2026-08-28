@@ -100,43 +100,14 @@ void TestRuleMatched()
     message.header.captureEpoch = 7U;
     message.ruleMatched.executionMarker = 11U;
     message.ruleMatched.triggerInputSequence = 5U;
-    message.ruleMatched.eventTransition = inputweaver::EventTransition::Down;
-    message.ruleMatched.eventControl = {1U, 7U, 4U, 0U};
     message.ruleMatched.conditionText = "combat[on] and LCtrl[held]";
     message.ruleMatched.actionText = "wait(80ms)";
-    message.ruleMatched.conditionInstructions.push_back({
-        inputweaver::ExpressionOpcode::PushBoolean,
-        inputweaver::ExpressionType::Boolean,
-        1U,
-        0U});
-    message.ruleMatched.actionInstructions.push_back({
-        inputweaver::ActionOpcode::Wait,
-        2U,
-        0U});
-    message.ruleMatched.actionInstructions.push_back({
-        inputweaver::ActionOpcode::Jump,
-        0U,
-        0U});
-    message.ruleMatched.actionInstructions.push_back({
-        inputweaver::ActionOpcode::End,
-        0U,
-        0U});
 
     const auto decoded = RoundTrip(message);
     Check(decoded.Succeeded(), "rule match decodes");
     Check(
         decoded.message.ruleMatched.executionMarker == 11U,
         "execution marker round trips");
-    Check(
-        decoded.message.ruleMatched.conditionInstructions.size() == 1U,
-        "condition program round trips");
-    Check(
-        decoded.message.ruleMatched.actionInstructions.size() == 3U,
-        "complete action program round trips");
-    Check(
-        decoded.message.ruleMatched.actionInstructions[0].opcode
-            == inputweaver::ActionOpcode::Wait,
-        "wait instruction remains visible");
     Check(
         decoded.message.ruleMatched.conditionText
                 == "combat[on] and LCtrl[held]"

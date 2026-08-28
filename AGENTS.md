@@ -21,7 +21,7 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - Keep canonical build, test, analysis, and run commands in batch files under `script/`.
 - Place generated executables and other build output under `bin/` and keep them out of version control.
 - Compile with `g++` and verify a successful build after changing C++ source code.
-- Use `docs/language/grammar.v1.md`, `docs/language/grammar.v2.md`, and `docs/language/grammar.v2.ebnf` for current Weave behavior.
+- Use `docs/grammar.md` for current Weave syntax, binding, type, matching, action, and execution behavior.
 - For compiler, compiler CLI, or Windows compiler-backend changes, use `script/build_compiler_tests.bat` followed by `script/test_compiler.bat`.
 - For platform-independent runtime or Windows runtime-adapter changes, use `script/build_runtime_tests.bat` followed by `script/test_runtime.bat`.
 - For shared-program, Windows executor, hook, injection, or diagnostic changes, use `script/build.bat` followed by `script/test.bat`.
@@ -30,8 +30,8 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 ## Agent Coordination
 
 - `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise product-status pointers.
-- `docs/language/` owns Weave source-language definitions.
-- Chinese product operation guides live directly under `docs/`, outside `docs/language/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
+- `docs/grammar.md` owns the current Weave source-language definition.
+- Chinese product operation guides live directly under `docs/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
 - `validation/` is the tracked location for validation assets.
@@ -98,21 +98,8 @@ all modules -> support only for domain-independent primitives
 - `src/platform/windows/tui/` owns the TUI executable entry point, Windows console input, virtual-terminal output, resize handling, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/language/` contains Weave language definitions; direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
-- `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
-
-## Product Status
-
-- Phase 6: Declarative Runtime Controls is complete and archived under `development/legacy/phase-6-declarative-runtime-controls/`.
-- Phase 7: Input Debug Producer is complete and archived under `development/legacy/phase-7-input-debug-producer/`.
-- Phase 8: Debug Client is complete and archived under `development/legacy/phase-8-debug-client/`.
-- The initial product is complete. Its final App and TUI design, phase entry proposals, input-debug roadmap, and design-issue record are archived under `development/legacy/`.
-- The delivered application is `InputWeaverTUI.exe`, backed by the independent compiler and executor command-line artifacts and the existing `DebugClient` protocol.
-- The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
-- `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
-- `docs/tui-guide.md`, `docs/safety-guide.md`, and `docs/runtime-boundaries.md` define the current operation, safety, and execution-boundary guidance.
-- Completed phase and initial-product records are archived under `development/legacy/`.
-- Use `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
+- `docs/grammar.md` contains the current Weave language definition; the other direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
+- `script/` contains canonical build, test, analysis, and release-packaging commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Repository Practices
 

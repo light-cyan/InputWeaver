@@ -88,15 +88,6 @@ struct DebugPressedControl final {
     InputOrigin origin{InputOrigin::PhysicalCandidate};
 };
 
-struct DebugRuleProgram final {
-    EventTransition eventTransition{EventTransition::Down};
-    ControlRef eventControl{};
-    std::string conditionText;
-    std::string actionText;
-    std::vector<ExpressionInstruction> conditionInstructions;
-    std::vector<ActionInstruction> actionInstructions;
-};
-
 struct DebugVariableState final {
     std::string name;
     DebugValue value{};
@@ -105,11 +96,9 @@ struct DebugVariableState final {
 struct DebugRuleExecution final {
     std::uint64_t executionMarker{};
     DebugInputEvent triggerInput{};
-    std::shared_ptr<const DebugRuleProgram> program;
-    std::int64_t matchedTimeNanoseconds{};
+    std::string conditionText;
+    std::string actionText;
     std::int64_t matchedUnixTimeMilliseconds{};
-    std::optional<std::uint32_t> currentInstructionIndex;
-    std::vector<std::uint32_t> recentInstructionIndices;
     std::optional<RuntimeExecutionResult> result;
 };
 
@@ -142,7 +131,6 @@ struct DebugClientCapacities final {
     std::size_t maximumRuleExecutions{256U};
     std::size_t maximumPendingRuleExecutions{256U};
     std::size_t maximumRuntimeIssues{128U};
-    std::size_t maximumStoredInstructions{262'144U};
 };
 
 enum class DebugReductionAction : std::uint8_t {

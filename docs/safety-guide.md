@@ -1,32 +1,32 @@
 # 键盘运行安全指南
 
-本文说明编译型键盘映射程序的启动方式、安全边界、停止方法和日志检查方法。命令均在仓库根目录的 `cmd.exe` 中运行。
+本文说明 Windows 执行器的启动方式、目标与排除选择、安全边界、停止方法和日志检查方法。下列产品命令均在解压后的发行目录中运行；使用 TUI 时的界面操作见 `docs/tui-guide.md`。
 
-所有当前固定容量、任务预算、日志上限和控制台统计字段集中记录在 `docs/runtime-boundaries.md`。
+Windows 执行器的固定容量、任务预算、日志上限和控制台统计字段集中记录在 `docs/runtime-boundaries.md`。
 
-## 构建、编译与运行
+## 发行版、编译与运行
 
-先构建编译器和执行器，再把 `.weave` 源文件编译为 `.weavec`：
+Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip` 后即可使用，不需要安装 MinGW。源码仓库的维护者运行 `script\package_release.bat` 可在 `bin\release\` 中生成发行目录和 ZIP；封装过程会拒绝架构不符或仍依赖非系统 DLL 的产品 EXE。
+
+使用发行目录中的编译器把 `.weave` 源文件检查并编译为 `.weavec`：
 
 ```bat
-script\build_compiler_tests.bat
-script\build.bat
-bin\InputWeaverCompiler.exe validate path\to\config.weave
-bin\InputWeaverCompiler.exe compile path\to\config.weave path\to\config.weavec
+InputWeaverCompiler.exe validate path\to\config.weave
+InputWeaverCompiler.exe compile path\to\config.weave path\to\config.weavec
 ```
+
+`validate` 执行与正式编译相同的词法、语法、语义和类型检查，并输出带源码位置的诊断，但不写出 `.weavec`。TUI 会在源码停止修改后自动调用它，并在按 `[Space]` 运行时按需正式编译。
 
 不包含 `exec` 动作的程序使用以下命令启动：
 
 ```bat
-bin\InputWeaver.exe --program path\to\config.weavec
+InputWeaver.exe --program path\to\config.weavec
 ```
-
-使用 `--exclude-process <pid-or-exe-name-or-absolute-path>` 可以排除一个正在运行的进程。PID 直接指定实例；进程名或绝对路径必须解析为唯一实例，存在多个匹配项时只接受其中唯一的前台实例。
 
 包含 `exec` 动作的程序默认不能激活，必须在本次启动中显式授予进程启动权限：
 
 ```bat
-bin\InputWeaver.exe --program path\to\config.weavec --allow-exec
+InputWeaver.exe --program path\to\config.weavec --allow-exec
 ```
 
 `--allow-exec` 只对当前编译程序运行生效，并且只能和 `--program` 一起使用；没有这个选项时，执行器会在安装输入钩子之前拒绝需要启动进程的程序，也不会解析可执行文件或调用系统进程创建接口。
@@ -34,12 +34,24 @@ bin\InputWeaver.exe --program path\to\config.weavec --allow-exec
 可以使用无注入模拟运行检查规则、动作轨迹和调试输出：
 
 ```bat
-bin\InputWeaver.exe --program path\to\config.weavec --dry-run
+InputWeaver.exe --program path\to\config.weavec --dry-run
 ```
 
 `--dry-run` 始终放行物理输入，不调用 `SendInput`。`exec` 动作仍需同时传入 `--allow-exec`，但通过权限检查后只模拟成功，不解析或启动外部进程。编译的退出规则仍可停止模拟运行。
 
-可以用 `--target <exe-name-or-absolute-path>` 把本次运行覆盖为目标进程模式，或用 `--target-global` 把本次运行覆盖为全局模式；两个选项互斥。也可以用 `--log <jsonl-path> --trace-input` 记录运行时、安全状态、物理输入和输出注入信息。
+也可以用 `--log <jsonl-path> --trace-input` 记录运行时、安全状态、物理输入和输出注入信息。
+
+## 目标与进程排除
+
+编译程序中的 `TARGET` 是默认目标。`--target <exe-name-or-absolute-path>` 把本次运行覆盖为目标进程模式，`--target-global` 把本次运行覆盖为全局模式，两个选项互斥。目标进程选择只接受可执行文件名或绝对路径，不接受 PID；没有匹配进程时执行器等待目标出现，存在多个匹配实例且不能确定唯一前台实例时执行器等待用户把所需实例切到前台。
+
+`--exclude-process <pid-or-exe-name-or-absolute-path>` 排除一个进程实例。纯十进制参数直接作为非零 32 位 PID 使用；文件名或绝对路径使用与 Target 相同的进程定位功能，在执行器启动时解析为一个 PID。只有一个匹配实例时直接选中；存在多个匹配实例时，必须恰好有一个实例位于前台；没有匹配或仍然歧义时，本次启动立即失败。
+
+排除结果是一次性的 PID，不会按文件名持续跟踪。被选实例退出后，同名进程的新实例通常具有新的 PID，需要重新启动执行器才能排除。直接传入 PID 时不执行文件名或路径定位。
+
+当排除 PID 拥有前台窗口时，物理输入被放行，不进入普通规则或映射分派，也不会被抑制；新的按下和重复输出同时在运行时路由与 Windows 实际注入边界被拒绝。为清理执行器已经持有的控制而产生的释放仍可通过。这个边界同时适用于可执行文件目标和 Global 目标。
+
+TUI 启动执行器时会自动加入 `--exclude-process`，传入启动时交互终端前台宿主的 PID，因此操作 TUI 的按键不会被该执行器消费或映射。命令行直接启动 `InputWeaver.exe` 时，需要由调用者决定是否设置排除进程。
 
 ## 目标窗口切换
 
@@ -58,6 +70,8 @@ bin\InputWeaver.exe --program path\to\config.weavec --dry-run
 如果一个事件来源只有原始事件身份而无法可靠查询初始状态，它会以“尚未同步”状态启动。这个来源的事件会直接放行，直到执行器观察到一次物理释放；释放建立空闲基线，下一次新按下才可以进入规则分派。
 
 用于 `[held]` 或 `[idle]` 物理状态表达式的控制必须具有可靠的初始状态查询能力，否则程序会在安装钩子之前激活失败。
+
+Debug 捕获开始时还会独立查询当前处于按下状态的 Windows 虚拟键，并以 `down INIT -` 发送给 DebugClient，用于建立 STATE 的初始按下集合。这些 `INIT` 记录不是捕获开始后发生的新物理按下，不会匹配规则或产生输出。
 
 ## 固定安全上限
 
@@ -101,7 +115,7 @@ exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held
 以下命令同时记录安全状态和完整物理输入轨迹：
 
 ```bat
-bin\InputWeaver.exe --program path\to\config.weavec --log path\to\run.jsonl --trace-input
+InputWeaver.exe --program path\to\config.weavec --log path\to\run.jsonl --trace-input
 ```
 
 JSONL 中与第四阶段安全边界直接相关的运行时事件包括：
@@ -113,6 +127,8 @@ JSONL 中与第四阶段安全边界直接相关的运行时事件包括：
 - `Cancellation`：记录 PAUSE、目标资格变化、目标退出、退出规则、关闭和运行故障引发的取消代次。
 
 任务预算诊断保留动作来源位置，输出和映射诊断保留对应主体编号。日志缓冲区保持固定容量，丢弃数量通过运行指标持续可见。
+
+进程排除没有单独的选择器日志事件；启用 `--trace-input` 后，可以使用钩子记录中的 `foreground_pid`、输入处置和输出取消记录核对排除 PID 位于前台期间的行为。
 
 ## 运行条件检查
 

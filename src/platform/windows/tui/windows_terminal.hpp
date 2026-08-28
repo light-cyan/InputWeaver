@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace inputweaver::win32 {
@@ -34,6 +35,9 @@ public:
         bool& resized) noexcept;
     [[nodiscard]] bool Draw(
         const ui::tui::Canvas& canvas,
+        std::string& error) noexcept;
+    [[nodiscard]] bool CopyText(
+        std::string_view text,
         std::string& error) noexcept;
 
 private:

@@ -2,17 +2,22 @@
 setlocal
 cd /d "%~dp0.."
 
+set "INPUTWEAVER_PRODUCTS_ONLY="
+if "%~1"=="" goto arguments_done
+if /i not "%~1"=="--products-only" goto usage
+if not "%~2"=="" goto usage
+set "INPUTWEAVER_PRODUCTS_ONLY=1"
+:arguments_done
+
 if not exist "bin" mkdir "bin"
 
 set "INPUTWEAVER_CXX=g++"
-set "INPUTWEAVER_WINDRES=windres"
 set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
+set "INPUTWEAVER_PRODUCT_LINK=-static-libgcc -static-libstdc++"
+set "INPUTWEAVER_BUILD_STEPS=6"
+if defined INPUTWEAVER_PRODUCTS_ONLY set "INPUTWEAVER_BUILD_STEPS=2"
 
-echo [1/7] Compiling the execution manifest...
-%INPUTWEAVER_WINDRES% -DUNICODE -D_UNICODE "res\InputWeaver.rc" -O coff -o "bin\InputWeaver.res.o"
-if errorlevel 1 exit /b %errorlevel%
-
-echo [2/7] Building InputWeaver.exe...
+echo [1/%INPUTWEAVER_BUILD_STEPS%] Building InputWeaver.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
     "src\platform\windows\cli\runtime_main.cpp" ^
     "src\ui\cli\runtime_cli.cpp" ^
@@ -35,12 +40,20 @@ echo [2/7] Building InputWeaver.exe...
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
     "src\program\weavec_codec.cpp" ^
-    "bin\InputWeaver.res.o" ^
     -o "bin\InputWeaver.exe" ^
+    %INPUTWEAVER_PRODUCT_LINK% ^
     -luser32 -ladvapi32
 if errorlevel 1 exit /b %errorlevel%
 
-echo [3/7] Building WindowsPlatformTests.exe...
+if defined INPUTWEAVER_PRODUCTS_ONLY (
+    echo [2/2] Building InputWeaverTUI.exe...
+    call script\build_tui.bat
+    if errorlevel 1 exit /b %errorlevel%
+    echo Product build completed successfully.
+    exit /b 0
+)
+
+echo [2/6] Building WindowsPlatformTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\runtime\windows_platform_tests.cpp" ^
     "src\platform\windows\runtime\input_injector.cpp" ^
@@ -51,7 +64,7 @@ echo [3/7] Building WindowsPlatformTests.exe...
     -luser32 -ladvapi32
 if errorlevel 1 exit /b %errorlevel%
 
-echo [4/7] Building CompiledProgramTests.exe...
+echo [3/6] Building CompiledProgramTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\program\compiled_program_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
@@ -62,17 +75,21 @@ echo [4/7] Building CompiledProgramTests.exe...
     -o "bin\CompiledProgramTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
-echo [5/7] Building InputWeaverTUI.exe...
+echo [4/6] Building InputWeaverTUI.exe...
 call script\build_tui.bat
 if errorlevel 1 exit /b %errorlevel%
 
-echo [6/7] Building the App and TUI tests...
+echo [5/6] Building the App and TUI tests...
 call script\build_app_tests.bat
 if errorlevel 1 exit /b %errorlevel%
 
-echo [7/7] Building the focused runtime tests...
+echo [6/6] Building the focused runtime tests...
 call script\build_runtime_tests.bat
 if errorlevel 1 exit /b %errorlevel%
 
 echo Build completed successfully.
 exit /b 0
+
+:usage
+echo Usage: build.bat [--products-only]
+exit /b 2

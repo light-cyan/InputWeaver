@@ -8,7 +8,7 @@
 #endif
 #include <windows.h>
 
-#include "platform/windows/support/unique_handle.hpp"
+#include "pipe_transport.hpp"
 #include "support/little_endian.hpp"
 
 #include <algorithm>
@@ -16,7 +16,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <mutex>
 #include <span>
 #include <string>
@@ -30,178 +29,12 @@ namespace {
 inline constexpr DWORD kConnectTimeoutMilliseconds = 5'000U;
 inline constexpr DWORD kHandshakeTimeoutMilliseconds = 5'000U;
 
-enum class IoResult : std::uint8_t {
-    Succeeded,
-    Cancelled,
-    TimedOut,
-    Failed,
-};
-
 enum class FrameResult : std::uint8_t {
     Message,
     Corrupt,
     Closed,
     Cancelled,
 };
-
-[[nodiscard]] bool IsValidToken(std::string_view token) noexcept
-{
-    if (token.empty() || token.size() > 64U) {
-        return false;
-    }
-    for (const char character : token) {
-        const bool digit = character >= '0' && character <= '9';
-        const bool lower = character >= 'a' && character <= 'z';
-        const bool upper = character >= 'A' && character <= 'Z';
-        if (!digit && !lower && !upper
-            && character != '-'
-            && character != '_'
-            && character != '.') {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] std::wstring MakePipeName(
-    std::uint32_t processId,
-    std::string_view token)
-{
-    std::wstring wideToken;
-    wideToken.reserve(token.size());
-    for (const char character : token) {
-        wideToken.push_back(static_cast<wchar_t>(character));
-    }
-    return L"\\\\.\\pipe\\InputWeaver.Debug."
-        + std::to_wstring(processId)
-        + L"."
-        + wideToken;
-}
-
-[[nodiscard]] IoResult CompleteOverlapped(
-    HANDLE pipe,
-    HANDLE cancelEvent,
-    OVERLAPPED& overlapped,
-    DWORD timeoutMilliseconds,
-    DWORD& transferred) noexcept
-{
-    const HANDLE waits[] = {cancelEvent, overlapped.hEvent};
-    const DWORD wait = WaitForMultipleObjects(
-        2U,
-        waits,
-        FALSE,
-        timeoutMilliseconds);
-    if (wait == WAIT_OBJECT_0 + 1U) {
-        return GetOverlappedResult(
-            pipe,
-            &overlapped,
-            &transferred,
-            FALSE) != FALSE
-            ? IoResult::Succeeded
-            : IoResult::Failed;
-    }
-    (void)CancelIoEx(pipe, &overlapped);
-    (void)WaitForSingleObject(overlapped.hEvent, INFINITE);
-    DWORD ignored{};
-    (void)GetOverlappedResult(pipe, &overlapped, &ignored, FALSE);
-    if (wait == WAIT_OBJECT_0) {
-        return IoResult::Cancelled;
-    }
-    if (wait == WAIT_TIMEOUT) {
-        return IoResult::TimedOut;
-    }
-    return IoResult::Failed;
-}
-
-[[nodiscard]] IoResult ReadExact(
-    HANDLE pipe,
-    HANDLE cancelEvent,
-    std::span<std::uint8_t> destination,
-    DWORD timeoutMilliseconds) noexcept
-{
-    std::size_t offset = 0U;
-    while (offset < destination.size()) {
-        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (event == nullptr) {
-            return IoResult::Failed;
-        }
-        const UniqueHandle eventOwner(event);
-        OVERLAPPED overlapped{};
-        overlapped.hEvent = event;
-        const std::size_t remaining = destination.size() - offset;
-        const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
-            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
-        DWORD transferred{};
-        const BOOL started = ReadFile(
-            pipe,
-            destination.data() + offset,
-            requested,
-            &transferred,
-            &overlapped);
-        IoResult result = IoResult::Succeeded;
-        if (started == FALSE) {
-            result = GetLastError() == ERROR_IO_PENDING
-                ? CompleteOverlapped(
-                    pipe,
-                    cancelEvent,
-                    overlapped,
-                    timeoutMilliseconds,
-                    transferred)
-                : IoResult::Failed;
-        }
-        if (result != IoResult::Succeeded || transferred == 0U) {
-            return result == IoResult::Succeeded ? IoResult::Failed : result;
-        }
-        offset += transferred;
-    }
-    return IoResult::Succeeded;
-}
-
-[[nodiscard]] IoResult WriteExact(
-    HANDLE pipe,
-    HANDLE cancelEvent,
-    std::span<const std::uint8_t> source,
-    DWORD timeoutMilliseconds) noexcept
-{
-    std::size_t offset = 0U;
-    while (offset < source.size()) {
-        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (event == nullptr) {
-            return IoResult::Failed;
-        }
-        const UniqueHandle eventOwner(event);
-        OVERLAPPED overlapped{};
-        overlapped.hEvent = event;
-        const std::size_t remaining = source.size() - offset;
-        const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
-            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
-        DWORD transferred{};
-        const BOOL started = WriteFile(
-            pipe,
-            source.data() + offset,
-            requested,
-            &transferred,
-            &overlapped);
-        IoResult result = IoResult::Succeeded;
-        if (started == FALSE) {
-            result = GetLastError() == ERROR_IO_PENDING
-                ? CompleteOverlapped(
-                    pipe,
-                    cancelEvent,
-                    overlapped,
-                    timeoutMilliseconds,
-                    transferred)
-                : IoResult::Failed;
-        }
-        if (result != IoResult::Succeeded || transferred == 0U) {
-            return result == IoResult::Succeeded ? IoResult::Failed : result;
-        }
-        offset += transferred;
-    }
-    return IoResult::Succeeded;
-}
 
 [[nodiscard]] std::uint32_t ReadPayloadLength(
     const std::array<std::uint8_t, debug::kWireHeaderBytes>& bytes) noexcept
@@ -220,15 +53,15 @@ enum class FrameResult : std::uint8_t {
 {
     try {
         std::array<std::uint8_t, debug::kWireHeaderBytes> headerBytes{};
-        const IoResult headerRead = ReadExact(
+        const PipeIoResult headerRead = ReadPipeExact(
             pipe,
             cancelEvent,
             headerBytes,
             timeoutMilliseconds);
-        if (headerRead == IoResult::Cancelled) {
+        if (headerRead == PipeIoResult::Cancelled) {
             return FrameResult::Cancelled;
         }
-        if (headerRead != IoResult::Succeeded) {
+        if (headerRead != PipeIoResult::Succeeded) {
             return FrameResult::Closed;
         }
         debug::MessageHeader header{};
@@ -240,11 +73,11 @@ enum class FrameResult : std::uint8_t {
             }
             std::vector<std::uint8_t> discarded(payloadBytes);
             if (!discarded.empty()
-                && ReadExact(
+                && ReadPipeExact(
                     pipe,
                     cancelEvent,
                     discarded,
-                    timeoutMilliseconds) != IoResult::Succeeded) {
+                    timeoutMilliseconds) != PipeIoResult::Succeeded) {
                 return FrameResult::Closed;
             }
             return FrameResult::Corrupt;
@@ -255,16 +88,16 @@ enum class FrameResult : std::uint8_t {
             + static_cast<std::size_t>(header.payloadBytes));
         std::copy(headerBytes.begin(), headerBytes.end(), frame.begin());
         if (header.payloadBytes != 0U) {
-            const IoResult payloadRead = ReadExact(
+            const PipeIoResult payloadRead = ReadPipeExact(
                 pipe,
                 cancelEvent,
                 std::span<std::uint8_t>{frame}.subspan(
                     debug::kWireHeaderBytes),
                 timeoutMilliseconds);
-            if (payloadRead == IoResult::Cancelled) {
+            if (payloadRead == PipeIoResult::Cancelled) {
                 return FrameResult::Cancelled;
             }
-            if (payloadRead != IoResult::Succeeded) {
+            if (payloadRead != PipeIoResult::Succeeded) {
                 return FrameResult::Closed;
             }
         }
@@ -288,11 +121,11 @@ enum class FrameResult : std::uint8_t {
     try {
         std::vector<std::uint8_t> frame;
         return debug::EncodeMessage(message, frame)
-            && WriteExact(
+            && WritePipeExact(
                 pipe,
                 cancelEvent,
                 frame,
-                timeoutMilliseconds) == IoResult::Succeeded;
+                timeoutMilliseconds) == PipeIoResult::Succeeded;
     } catch (...) {
         return false;
     }
@@ -423,7 +256,7 @@ struct WindowsDebugClient::Impl final {
         if (identity.processId == 0U) {
             return {debug::DebugClientError::InvalidProcessIdentity};
         }
-        if (!IsValidToken(token)) {
+        if (!IsValidDebugToken(token)) {
             return {debug::DebugClientError::InvalidDebugToken};
         }
         process = OpenProcess(
@@ -439,7 +272,7 @@ struct WindowsDebugClient::Impl final {
         }
         std::wstring pipeName;
         try {
-            pipeName = MakePipeName(identity.processId, token);
+            pipeName = BuildDebugPipeName(identity.processId, token);
         } catch (...) {
             CloseHandle(process);
             process = nullptr;

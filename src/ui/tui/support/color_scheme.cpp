@@ -12,7 +12,7 @@
 namespace inputweaver::ui::tui {
 namespace {
 
-inline constexpr std::size_t kColorCount = 28U;
+inline constexpr std::size_t kColorCount = 36U;
 
 class JsonCursor final {
 public:
@@ -181,7 +181,7 @@ private:
     INPUTWEAVER_COLOR_FIELD(4U, "focus_programs", focusPrograms)
     INPUTWEAVER_COLOR_FIELD(
         5U, "focus_program_information", focusProgramInformation)
-    INPUTWEAVER_COLOR_FIELD(6U, "focus_compiled_dump", focusCompiledDump)
+    INPUTWEAVER_COLOR_FIELD(6U, "focus_source_editor", focusSourceEditor)
     INPUTWEAVER_COLOR_FIELD(7U, "focus_events", focusEvents)
     INPUTWEAVER_COLOR_FIELD(8U, "focus_pressed", focusPressed)
     INPUTWEAVER_COLOR_FIELD(
@@ -203,13 +203,20 @@ private:
     INPUTWEAVER_COLOR_FIELD(19U, "execution_completed", executionCompleted)
     INPUTWEAVER_COLOR_FIELD(20U, "execution_failed", executionFailed)
     INPUTWEAVER_COLOR_FIELD(21U, "execution_cancelled", executionCancelled)
-    INPUTWEAVER_COLOR_FIELD(
-        22U, "instruction_recent_oldest", instructionRecentOldest)
-    INPUTWEAVER_COLOR_FIELD(23U, "instruction_recent", instructionRecent)
-    INPUTWEAVER_COLOR_FIELD(24U, "instruction_current", instructionCurrent)
-    INPUTWEAVER_COLOR_FIELD(25U, "health_trusted", healthTrusted)
-    INPUTWEAVER_COLOR_FIELD(26U, "health_recovering", healthRecovering)
-    INPUTWEAVER_COLOR_FIELD(27U, "health_fault", healthFault)
+    INPUTWEAVER_COLOR_FIELD(22U, "syntax_keyword", syntaxKeyword)
+    INPUTWEAVER_COLOR_FIELD(23U, "syntax_type", syntaxType)
+    INPUTWEAVER_COLOR_FIELD(24U, "syntax_variable", syntaxVariable)
+    INPUTWEAVER_COLOR_FIELD(25U, "syntax_control", syntaxControl)
+    INPUTWEAVER_COLOR_FIELD(26U, "syntax_function", syntaxFunction)
+    INPUTWEAVER_COLOR_FIELD(27U, "syntax_operator", syntaxOperator)
+    INPUTWEAVER_COLOR_FIELD(28U, "syntax_string", syntaxString)
+    INPUTWEAVER_COLOR_FIELD(29U, "syntax_constant", syntaxConstant)
+    INPUTWEAVER_COLOR_FIELD(30U, "syntax_comment", syntaxComment)
+    INPUTWEAVER_COLOR_FIELD(31U, "editor_current_line", editorCurrentLine)
+    INPUTWEAVER_COLOR_FIELD(32U, "editor_error_line", editorErrorLine)
+    INPUTWEAVER_COLOR_FIELD(33U, "health_trusted", healthTrusted)
+    INPUTWEAVER_COLOR_FIELD(34U, "health_recovering", healthRecovering)
+    INPUTWEAVER_COLOR_FIELD(35U, "health_fault", healthFault)
 #undef INPUTWEAVER_COLOR_FIELD
     return false;
 }

@@ -82,6 +82,10 @@ int wmain()
             bool resized{};
             if (terminal.Poll(event, 50U, resized)) {
                 controller.Handle(event);
+                if (const auto text = controller.TakeClipboardText();
+                    text.has_value()) {
+                    (void)terminal.CopyText(*text, error);
+                }
             }
         }
         return 0;

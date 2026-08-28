@@ -66,7 +66,11 @@ void TestProgramLibrary()
             inspected.succeeded && inspected.defaultName == "Game",
             "source inspection validates extension and derives name");
 
-        const inputweaver::app::ProgramEntry entry{1U, "Game", {}};
+        const inputweaver::app::ProgramEntry entry{
+            1U,
+            "Game",
+            {},
+            inspected.sourceHash};
         const std::filesystem::path temporary = library.ArtifactTemporaryPath(1U);
         Write(temporary, "compiled");
         const std::vector<inputweaver::app::ProgramEntryId> order{1U};
@@ -81,7 +85,8 @@ void TestProgramLibrary()
         Check(
             loaded.succeeded && loaded.entries.size() == 1U
                 && loaded.entries[0] == entry
-                && library.LoadDump(1U) == "compiled dump\n",
+                && library.LoadDump(1U) == "compiled dump\n"
+                && library.LoadSource(1U).text == "TARGET GLOBAL\n",
             "published program library reloads");
         Check(
             library.NamesEqual("Game", "game"),
@@ -95,10 +100,24 @@ void TestProgramLibrary()
         std::filesystem::remove(library.ArtifactPath(1U));
         loaded = library.Load();
         Check(
-            loaded.succeeded && loaded.entries.empty()
-                && !std::filesystem::exists(
-                    directory / L"programs" / L"000001.entry"),
-            "missing artifact removes metadata and the index entry");
+            loaded.succeeded && loaded.entries.size() == 1U
+                && loaded.entries[0].compiledSourceHash == 0U
+                && library.LoadSource(1U).succeeded,
+            "missing artifact keeps editable source and marks it uncompiled");
+
+        const inputweaver::app::ProgramEntry blank{2U, "Blank", {}};
+        Check(
+            library.PublishNew({blank, {1U, 2U}}).succeeded
+                && library.LoadSource(2U).succeeded
+                && library.LoadSource(2U).text.empty()
+                && !std::filesystem::exists(library.ArtifactPath(2U)),
+            "blank programs publish an empty editable source without an artifact");
+        Check(
+            library.SaveSource(2U, "A:down => tap(B);\n").succeeded
+                && library.LoadSource(2U).text == "A:down => tap(B);\n"
+                && library.SaveDump(2U, "generated dump\n").succeeded
+                && library.LoadDump(2U) == "generated dump\n",
+            "editable source and generated dumps persist independently");
     }
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);

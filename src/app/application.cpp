@@ -137,6 +137,7 @@ OperationResult Application::ImportProgram(
         entry.id = nextId_;
         entry.displayName = displayName;
     }
+    entry.compiledSourceHash = source.sourceHash;
 
     std::vector<ProgramEntryId> order = ProgramOrder(programs_);
     if (!overwrite) {
@@ -156,7 +157,38 @@ OperationResult Application::ImportProgram(
     if (!overwrite) {
         programs_.push_back(entry);
         ++nextId_;
+    } else {
+        *FindProgram(entry.id) = entry;
     }
+    Changed();
+    return OperationResult::Success();
+}
+
+OperationResult Application::CreateProgram(std::string_view displayName)
+{
+    if (!ValidDisplayName(displayName)) {
+        return OperationResult::Failure("The program name is invalid.");
+    }
+    if (FindProgramByName(displayName) != kInvalidProgramEntryId) {
+        return OperationResult::Failure("The program name is already in use.");
+    }
+    if (nextId_ == kInvalidProgramEntryId
+        || nextId_ > kMaximumProgramEntryId) {
+        return OperationResult::Failure("No program IDs remain available.");
+    }
+    ProgramEntry entry{};
+    entry.id = nextId_;
+    entry.displayName = displayName;
+    std::vector<ProgramEntryId> order = ProgramOrder(programs_);
+    order.push_back(entry.id);
+    const OperationResult result = platform_.PublishNew({entry, order});
+    if (!result.succeeded) {
+        AppendAppMessage("Create failed: " + result.error);
+        SetAttention(ApplicationAttention::Console);
+        return result;
+    }
+    programs_.push_back(std::move(entry));
+    ++nextId_;
     Changed();
     return OperationResult::Success();
 }
@@ -275,6 +307,95 @@ OperationResult Application::UpdateConfiguration(
     return OperationResult::Success();
 }
 
+SourceReadResult Application::ReadSource(ProgramEntryId id) const
+{
+    if (FindProgram(id) == nullptr) {
+        return {false, {}, "The program no longer exists."};
+    }
+    return platform_.LoadSource(id);
+}
+
+OperationResult Application::SaveSource(
+    ProgramEntryId id,
+    std::string_view source)
+{
+    const ProgramEntry* entry = FindProgram(id);
+    if (entry == nullptr) {
+        return OperationResult::Failure("The program no longer exists.");
+    }
+    const OperationResult saved = platform_.SaveSource(id, source);
+    if (!saved.succeeded) {
+        AppendAppMessage("Source save failed: " + saved.error);
+        SetAttention(ApplicationAttention::Console);
+        return saved;
+    }
+    Changed();
+    return OperationResult::Success();
+}
+
+SourceValidationResult Application::ValidateProgram(ProgramEntryId id)
+{
+    const ProgramEntry* entry = FindProgram(id);
+    return entry == nullptr
+        ? SourceValidationResult{
+            false, false, {}, "The program no longer exists."}
+        : platform_.ValidateSource(*entry);
+}
+
+OperationResult Application::CompileProgram(ProgramEntryId id)
+{
+    ProgramEntry* entry = FindProgram(id);
+    if (entry == nullptr) {
+        return OperationResult::Failure("The program no longer exists.");
+    }
+    const SourceReadResult source = platform_.LoadSource(id);
+    if (!source.succeeded) {
+        AppendAppMessage("Compile failed: " + source.error);
+        SetAttention(ApplicationAttention::Console);
+        return OperationResult::Failure(source.error);
+    }
+    ProgramEntry updated = *entry;
+    updated.compiledSourceHash = SourceHash(source.text);
+    const OperationResult compiled = platform_.CompileProgram(updated);
+    DrainPlatformEvents();
+    if (!compiled.succeeded) {
+        AppendAppMessage("Compile failed: " + compiled.error);
+        SetAttention(ApplicationAttention::Console);
+        return compiled;
+    }
+    *entry = std::move(updated);
+    Changed();
+    return OperationResult::Success();
+}
+
+OperationResult Application::GenerateDump(ProgramEntryId id)
+{
+    const ProgramEntry* entry = FindProgram(id);
+    if (entry == nullptr) {
+        return OperationResult::Failure("The program no longer exists.");
+    }
+    const OperationResult dumped = platform_.GenerateDump(*entry);
+    DrainPlatformEvents();
+    if (!dumped.succeeded) {
+        AppendAppMessage("Dump failed: " + dumped.error);
+        SetAttention(ApplicationAttention::Console);
+        return dumped;
+    }
+    Changed();
+    return OperationResult::Success();
+}
+
+bool Application::IsCompiledCurrent(ProgramEntryId id) const
+{
+    const ProgramEntry* entry = FindProgram(id);
+    if (entry == nullptr || entry->compiledSourceHash == 0U) {
+        return false;
+    }
+    const SourceReadResult source = platform_.LoadSource(id);
+    return source.succeeded
+        && entry->compiledSourceHash == SourceHash(source.text);
+}
+
 OperationResult Application::StartProgram(
     ProgramEntryId id,
     const NextRunOptions& options)
@@ -285,6 +406,13 @@ OperationResult Application::StartProgram(
     }
     if (ExecutorExists(id)) {
         return OperationResult::Success();
+    }
+    if (!IsCompiledCurrent(id)) {
+        const OperationResult compiled = CompileProgram(id);
+        if (!compiled.succeeded) {
+            return compiled;
+        }
+        entry = FindProgram(id);
     }
     if (options.debug) {
         const ProgramEntryId debugId = platform_.DebugProgramId();

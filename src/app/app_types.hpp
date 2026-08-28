@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace inputweaver::app {
@@ -14,6 +15,17 @@ namespace inputweaver::app {
 using ProgramEntryId = std::uint32_t;
 inline constexpr ProgramEntryId kInvalidProgramEntryId = 0U;
 inline constexpr ProgramEntryId kMaximumProgramEntryId = 999'999U;
+
+[[nodiscard]] constexpr std::uint64_t SourceHash(
+    std::string_view source) noexcept
+{
+    std::uint64_t hash = 14'695'981'039'346'656'037ULL;
+    for (const char byte : source) {
+        hash ^= static_cast<unsigned char>(byte);
+        hash *= 1'099'511'628'211ULL;
+    }
+    return hash == 0U ? 1U : hash;
+}
 
 enum class TargetMode : std::uint8_t {
     Compiled,
@@ -39,8 +51,29 @@ struct ProgramEntry final {
     ProgramEntryId id{kInvalidProgramEntryId};
     std::string displayName;
     RunConfiguration configuration{};
+    std::uint64_t compiledSourceHash{};
 
     auto operator<=>(const ProgramEntry&) const = default;
+};
+
+struct SourceDiagnostic final {
+    std::uint32_t line{1U};
+    std::uint32_t column{1U};
+    std::uint32_t byteLength{1U};
+    std::string message;
+};
+
+struct SourceValidationResult final {
+    bool completed{};
+    bool valid{};
+    std::vector<SourceDiagnostic> diagnostics;
+    std::string error;
+};
+
+struct SourceReadResult final {
+    bool succeeded{};
+    std::string text;
+    std::string error;
 };
 
 struct NextRunOptions final {

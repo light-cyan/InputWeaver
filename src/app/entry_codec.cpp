@@ -197,7 +197,7 @@ bool ValidRunConfiguration(const RunConfiguration& configuration) noexcept
 
 std::string EncodeEntry(const ProgramEntry& entry)
 {
-    std::string text = "InputWeaverEntry=1\n";
+    std::string text = "InputWeaverEntry=2\n";
     text += "name=" + Escape(entry.displayName) + "\n";
     text += "target=" + std::string{TargetName(entry.configuration.target)}
         + "\n";
@@ -205,6 +205,8 @@ std::string EncodeEntry(const ProgramEntry& entry)
         + "\n";
     text += "logging=" + std::string{LoggingName(entry.configuration.logging)}
         + "\n";
+    text += "compiled_source_hash="
+        + std::to_string(entry.compiledSourceHash) + "\n";
     return text;
 }
 
@@ -220,16 +222,36 @@ bool DecodeEntry(
     std::string_view target;
     std::string_view selector;
     std::string_view logging;
-    if (!TakeLine(text, offset, header) || header != "InputWeaverEntry=1"
+    std::string_view compiledSourceHash;
+    if (!TakeLine(text, offset, header)
+        || (header != "InputWeaverEntry=1" && header != "InputWeaverEntry=2")
         || !ReadField(text, offset, "name", name)
         || !ReadField(text, offset, "target", target)
         || !ReadField(text, offset, "selector", selector)
-        || !ReadField(text, offset, "logging", logging)) {
+        || !ReadField(text, offset, "logging", logging)
+        || (header == "InputWeaverEntry=2"
+            && !ReadField(
+                text,
+                offset,
+                "compiled_source_hash",
+                compiledSourceHash))) {
         error = "Invalid entry structure.";
         return false;
     }
     ProgramEntry decoded{};
     decoded.id = id;
+    if (header == "InputWeaverEntry=2") {
+        const auto parsed = std::from_chars(
+            compiledSourceHash.data(),
+            compiledSourceHash.data() + compiledSourceHash.size(),
+            decoded.compiledSourceHash);
+        if (parsed.ec != std::errc{}
+            || parsed.ptr
+                != compiledSourceHash.data() + compiledSourceHash.size()) {
+            error = "Invalid entry value.";
+            return false;
+        }
+    }
     if (!Unescape(name, decoded.displayName)
         || !Unescape(selector, decoded.configuration.executableSelector)
         || !ParseTarget(target, decoded.configuration.target)

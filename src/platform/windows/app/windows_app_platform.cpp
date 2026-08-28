@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
+#include <charconv>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -22,7 +22,6 @@ namespace inputweaver::win32 {
 namespace {
 
 inline constexpr DWORD kExecutorStopTimeoutMilliseconds = 5'000U;
-inline constexpr auto kDebugLaunchDelay = std::chrono::milliseconds{500};
 
 [[nodiscard]] std::string DebugClientErrorText(debug::DebugClientError error)
 {
@@ -110,6 +109,91 @@ void RemoveTemporary(const std::filesystem::path& path) noexcept
     (void)std::filesystem::remove(path, ignored);
 }
 
+[[nodiscard]] std::vector<app::SourceDiagnostic> ParseDiagnostics(
+    std::string_view text)
+{
+    std::vector<std::string_view> lines;
+    std::size_t offset{};
+    while (offset < text.size()) {
+        const std::size_t end = text.find('\n', offset);
+        std::string_view line = end == std::string_view::npos
+            ? text.substr(offset)
+            : text.substr(offset, end - offset);
+        if (!line.empty() && line.back() == '\r') {
+            line.remove_suffix(1U);
+        }
+        lines.push_back(line);
+        if (end == std::string_view::npos) {
+            break;
+        }
+        offset = end + 1U;
+    }
+
+    std::vector<app::SourceDiagnostic> diagnostics;
+    for (std::size_t index = 0U; index < lines.size(); ++index) {
+        constexpr std::string_view marker = ": error ";
+        const std::size_t errorAt = lines[index].find(marker);
+        if (errorAt == std::string_view::npos) {
+            continue;
+        }
+        const std::size_t columnColon = lines[index].rfind(':', errorAt - 1U);
+        const std::size_t lineColon = columnColon == std::string_view::npos
+            ? std::string_view::npos
+            : lines[index].rfind(':', columnColon - 1U);
+        if (lineColon == std::string_view::npos) {
+            continue;
+        }
+        app::SourceDiagnostic diagnostic{};
+        const std::string_view lineText = lines[index].substr(
+            lineColon + 1U,
+            columnColon - lineColon - 1U);
+        const std::string_view columnText = lines[index].substr(
+            columnColon + 1U,
+            errorAt - columnColon - 1U);
+        const auto parsedLine = std::from_chars(
+            lineText.data(),
+            lineText.data() + lineText.size(),
+            diagnostic.line);
+        const auto parsedColumn = std::from_chars(
+            columnText.data(),
+            columnText.data() + columnText.size(),
+            diagnostic.column);
+        if (parsedLine.ec != std::errc{}
+            || parsedLine.ptr != lineText.data() + lineText.size()
+            || parsedColumn.ec != std::errc{}
+            || parsedColumn.ptr != columnText.data() + columnText.size()) {
+            continue;
+        }
+        diagnostic.message = std::string{
+            lines[index].substr(errorAt + marker.size())};
+        if (index + 2U < lines.size()) {
+            const std::size_t caret = lines[index + 2U].find('^');
+            if (caret != std::string_view::npos) {
+                std::size_t end = caret + 1U;
+                while (end < lines[index + 2U].size()
+                    && lines[index + 2U][end] == '~') {
+                    ++end;
+                }
+                diagnostic.byteLength = static_cast<std::uint32_t>(end - caret);
+                index += 2U;
+            }
+        }
+        diagnostics.push_back(std::move(diagnostic));
+    }
+    return diagnostics;
+}
+
+[[nodiscard]] app::OperationResult ProcessFailure(
+    const CapturedProcessResult& result,
+    std::string_view operation)
+{
+    return app::OperationResult::Failure(
+        !result.error.empty()
+            ? result.error
+            : std::string{operation} + " exited with code "
+                + std::to_string(result.exitCode) + ".");
+}
+
 } // namespace
 
 struct WindowsAppPlatform::Impl final {
@@ -149,6 +233,30 @@ struct WindowsAppPlatform::Impl final {
             source,
             NormalizeOutput(text),
             0U});
+    }
+
+    [[nodiscard]] CapturedProcessResult RunCompiler(
+        const app::ProgramEntry& entry,
+        const std::vector<std::wstring>& arguments,
+        bool queueOutput)
+    {
+        CapturedProcessResult result = RunChildProcess(
+            library.ExecutableDirectory() / L"InputWeaverCompiler.exe",
+            arguments,
+            CREATE_NO_WINDOW);
+        if (queueOutput) {
+            QueueOutput(
+                entry.id,
+                entry.displayName,
+                app::ConsoleSource::Compiler,
+                result.standardOutput);
+            QueueOutput(
+                entry.id,
+                entry.displayName,
+                app::ConsoleSource::Compiler,
+                result.standardError);
+        }
+        return result;
     }
 
     void ReadExecutorOutput(
@@ -343,61 +451,37 @@ app::OperationResult WindowsAppPlatform::PublishImport(
     if (!Utf8ToWide(request.sourcePath, source)) {
         return app::OperationResult::Failure("The source path is invalid.");
     }
-    const std::filesystem::path compiler =
-        impl_->library.ExecutableDirectory() / L"InputWeaverCompiler.exe";
     const std::filesystem::path temporary =
         impl_->library.ArtifactTemporaryPath(request.entry.id);
     const std::vector<std::wstring> compileArguments{
         L"compile",
         source,
         temporary.wstring()};
-    CapturedProcessResult compile = RunChildProcess(
-        compiler,
+    CapturedProcessResult compile = impl_->RunCompiler(
+        request.entry,
         compileArguments,
-        CREATE_NO_WINDOW);
-    impl_->QueueOutput(
-        request.entry.id,
-        request.entry.displayName,
-        app::ConsoleSource::Compiler,
-        compile.standardOutput);
-    impl_->QueueOutput(
-        request.entry.id,
-        request.entry.displayName,
-        app::ConsoleSource::Compiler,
-        compile.standardError);
+        true);
     if (!compile.started || !compile.error.empty() || compile.exitCode != 0U) {
         RemoveTemporary(temporary);
-        return app::OperationResult::Failure(
-            compile.error.empty()
-                ? "Compiler exited with code "
-                    + std::to_string(compile.exitCode) + "."
-                : compile.error);
+        return ProcessFailure(compile, "Compiler");
     }
 
     const std::vector<std::wstring> dumpArguments{L"dump", source};
-    CapturedProcessResult dump = RunChildProcess(
-        compiler,
+    CapturedProcessResult dump = impl_->RunCompiler(
+        request.entry,
         dumpArguments,
-        CREATE_NO_WINDOW);
-    impl_->QueueOutput(
-        request.entry.id,
-        request.entry.displayName,
-        app::ConsoleSource::Compiler,
-        dump.standardOutput);
-    impl_->QueueOutput(
-        request.entry.id,
-        request.entry.displayName,
-        app::ConsoleSource::Compiler,
-        dump.standardError);
+        true);
     if (!dump.started || !dump.error.empty() || dump.exitCode != 0U) {
         RemoveTemporary(temporary);
-        return app::OperationResult::Failure(
-            dump.error.empty()
-                ? "Compiler dump exited with code "
-                    + std::to_string(dump.exitCode) + "."
-                : dump.error);
+        return ProcessFailure(dump, "Compiler dump");
     }
     return impl_->library.PublishImport(request, temporary, dump.standardOutput);
+}
+
+app::OperationResult WindowsAppPlatform::PublishNew(
+    const app::ProgramPublishRequest& request)
+{
+    return impl_->library.PublishNew(request);
 }
 
 app::OperationResult WindowsAppPlatform::SaveEntry(
@@ -417,9 +501,86 @@ app::OperationResult WindowsAppPlatform::DeleteEntry(app::ProgramEntryId id)
     return impl_->library.DeleteEntry(id);
 }
 
+app::SourceReadResult WindowsAppPlatform::LoadSource(
+    app::ProgramEntryId id) const
+{
+    return impl_->library.LoadSource(id);
+}
+
 std::string WindowsAppPlatform::LoadDump(app::ProgramEntryId id) const
 {
     return impl_->library.LoadDump(id);
+}
+
+app::OperationResult WindowsAppPlatform::SaveSource(
+    app::ProgramEntryId id,
+    std::string_view source)
+{
+    return impl_->library.SaveSource(id, source);
+}
+
+app::SourceValidationResult WindowsAppPlatform::ValidateSource(
+    const app::ProgramEntry& entry)
+{
+    const CapturedProcessResult result = impl_->RunCompiler(
+        entry,
+        {L"validate", impl_->library.SourcePath(entry.id).wstring()},
+        false);
+    if (!result.started || !result.error.empty()) {
+        return {false, false, {}, ProcessFailure(result, "Validation").error};
+    }
+    const std::string errors = NormalizeOutput(result.standardError);
+    std::vector<app::SourceDiagnostic> diagnostics = ParseDiagnostics(errors);
+    const bool valid = result.exitCode == 0U;
+    if (!valid && diagnostics.empty()) {
+        return {
+            false,
+            false,
+            {},
+            "Compiler validation exited without structured diagnostics."};
+    }
+    return {true, valid, std::move(diagnostics), {}};
+}
+
+app::OperationResult WindowsAppPlatform::CompileProgram(
+    const app::ProgramEntry& entry)
+{
+    const std::filesystem::path source = impl_->library.SourcePath(entry.id);
+    const std::filesystem::path temporary =
+        impl_->library.ArtifactTemporaryPath(entry.id);
+    CapturedProcessResult compile = impl_->RunCompiler(
+        entry,
+        {L"compile", source.wstring(), temporary.wstring()},
+        true);
+    if (!compile.started || !compile.error.empty() || compile.exitCode != 0U) {
+        RemoveTemporary(temporary);
+        return ProcessFailure(compile, "Compiler");
+    }
+    CapturedProcessResult dump = impl_->RunCompiler(
+        entry,
+        {L"dump", source.wstring()},
+        true);
+    if (!dump.started || !dump.error.empty() || dump.exitCode != 0U) {
+        RemoveTemporary(temporary);
+        return ProcessFailure(dump, "Compiler dump");
+    }
+    return impl_->library.PublishCompilation(
+        entry,
+        temporary,
+        dump.standardOutput);
+}
+
+app::OperationResult WindowsAppPlatform::GenerateDump(
+    const app::ProgramEntry& entry)
+{
+    const CapturedProcessResult dump = impl_->RunCompiler(
+        entry,
+        {L"dump", impl_->library.SourcePath(entry.id).wstring()},
+        true);
+    if (!dump.started || !dump.error.empty() || dump.exitCode != 0U) {
+        return ProcessFailure(dump, "Compiler dump");
+    }
+    return impl_->library.SaveDump(entry.id, dump.standardOutput);
 }
 
 app::OperationResult WindowsAppPlatform::LaunchExecutor(
@@ -491,9 +652,6 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
     std::string error;
     const std::filesystem::path runtime =
         impl_->library.ExecutableDirectory() / L"InputWeaver.exe";
-    if (request.options.debug) {
-        std::this_thread::sleep_for(kDebugLaunchDelay);
-    }
     if (!StartChildProcess(
             runtime,
             arguments,

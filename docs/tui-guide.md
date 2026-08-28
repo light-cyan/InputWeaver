@@ -1,74 +1,207 @@
 # InputWeaver TUI 使用指南
 
-## 启动
+`InputWeaverTUI.exe` 是程序库、源码编辑、运行配置、执行器控制和输入调试的统一界面。它仍然通过独立的 `InputWeaverCompiler.exe` 生成 `.weavec`，再启动独立的 `InputWeaver.exe`；TUI 不把源码直接交给运行时，也不在内存中把编译程序传给执行器。
 
-运行 `script\verify_project.bat` 构建并验证全部产物，然后运行 `script\run_inputweaver_tui.bat`。`InputWeaverTUI.exe`、`InputWeaverCompiler.exe`、`InputWeaver.exe` 和 `res\InputWeaverTUI.colors.json` 共用 `bin\` 目录结构。
+当前 Weave 语法、类型、规则匹配和动作语义统一定义在发行包的 `docs\grammar.md`。
 
-终端尺寸至少为 `80x24` 字符。顶部边框显示 `InputWeaver | 页面名称` 和当前可用按键；按键提示需要换行时会按各组占用宽度均衡分行，并在每行的左右边距、按键组和组间空白中分配多余宽度。顶部标题颜色跟随当前焦点区域。程序启动后进入 Programs 页；使用 `[Left]` 切换到 Console 页，使用 `[Right]` 切换到 Debug 页。
+## 启动与页面
+
+Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip`，进入其中的 `InputWeaver` 文件夹并运行 `InputWeaverTUI.exe`。不要在 ZIP 内直接运行，也不要拆散同目录中的三个 EXE 和 `res` 文件夹；发行版已静态链接 MinGW 的 GCC 与 C++ 运行库，不要求目标电脑安装 MinGW。源码仓库的维护者可以运行 `script\package_release.bat`，在 `bin\release\` 中重新生成同样的目录和 ZIP。
+
+终端至少需要 `80x24` 个字符。程序启动后进入 Programs 页；Programs、Console 和 Debug 是三个顶层页面。顶部边框显示当前页面、当前程序或当前文档模式，边框颜色表示当前焦点区域；普通模式下，可用按键说明显示在顶部边框内。
+
+顶层页面之间的移动如下：
+
+| 当前页面 | 按键 | 结果 |
+| --- | --- | --- |
+| Programs | `[Left]` | 进入 Console；文档全屏时不切页 |
+| Programs | `[Right]` | 进入 Debug；文档全屏时不切页 |
+| Console | `[Right]` 或 `[Esc]` | 返回 Programs |
+| Debug | `[Left]` 或 `[Esc]` | 返回 Programs |
+
+`[Esc]` 同时承担逐层退出：源码编辑时先退出编辑，文档全屏时再退出全屏，Program Information 或 Source 获得焦点时返回程序列表，最后从 Programs 的程序列表退出应用。退出应用会请求停止由本次 TUI 管理的全部执行器。
 
 ## Programs 页
 
-Programs 页左侧显示已导入程序的纯列表，右上方显示 Target 和 Logging，右侧其余空间显示已保存的编译结果。`[Tab]` 依次切换程序列表、程序信息和编译结果区域的焦点。
+Programs 页的分栏布局由左侧 PROGRAMS、右上 PROGRAM INFORMATION、右下 SOURCE 或 COMPILED DUMP，以及底部 NEXT RUN 组成。按 `[Tab]` 在程序列表、程序信息和源码区域之间循环切换焦点；当前焦点由边框颜色表示。
 
-- `[Up]` / `[Down]`：选择程序。
-- `[A]`：输入一个 `.weave` 文件路径并导入；支持键入、粘贴以及终端拖放产生的路径文本。
-- `[D]`：确认删除条目、编译产物和编译结果；已有日志文件会保留。
-- `[R]`：修改显示名称。
-- `[M]`：进入排序模式；使用 `[Up]` / `[Down]` 移动条目，`[Enter]` 保存，`[Esc]` 取消。
-- `[Enter]`：将焦点移到 Target 和 Logging；使用 `[Up]` / `[Down]` 选择字段，使用 `[Enter]` 原位编辑。
-- `[T]`：切换下一次运行是否连接 DebugClient，并在启动后自动切换到 Debug 页。
-- `[S]`：切换下一次运行是否使用无注入模拟；无注入模拟会跳过模拟输入和 `EXEC` 进程创建。
-- `[P]`：切换下一次运行是否授予 `EXEC` 进程创建权限。
-- `[Space]`：使用当前 T/S/P 选项启动所选程序；条目已有执行器时保持不变。
-- `[X]`：请求停止所选程序的执行器。
-- `[Q]`：焦点位于程序信息或编译结果时返回程序列表；焦点位于程序列表时停止应用管理的全部执行器并退出。
+运行中的程序在列表右侧显示状态标签：普通执行器为 `[RUN]`，Debug 执行器为 `[DBG]`，无注入模拟增加 `[DRY]`，已授予 `exec` 权限增加 `[EXEC]`。所选程序行始终使用反色显示；焦点不在程序列表时使用较弱的反色。
 
-正在运行的条目显示 `[RUN]` 或 `[DBG]`；无注入模拟会增加 `[DRY]`，执行权限会增加 `[EXEC]`。所选行始终使用反色高亮。
+### Programs
 
-Target 支持 `Compiled`、`Executable` 和 `Global`。模式选择直接在 Program Information 区域原位显示。选择 `Executable` 后，`Executable ->` 后方会成为可水平滚动的行内文本框；使用 `[Left]`、`[Right]`、`[Home]`、`[End]`、`[Backspace]` 和 `[Delete]` 编辑，使用 `[Enter]` 确认，使用 `[Esc]` 返回模式选择。插入光标会闪烁，长文本水平滚动时始终保持可见。
+下列程序管理按键只在 PROGRAMS 列表获得焦点时生效：
 
-Logging 支持 `Off`、`Operational` 和 `Input Trace`，同样在原位置选择。启用日志后，每次启动使用的相对路径会写入 Console，日志文件保存在 `programs\logs\`。
+| 按键 | 功能 |
+| --- | --- |
+| `[Up]` / `[Down]` | 选择程序 |
+| `[A]` | 打开居中的横向 Add Program 选择栏 |
+| `[D]` | 确认删除所选程序 |
+| `[M]` | 进入排序模式 |
+| `[Enter]` | 进入 Program Information |
 
-NEXT RUN 边框区域显示 `[T] Trace and Debug`、`[S] Skip Simulated Input` 和 `[P] Authorize Execution Permission`。选项布局与顶部按键提示使用相同的响应式分行和外边距。启用的选项使用配置的状态颜色。这三个按键不会在顶部按键提示中重复显示。
+Add Program 使用 `[Left]` / `[Right]` 选择 `New Blank`、`Import .weave` 或 `Cancel`，再按 `[Enter]` 确认。新建空白程序会创建一个空白的可编辑 `.weave` 副本，不会预先编译。导入只接受一个现有 `.weave` 文件，路径输入支持正常键入、终端粘贴以及终端拖放产生的路径文本。
 
-## TUI 按键保护
+导入时，TUI 会复制源码到程序库，调用编译器生成 `.weavec`，并保存可查看的 Dump。导入编译失败时不会新增或覆盖程序，界面会切换到 Console 显示编译器诊断。程序名取自源文件名；名称冲突时可以覆盖原条目、换名导入或取消。覆盖保留原条目的 ID、位置和运行配置。
 
-TUI 启动每个 `InputWeaver.exe` 时，会自动通过 `--exclude-process` 排除承载交互终端窗口的进程。InputWeaver TUI 位于前台时，这些执行器不会消费、映射或抑制用户操作 TUI 的物理按键，也不会向 TUI 注入新的输出；即使条目的实际目标是 `GLOBAL`，保护仍然生效，无需修改程序配置。
+删除程序前会先停止它的执行器；确认删除后移除条目元数据、源码副本、编译产物和 Dump，已有日志文件保留。排序模式中使用 `[Up]` / `[Down]` 移动条目，`[Enter]` 保存顺序，`[Esc]` 放弃本次排序。
 
-排除检查一直保留到 Windows 实际注入边界。安全清理仍可释放执行器先前持有的按键，但不会向 TUI 引入新的按下或重复。
+### Program Information
 
-## 导入与程序库
+Program Information 包含 Name、Target 和 Logging。使用 `[Up]` / `[Down]` 选择字段，使用 `[Enter]` 原位编辑；程序列表不再提供独立的重命名按键。
 
-导入时会调用 `InputWeaverCompiler.exe compile` 验证源码并生成编译产物，然后调用 `dump` 保存可滚动查看的编译结果。编译失败不会新增或覆盖条目，并会自动切换到 Console 页显示编译器诊断。
+Name 使用单行编辑器修改。程序名按 Windows 序号规则进行不区分大小写的唯一性比较。
 
-名称使用 Windows 序号、不区分大小写的比较方式。名称冲突时可以选择覆盖、换名导入或取消。覆盖会保留原条目的 ID、顺序和运行配置。
+Target 有三种模式：
 
-程序库保存在 `bin\programs\`。`programs.index` 保存顺序，`.entry` 保存名称和配置，`.weavec` 保存编译程序，`.dump.txt` 保存编译结果。程序库不会复制 `.weave` 源文件。
+| 模式 | 含义 |
+| --- | --- |
+| `Compiled` | 使用 `.weave` 中编译得到的 `TARGET` |
+| `Executable` | 本次程序条目使用指定的可执行文件名或绝对路径覆盖编译目标 |
+| `Global` | 本次程序条目覆盖为全局目标 |
 
-`programs.index` 丢失时会根据完整条目重新生成。索引中的条目缺少 `.weavec` 时，该条目会被移除，并在 Console 页提示。
+Target 模式选择使用 `[Up]` / `[Down]` 和 `[Enter]`。选择 `Executable` 后，`Executable ->` 后方成为可水平滚动的单行编辑器；使用方向键、`[Home]`、`[End]`、`[Backspace]` 和 `[Delete]` 编辑，`[Enter]` 保存，`[Esc]` 返回模式选择。
+
+Logging 有 `Off`、`Operational` 和 `Input Trace` 三种模式。启用日志后，每次运行的相对日志路径会写入 Console，JSONL 文件保存在 `programs\logs\`。
+
+### 源码与 Dump
+
+SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖向分隔线、当前行底色和语法高亮。浏览源码时，方向键和 `[PageUp]` / `[PageDown]` 移动视图位置，`[Home]` 跳到第一行，`[End]` 跳到最后一行。
+
+语法颜色参考 Visual Studio Code 的默认配色并按 Weave 语义归类：
+
+| 类别 | 示例 | 默认颜色 |
+| --- | --- | --- |
+| 结构关键字 | `when`、`repeat`、`if`、`else` | 紫色 |
+| 类型名 | `state`、`number`、`duration` | 青绿色 |
+| 变量和内蕴值 | 用户变量、`TARGET`、`PAUSE`、`TAP_DURATION` | 浅蓝色 |
+| 常量 | `GLOBAL`、`on`、`off`、`down`、`up`、数字、时长 | 浅绿色 |
+| 控制名 | `A`、`LCtrl`、`Mouse.Left` | 亮蓝色 |
+| 动作函数及配套符号 | `tap`、`set`、`toggle`、`(`、`)`、`|` | 黄色 |
+| 规则和映射箭头 | `->`、`~>`、`=>`、`=>>`、`~>>` | 亮白色 |
+| 字符串 | `"..."` | 橙色 |
+| 注释 | `//...`、`/*...*/` | 绿色 |
+
+`[V]` 在 Source 和 Compiled Dump 之间切换。没有已保存的 Dump 时，切换会立即调用编译器生成；生成失败会进入 Console。源码一旦保存，旧 Dump 会被移除，原 `.weavec` 文件可以暂时保留，但它的源码摘要不再匹配，因此不会被下一次运行复用。
+
+`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAMS、PROGRAM INFORMATION 和 NEXT RUN，不改变终端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览。
+
+### 源码编辑
+
+`[E]` 进入源码编辑；如果当前显示 Dump，会先切回 Source。编辑既可以在分栏内进行，也可以在文档全屏内进行。编辑模式不显示顶部按键说明和 NEXT RUN，只在顶部边框最右侧显示 `[Esc] Exit`。
+
+| 按键 | 功能 |
+| --- | --- |
+| 方向键、`[PageUp]` / `[PageDown]` | 移动光标 |
+| `[Home]` / `[End]` | 移到当前行首或行尾 |
+| `[Enter]` | 插入新行 |
+| `[Tab]` | 插入四个空格 |
+| `[Backspace]` / `[Delete]` | 删除文本或当前选择 |
+| `[Shift]` + 移动键 | 扩展文本选择 |
+| `[Ctrl+C]` | 复制选择到 Windows 剪贴板 |
+| `[Ctrl+X]` | 剪切选择到 Windows 剪贴板 |
+| `[Ctrl+Z]` | 撤销 |
+| `[Ctrl+Y]` | 重做 |
+| `[Esc]` | 保存并退出编辑 |
+
+全屏编辑时，第一次 `[Esc]` 只退出编辑并保留文档全屏，第二次 `[Esc]` 才返回分栏。光标移动和编辑都会立即重新开始光标的显示周期；单行输入框和源码编辑器使用相同的细竖线光标。
+
+源码编辑器最多接受 16 MiB 的 UTF-8 文本。撤销历史最多保留 256 个状态，并同时受 16 MiB 历史容量限制；执行新的编辑后，已有重做分支会被替换。
+
+### 自动保存、校验和编译
+
+停止编辑约 400 毫秒后，TUI 会把源码保存到程序库，并调用 `InputWeaverCompiler.exe validate` 完成与正式编译相同的词法、语法、语义和类型检查，但不写出 `.weavec`。离开编辑、切换程序或焦点、生成 Dump、运行和删除前也会先保存当前源码。
+
+校验错误所在的整行使用暗红底色，诊断对应的源码区间使用亮红色并带下划线。自动校验只更新源码视图，不会因为普通语法错误抢走当前页面；保存失败、生成 Dump 失败、正式编译失败或运行启动失败会切换到 Console，并保留完整输出。
+
+TUI 没有独立的编译按键。按 `[Space]` 运行时，如果 `.weavec` 不存在，或者记录的源码摘要与当前源码不同，TUI 会先正式编译并更新 Dump，再启动 `InputWeaver.exe`；编译产物仍然与运行时进程彼此独立。
+
+### NEXT RUN 与执行器控制
+
+非编辑状态下，NEXT RUN 在分栏和文档全屏中都显示以下选项；`ON ` 和 `OFF` 使用等宽文本，切换时不会改变后续内容的位置。
+
+| 按键 | 选项 | 作用 |
+| --- | --- | --- |
+| `[T]` | Trace and Debug | 连接 DebugClient，并自动进入 Debug 页 |
+| `[S]` | Skip Simulated Input | 使用 `--dry-run`，放行物理输入并模拟输出效果 |
+| `[P]` | Authorize Execution Permission | 使用 `--allow-exec` 授权当前运行执行 `exec` |
+| `[Space]` | Run | 使用当前三个选项运行所选程序 |
+
+`[T]`、`[S]`、`[P]`、`[Space]` 和 `[X]` 在 Programs 页的任意非编辑焦点中都可使用。成功启动后 NEXT RUN 选项恢复为关闭。`[X]` 请求停止所选程序的执行器；每个程序最多有一个执行器，不同程序可以同时普通运行，整个应用最多管理一个 Debug 执行器。启动另一个程序的 Debug 时，当前 Debug 执行器会先被停止。
+
+选择 Trace and Debug 后按 `[Space]`，TUI 会立即切换到 Debug 页，并等待 500 毫秒后再保存后的正式编译、启动执行器和建立捕获，让启动按键有时间释放。等待期间 Debug 标题显示 `STARTING`，`[X]` 可以取消待启动操作。
+
+## 程序库
+
+程序库位于 `InputWeaverTUI.exe` 同目录的 `programs\`：
+
+| 文件 | 内容 |
+| --- | --- |
+| `programs.index` | 程序显示顺序 |
+| `<id>.entry` | 名称、运行配置和已编译源码摘要 |
+| `<id>.weave` | TUI 编辑的源码副本 |
+| `<id>.weavec` | 持久化编译程序 |
+| `<id>.dump.txt` | 最近保存的编译 Dump |
+
+`programs.index` 缺失时，TUI 会根据有效的 `.entry` 文件按 ID 重建顺序。条目缺少源码时会建立空白可编辑源码；已记录为编译完成但缺少 `.weavec` 时会被标记为未编译，下一次运行会重新编译。启动和修复信息写入 Console。
 
 ## Console 页
 
-Console 页汇总应用、编译器和执行器输出。每组连续的同来源输出只在开始前显示一行 `[Program][Source]` 身份标记，后续输出行不再重复。使用 `[Up]` / `[Down]` 逐行滚动，`[PageUp]` / `[PageDown]` 整页滚动，`[Home]` / `[End]` 跳到第一行或最新一行，使用 `[Right]` 或 `[Q]` 返回 Programs 页。
+Console 汇总应用、编译器和执行器输出。连续的同程序、同来源输出只在第一行前显示一次 `[Program][Source]` 身份标记，文本会按区域宽度换行；内存中最多保留最近 2048 条原始输出行。
+
+使用 `[Up]` / `[Down]` 逐行滚动，`[PageUp]` / `[PageDown]` 整页滚动，`[Home]` 跳到第一行，`[End]` 跳到最新一行，`[Right]` 或 `[Esc]` 返回 Programs。
 
 ## Debug 页
 
-Debug 页包含带边框的 EVENTS、STATE、ACTION EXECUTIONS 和 HEALTH 区域。`[Tab]` 在前三个可滚动区域之间切换焦点；使用 `[Up]`、`[Down]`、`[PageUp]`、`[PageDown]`、`[Home]` 和 `[End]` 滚动当前焦点区域。
+Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。`[Tab]` 在前三个可滚动区域之间循环切换焦点；方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动当前区域。
 
-Debug 页使用 `[C]` 开始或停止捕获，使用 `[X]` 停止 Debug 执行器，使用 `[Left]` 或 `[Q]` 返回 Programs 页。这些按键作用于整个 Debug 页，不属于某个信息区域。
+`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器。`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。`[Left]` 或 `[Esc]` 返回 Programs。
 
-EVENTS 使用对齐的时间、控制、事件转换、来源和处置结果列，并在其后显示 `REPEAT` 与 `NO-DOWN` 标记。
+### EVENTS
 
-STATE 使用多列显示当前处于按下状态的控制和全部用户 `state`、`number`、`duration` 当前值，包括值为 `off` 的状态，并支持与其他可滚动区域相同的滚动按键。
+EVENTS 的每一行依次显示捕获时间、控制、转换、来源和处置结果，并可能附加 `REPEAT` 或 `NO-DOWN`：
 
-ACTION EXECUTIONS 的首行显示弱化的执行编号、`EVENT` 触发时间、`MATCH` 匹配时间、控制、事件转换和括号内的处置结果，不重复显示仅有一种可能的来源；`#编号`、`AS` 和 `ACT` 标签使用弱化色，其余首行内容、实际命中规则的源码级条件和完整源码级动作管线统一使用同一个执行状态颜色：运行中为青色、完成为深绿色、失败为红色、取消为黄色。完整按键映射也在此区域形成一条从按下到释放的执行记录，并在 `ACT` 行显示完整映射。
+```text
+16:28:38.582  A                 down     PHY   PASS
+16:28:38.610  B                 down     SYN   DROP
+16:28:38.700  F22               down     INIT  -
+```
 
-HEALTH 保持固定高度，在独立边框内显示连接状态、捕获状态、信任状态、捕获代次、`PAUSE`、Debug 故障、运行时问题数量和最近问题。`PAUSE` 与 STATE 中的用户值在开始捕获时取得完整快照，此后的实际更新由运行时增量同步。没有 Debug 故障或运行时问题时使用健康颜色；出现问题时改用配置的橙红色故障颜色。
+来源 `PHY` 表示物理候选输入，`SYN` 表示注入来源，`INIT` 表示开始捕获时取得的已按下控制快照。`INIT` 不是捕获后发生的一次新按下；它只把初始按下状态送入 DebugClient，因此转换固定为 `down`，处置结果固定为 `-`。例如 `F22 down INIT -` 表示 Windows 在捕获开始时报告 F22 已处于按下状态。
 
-Windows Debug 启动会延迟 500 毫秒，使用户能在输入捕获开始前松开启动按键。
+`PASS` 表示运行时放行当前输入，`DROP` 表示运行时决定消费当前输入；在 Dry-run 中，界面仍显示正常模式下的逻辑决定，但物理输入最终始终放行。`REPEAT` 表示按下发生在已有按下状态之后，`NO-DOWN` 表示释放前没有对应的已知按下。
 
-应用全局最多管理一个 Debug 执行器。为另一个条目启动 Debug 时，会先停止当前 Debug 执行器。不同条目仍可同时普通运行，每个条目最多拥有一个执行器。
+### STATE
+
+STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值，再显示当前按下的控制；`off`、`0` 等值也会显示，不会只保留活动状态。控制项同时标出其当前来源，例如 `[LCtrl PHY]` 或 `[F22 INIT]`。
+
+开始捕获时，执行器发送 `PAUSE` 和全部用户值的完整快照；实际运行产生的变化随后以增量方式同步。`PAUSE` 不重复放在 STATE 中，而是固定显示在 HEALTH。
+
+### ACTION EXECUTIONS
+
+每个匹配并进入执行管线的规则使用源码级文本显示：
+
+```text
+#17  EVENT 16:28:38.582  MATCH 16:28:38.582  A down (PASS)
+  AS   a < 5
+  ACT  tap(B) | set(a,a+1)
+```
+
+`EVENT` 是触发输入的捕获时间，`MATCH` 是规则匹配并建立执行记录的时间。执行首行不重复显示来源；处置结果使用括号显示在转换之后。`#编号`、`AS` 和 `ACT` 使用弱化色，条目其余部分统一使用当前执行状态颜色：运行中为青色、完成为深绿色、失败为红色、取消为黄色。条件和动作来自编译产物内保存的源码片段，而不是降低后的指令序列。
+
+普通动作规则的 ACT 显示完整动作管线；完整按键映射虽然不经过普通动作程序，但也会建立执行记录，并把完整映射源码显示在 ACT。规则没有条件时 AS 显示 `always`。
+
+### HEALTH
+
+HEALTH 显示连接、捕获、信任状态、捕获代次、Dry-run、`PAUSE`、DebugClient 故障、运行时问题数量和最近问题。等待 Debug 启动或恢复捕获时使用恢复颜色，状态可信且没有问题时使用健康颜色，出现故障或运行时问题时使用故障颜色。
+
+开始新的捕获代次会清空上一代的事件、状态和执行记录，再由新的完整快照和后续增量重新建立可信状态。
+
+## TUI 按键保护
+
+TUI 启动每个 `InputWeaver.exe` 时都会附加 `--exclude-process`，并传入启动时交互终端前台宿主的 PID。该 PID 位于前台时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的按下和重复输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
+
+该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
 
 ## 配色
 
-程序启动时读取 `bin\res\InputWeaverTUI.colors.json`。颜色使用 `#RRGGBB` 格式；修改文件后需要重新启动 TUI。文件缺失、字段缺失、包含未知字段或颜色无效时，程序会报告错误并停止启动。
+TUI 启动时读取其 EXE 同目录下的 `res\InputWeaverTUI.colors.json`。所有颜色使用 `#RRGGBB`；修改后需要重新启动 TUI。文件缺失、版本错误、字段缺失、字段重复、包含未知字段或颜色值无效时，TUI 会报告错误并停止启动。

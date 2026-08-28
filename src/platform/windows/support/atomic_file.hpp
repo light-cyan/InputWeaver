@@ -15,6 +15,11 @@ namespace inputweaver::win32 {
     const std::filesystem::path& destination,
     std::string& error);
 
+[[nodiscard]] bool WriteNewFile(
+    const std::filesystem::path& path,
+    std::string_view bytes,
+    std::string& error);
+
 [[nodiscard]] bool WriteFileAtomically(
     const std::filesystem::path& destination,
     std::string_view bytes,

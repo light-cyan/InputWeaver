@@ -307,40 +307,16 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     }
     case MessageKind::RuleMatched: {
         const RuleMatchedPayload& matched = message.ruleMatched;
-        if (matched.conditionInstructions.size() > kMaximumDebugInstructions
-            || matched.actionInstructions.size() > kMaximumDebugInstructions
-            || matched.conditionText.size() > kMaximumDebugTextBytes
+        if (matched.conditionText.size() > kMaximumDebugTextBytes
             || matched.actionText.size() > kMaximumDebugTextBytes) {
             return false;
         }
         writer.U64(matched.executionMarker);
         writer.U64(matched.triggerInputSequence);
-        WriteEnum(writer, matched.eventTransition);
-        WriteControl(writer, matched.eventControl);
         writer.String(matched.conditionText);
         writer.String(matched.actionText);
-        writer.U32(static_cast<std::uint32_t>(
-            matched.conditionInstructions.size()));
-        for (const ExpressionInstruction& instruction
-             : matched.conditionInstructions) {
-            WriteEnum(writer, instruction.opcode);
-            WriteEnum(writer, instruction.type);
-            writer.U32(instruction.operand0);
-            writer.U32(instruction.operand1);
-        }
-        writer.U32(static_cast<std::uint32_t>(
-            matched.actionInstructions.size()));
-        for (const ActionInstruction& instruction : matched.actionInstructions) {
-            WriteEnum(writer, instruction.opcode);
-            writer.U32(instruction.operand0);
-            writer.U32(instruction.operand1);
-        }
         return true;
     }
-    case MessageKind::ActionStarted:
-        writer.U64(message.actionStarted.executionMarker);
-        writer.U32(message.actionStarted.instructionIndex);
-        return true;
     case MessageKind::ExecutionEnded:
         writer.U64(message.executionEnded.executionMarker);
         WriteEnum(writer, message.executionEnded.result);
@@ -408,49 +384,11 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     }
     case MessageKind::RuleMatched: {
         RuleMatchedPayload& matched = message.ruleMatched;
-        if (!reader.U64(matched.executionMarker)
-            || !reader.U64(matched.triggerInputSequence)
-            || !ReadEnum(reader, matched.eventTransition, 2U)
-            || !ReadControl(reader, matched.eventControl)
-            || !reader.String(matched.conditionText)
-            || !reader.String(matched.actionText)) {
-            return false;
-        }
-        std::uint32_t conditionCount{};
-        if (!reader.U32(conditionCount)
-            || conditionCount > kMaximumDebugInstructions) {
-            return false;
-        }
-        matched.conditionInstructions.resize(conditionCount);
-        for (std::uint32_t index = 0U; index < conditionCount; ++index) {
-            ExpressionInstruction& instruction =
-                matched.conditionInstructions[index];
-            if (!ReadEnum(reader, instruction.opcode, 11U)
-                || !ReadEnum(reader, instruction.type, 4U)
-                || !reader.U32(instruction.operand0)
-                || !reader.U32(instruction.operand1)) {
-                return false;
-            }
-        }
-        std::uint32_t actionCount{};
-        if (!reader.U32(actionCount)
-            || actionCount > kMaximumDebugInstructions) {
-            return false;
-        }
-        matched.actionInstructions.resize(actionCount);
-        for (std::uint32_t index = 0U; index < actionCount; ++index) {
-            ActionInstruction& instruction = matched.actionInstructions[index];
-            if (!ReadEnum(reader, instruction.opcode, 14U)
-                || !reader.U32(instruction.operand0)
-                || !reader.U32(instruction.operand1)) {
-                return false;
-            }
-        }
-        return true;
+        return reader.U64(matched.executionMarker)
+            && reader.U64(matched.triggerInputSequence)
+            && reader.String(matched.conditionText)
+            && reader.String(matched.actionText);
     }
-    case MessageKind::ActionStarted:
-        return reader.U64(message.actionStarted.executionMarker)
-            && reader.U32(message.actionStarted.instructionIndex);
     case MessageKind::ExecutionEnded:
         return reader.U64(message.executionEnded.executionMarker)
             && ReadEnum(reader, message.executionEnded.result, 2U);
@@ -482,7 +420,6 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::CaptureStarted:
     case MessageKind::InputEvent:
     case MessageKind::RuleMatched:
-    case MessageKind::ActionStarted:
     case MessageKind::ExecutionEnded:
     case MessageKind::RuntimeIssue:
     case MessageKind::StateChanged:

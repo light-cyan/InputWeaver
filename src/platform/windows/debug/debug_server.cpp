@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include "pipe_transport.hpp"
 #include "platform/windows/support/unique_handle.hpp"
 #include "program/compiled_program.hpp"
 #include "support/bit_mix.hpp"
@@ -20,7 +21,6 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -48,88 +48,6 @@ struct ProducerRecord final {
     debug::InputEventPayload input{};
     RuntimeDebugEvent runtime{};
 };
-
-[[nodiscard]] bool ReadExact(
-    HANDLE pipe,
-    std::span<std::uint8_t> destination) noexcept
-{
-    std::size_t offset = 0U;
-    while (offset < destination.size()) {
-        const std::size_t remaining = destination.size() - offset;
-        const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
-            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
-        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (event == nullptr) {
-            return false;
-        }
-        const UniqueHandle eventOwner(event);
-        OVERLAPPED overlapped{};
-        overlapped.hEvent = event;
-        DWORD read{};
-        const BOOL started = ReadFile(
-            pipe,
-            destination.data() + offset,
-            requested,
-            &read,
-            &overlapped);
-        bool completed = started != FALSE;
-        if (!completed && GetLastError() == ERROR_IO_PENDING) {
-            completed = WaitForSingleObject(event, INFINITE) == WAIT_OBJECT_0
-                && GetOverlappedResult(
-                    pipe,
-                    &overlapped,
-                    &read,
-                    FALSE) != FALSE;
-        }
-        if (!completed || read == 0U) {
-            return false;
-        }
-        offset += read;
-    }
-    return true;
-}
-
-[[nodiscard]] bool WriteExact(
-    HANDLE pipe,
-    std::span<const std::uint8_t> source) noexcept
-{
-    std::size_t offset = 0U;
-    while (offset < source.size()) {
-        const std::size_t remaining = source.size() - offset;
-        const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
-            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
-        const HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        if (event == nullptr) {
-            return false;
-        }
-        const UniqueHandle eventOwner(event);
-        OVERLAPPED overlapped{};
-        overlapped.hEvent = event;
-        DWORD written{};
-        const BOOL started = WriteFile(
-            pipe,
-            source.data() + offset,
-            requested,
-            &written,
-            &overlapped);
-        bool completed = started != FALSE;
-        if (!completed && GetLastError() == ERROR_IO_PENDING) {
-            completed = WaitForSingleObject(event, INFINITE) == WAIT_OBJECT_0
-                && GetOverlappedResult(
-                    pipe,
-                    &overlapped,
-                    &written,
-                    FALSE) != FALSE;
-        }
-        if (!completed || written == 0U) {
-            return false;
-        }
-        offset += written;
-    }
-    return true;
-}
 
 [[nodiscard]] bool ConnectClient(HANDLE pipe) noexcept
 {
@@ -165,7 +83,8 @@ struct ProducerRecord final {
 {
     try {
         std::array<std::uint8_t, debug::kWireHeaderBytes> headerBytes{};
-        if (!ReadExact(pipe, headerBytes)) {
+        if (ReadPipeExact(pipe, nullptr, headerBytes)
+            != PipeIoResult::Succeeded) {
             return false;
         }
         debug::MessageHeader header{};
@@ -179,10 +98,11 @@ struct ProducerRecord final {
             + static_cast<std::size_t>(header.payloadBytes));
         std::copy(headerBytes.begin(), headerBytes.end(), frame.begin());
         if (header.payloadBytes != 0U
-            && !ReadExact(
+            && ReadPipeExact(
                 pipe,
+                nullptr,
                 std::span<std::uint8_t>{frame}.subspan(
-                    debug::kWireHeaderBytes))) {
+                    debug::kWireHeaderBytes)) != PipeIoResult::Succeeded) {
             return false;
         }
         debug::DecodeResult decoded = debug::DecodeMessage(frame);
@@ -206,7 +126,8 @@ struct ProducerRecord final {
             || frame.size() < debug::kWireHeaderBytes) {
             return false;
         }
-        return WriteExact(pipe, frame);
+        return WritePipeExact(pipe, nullptr, frame)
+            == PipeIoResult::Succeeded;
     } catch (...) {
         return false;
     }
@@ -296,43 +217,11 @@ struct ProducerRecord final {
     if (captureBytes > debug::kMaximumFramePayloadBytes) {
         return false;
     }
-    for (const CompiledRule& rule : program.Rules()) {
-        const auto debugRule = std::find_if(
-            program.DebugInfo().rules.begin(),
-            program.DebugInfo().rules.end(),
-            [&rule](const RuleDebugRecord& candidate) noexcept {
-                return candidate.sourceOrdinal == rule.sourceOrdinal;
-            });
-        const std::uint64_t conditionTextBytes = debugRule
-                == program.DebugInfo().rules.end()
-            ? 6U
-            : textBytes(debugRule->conditionText);
-        const std::uint64_t actionTextBytes = debugRule
-                == program.DebugInfo().rules.end()
-            ? (rule.kind == RuleKind::MappingDown ? 7U : 0U)
-            : textBytes(debugRule->actionText);
-        if (rule.condition.IsValid()
-            && program.Expressions()[rule.condition.value].code.count
-                > debug::kMaximumDebugInstructions) {
-            return false;
-        }
-        if (rule.action.IsValid()
-            && program.ActionPrograms()[rule.action.value].code.count
-                > debug::kMaximumDebugInstructions) {
-            return false;
-        }
-        const std::uint64_t conditionCount = rule.condition.IsValid()
-            ? program.Expressions()[rule.condition.value].code.count
-            : 0U;
-        const std::uint64_t actionCount = rule.kind == RuleKind::MappingDown
-            ? 1U
-            : rule.action.IsValid()
-                ? program.ActionPrograms()[rule.action.value].code.count
-                : 0U;
-        std::uint64_t payloadBytes = 8U + 8U + 1U + 16U
-            + 4U + conditionTextBytes + 4U + actionTextBytes
-            + 4U + conditionCount * 10U
-            + 4U + actionCount * 9U;
+    for (const RuleDebugRecord& rule : program.DebugInfo().rules) {
+        const std::uint64_t conditionTextBytes = textBytes(rule.conditionText);
+        const std::uint64_t actionTextBytes = textBytes(rule.actionText);
+        const std::uint64_t payloadBytes = 8U + 8U
+            + 4U + conditionTextBytes + 4U + actionTextBytes;
         if (conditionTextBytes > debug::kMaximumDebugTextBytes
             || actionTextBytes > debug::kMaximumDebugTextBytes
             || payloadBytes > debug::kMaximumFramePayloadBytes) {
@@ -363,25 +252,6 @@ struct ProducerRecord final {
         text.pop_back();
     }
     return text;
-}
-
-[[nodiscard]] bool IsValidDebugSessionToken(std::wstring_view token) noexcept
-{
-    if (token.empty() || token.size() > 64U) {
-        return false;
-    }
-    for (const wchar_t character : token) {
-        const bool digit = character >= L'0' && character <= L'9';
-        const bool lower = character >= L'a' && character <= L'z';
-        const bool upper = character >= L'A' && character <= L'Z';
-        if (!digit && !lower && !upper
-            && character != L'-'
-            && character != L'_'
-            && character != L'.') {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace
@@ -643,15 +513,11 @@ struct WindowsDebugServer::Impl final {
         debug::RuleMatchedPayload& payload) const
     {
         if (program == nullptr
-            || event.ruleIndex >= program->Rules().size()
-            || !event.eventKey.control.IsValid()
-            || event.eventKey.control.value >= program->Controls().size()) {
+            || event.ruleIndex >= program->Rules().size()) {
             return false;
         }
         payload.executionMarker = event.executionMarker;
         payload.triggerInputSequence = event.triggerInputSequence;
-        payload.eventTransition = event.eventKey.transition;
-        payload.eventControl = program->Controls()[event.eventKey.control.value];
         const CompiledRule& rule = program->Rules()[event.ruleIndex];
         const auto debugRules = program->DebugInfo().rules;
         const auto debugRule = std::find_if(
@@ -674,43 +540,11 @@ struct WindowsDebugServer::Impl final {
         payload.actionText = debugRule != debugRules.end()
             ? readText(debugRule->actionText)
             : std::string{};
-        if (rule.condition.IsValid()) {
-            if (rule.condition.value >= program->Expressions().size()) {
-                return false;
-            }
-            const ExpressionDescriptor& descriptor =
-                program->Expressions()[rule.condition.value];
-            const TableRange range = descriptor.code;
-            if (range.count > debug::kMaximumDebugInstructions) {
-                return false;
-            }
-            const auto code = program->ExpressionCode().subspan(
-                range.begin,
-                range.count);
-            payload.conditionInstructions.assign(code.begin(), code.end());
+        if (payload.actionText.empty()) {
+            payload.actionText = rule.kind == RuleKind::MappingDown
+                ? "mapping"
+                : "<none>";
         }
-        if (rule.kind == RuleKind::MappingDown) {
-            payload.actionInstructions.push_back({
-                ActionOpcode::End,
-                0U,
-                0U});
-            if (payload.actionText.empty()) {
-                payload.actionText = "mapping";
-            }
-            return true;
-        }
-        if (!rule.action.IsValid()
-            || rule.action.value >= program->ActionPrograms().size()) {
-            return false;
-        }
-        const ActionProgramDescriptor& descriptor =
-            program->ActionPrograms()[rule.action.value];
-        const TableRange range = descriptor.code;
-        if (range.count > debug::kMaximumDebugInstructions) {
-            return false;
-        }
-        const auto code = program->ActionCode().subspan(range.begin, range.count);
-        payload.actionInstructions.assign(code.begin(), code.end());
         return true;
     }
 
@@ -731,16 +565,6 @@ struct WindowsDebugServer::Impl final {
                 return false;
             }
             return true;
-        }
-        if (event.kind == RuntimeDebugEventKind::ActionStarted) {
-            debug::Message message = MakeMessage(
-                debug::MessageKind::ActionStarted,
-                record.captureEpoch,
-                record.captureTimeNanoseconds,
-                protocolSequence);
-            message.actionStarted.executionMarker = event.executionMarker;
-            message.actionStarted.instructionIndex = event.instructionIndex;
-            return WriteMessage(pipe, message);
         }
         if (event.kind == RuntimeDebugEventKind::ExecutionEnded) {
             debug::Message message = MakeMessage(
@@ -1032,7 +856,7 @@ bool WindowsDebugServer::Start(
     DebugServerCallbacks callbacks,
     std::wstring& errorMessage)
 {
-    if (!IsValidDebugSessionToken(token)) {
+    if (!IsValidDebugToken(std::wstring_view{token})) {
         errorMessage = L"The debug session token is invalid.";
         return false;
     }
@@ -1294,10 +1118,7 @@ std::wstring MakeDebugPipeName(
     std::uint32_t processId,
     std::wstring_view token)
 {
-    return L"\\\\.\\pipe\\InputWeaver.Debug."
-        + std::to_wstring(processId)
-        + L"."
-        + std::wstring(token);
+    return BuildDebugPipeName(processId, token);
 }
 
 } // namespace inputweaver::win32

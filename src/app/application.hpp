@@ -31,6 +31,7 @@ public:
         std::string_view sourcePath,
         std::string_view displayName,
         std::optional<ProgramEntryId> overwriteId = std::nullopt);
+    [[nodiscard]] OperationResult CreateProgram(std::string_view displayName);
     [[nodiscard]] OperationResult RenameProgram(
         ProgramEntryId id,
         std::string_view displayName);
@@ -40,6 +41,14 @@ public:
     [[nodiscard]] OperationResult UpdateConfiguration(
         ProgramEntryId id,
         const RunConfiguration& configuration);
+    [[nodiscard]] SourceReadResult ReadSource(ProgramEntryId id) const;
+    [[nodiscard]] OperationResult SaveSource(
+        ProgramEntryId id,
+        std::string_view source);
+    [[nodiscard]] SourceValidationResult ValidateProgram(ProgramEntryId id);
+    [[nodiscard]] OperationResult CompileProgram(ProgramEntryId id);
+    [[nodiscard]] OperationResult GenerateDump(ProgramEntryId id);
+    [[nodiscard]] bool IsCompiledCurrent(ProgramEntryId id) const;
 
     [[nodiscard]] OperationResult StartProgram(
         ProgramEntryId id,

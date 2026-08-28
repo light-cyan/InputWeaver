@@ -46,15 +46,13 @@ bool ReplaceFileAtomically(
     return false;
 }
 
-bool WriteFileAtomically(
-    const std::filesystem::path& destination,
+bool WriteNewFile(
+    const std::filesystem::path& path,
     std::string_view bytes,
     std::string& error)
 {
-    const std::filesystem::path temporary = MakeSiblingTemporaryPath(
-        destination);
     UniqueHandle file(CreateFileW(
-        temporary.c_str(),
+        path.c_str(),
         GENERIC_WRITE,
         0U,
         nullptr,
@@ -67,9 +65,8 @@ bool WriteFileAtomically(
     }
     std::size_t offset = 0U;
     while (offset < bytes.size()) {
-        const std::size_t remaining = bytes.size() - offset;
         const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
+            bytes.size() - offset,
             static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
         DWORD written{};
         if (WriteFile(
@@ -82,7 +79,7 @@ bool WriteFileAtomically(
             error = std::system_category().message(
                 static_cast<int>(GetLastError()));
             file.Reset();
-            (void)DeleteFileW(temporary.c_str());
+            (void)DeleteFileW(path.c_str());
             return false;
         }
         offset += written;
@@ -90,10 +87,22 @@ bool WriteFileAtomically(
     if (FlushFileBuffers(file.Get()) == FALSE) {
         error = std::system_category().message(static_cast<int>(GetLastError()));
         file.Reset();
-        (void)DeleteFileW(temporary.c_str());
+        (void)DeleteFileW(path.c_str());
         return false;
     }
-    file.Reset();
+    return true;
+}
+
+bool WriteFileAtomically(
+    const std::filesystem::path& destination,
+    std::string_view bytes,
+    std::string& error)
+{
+    const std::filesystem::path temporary = MakeSiblingTemporaryPath(
+        destination);
+    if (!WriteNewFile(temporary, bytes, error)) {
+        return false;
+    }
     if (!ReplaceFileAtomically(temporary, destination, error)) {
         (void)DeleteFileW(temporary.c_str());
         return false;

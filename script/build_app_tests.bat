@@ -25,6 +25,8 @@ echo [2/3] Building TuiTests.exe...
     "src\ui\tui\support\canvas.cpp" ^
     "src\ui\tui\support\color_scheme.cpp" ^
     "src\ui\tui\support\interaction.cpp" ^
+    "src\ui\tui\support\source_editor.cpp" ^
+    "src\ui\tui\support\source_highlighter.cpp" ^
     "src\ui\tui\support\text_layout.cpp" ^
     "src\debug\debug_client.cpp" ^
     -o "bin\TuiTests.exe"

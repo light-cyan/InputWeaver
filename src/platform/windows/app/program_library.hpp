@@ -25,12 +25,26 @@ public:
         const app::ImportPublishRequest& request,
         const std::filesystem::path& compiledTemporary,
         std::string_view dumpText);
+    [[nodiscard]] app::OperationResult PublishNew(
+        const app::ProgramPublishRequest& request);
+    [[nodiscard]] app::OperationResult PublishCompilation(
+        const app::ProgramEntry& entry,
+        const std::filesystem::path& compiledTemporary,
+        std::string_view dumpText);
     [[nodiscard]] app::OperationResult SaveEntry(
         const app::ProgramEntry& entry);
     [[nodiscard]] app::OperationResult SaveOrder(
         std::span<const app::ProgramEntryId> order);
     [[nodiscard]] app::OperationResult DeleteEntry(app::ProgramEntryId id);
+    [[nodiscard]] app::SourceReadResult LoadSource(
+        app::ProgramEntryId id) const;
     [[nodiscard]] std::string LoadDump(app::ProgramEntryId id) const;
+    [[nodiscard]] app::OperationResult SaveSource(
+        app::ProgramEntryId id,
+        std::string_view source);
+    [[nodiscard]] app::OperationResult SaveDump(
+        app::ProgramEntryId id,
+        std::string_view dump);
 
     [[nodiscard]] const std::filesystem::path& ExecutableDirectory()
         const noexcept;
@@ -39,6 +53,8 @@ public:
     [[nodiscard]] std::filesystem::path ArtifactPath(
         app::ProgramEntryId id) const;
     [[nodiscard]] std::filesystem::path ArtifactTemporaryPath(
+        app::ProgramEntryId id) const;
+    [[nodiscard]] std::filesystem::path SourcePath(
         app::ProgramEntryId id) const;
     [[nodiscard]] std::pair<std::filesystem::path, std::string> CreateLogPath(
         app::ProgramEntryId id);

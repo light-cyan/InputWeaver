@@ -31,7 +31,7 @@ public:
     {
         return {
             true,
-            {{1U, "Game", {}}},
+            {{1U, "Game", {}, inputweaver::app::SourceHash(source)}},
             2U,
             {"Recovered program order."},
             {}};
@@ -41,7 +41,7 @@ public:
         std::string_view sourcePath) const override
     {
         if (!sourcePath.ends_with(".weave")) {
-            return {false, {}, {}, "A .weave file is required."};
+            return {false, {}, {}, 0U, "A .weave file is required."};
         }
         const std::size_t slash = sourcePath.find_last_of("/\\");
         const std::size_t begin = slash == std::string_view::npos
@@ -53,6 +53,7 @@ public:
             std::string{sourcePath.substr(
                 begin,
                 sourcePath.size() - begin - 6U)},
+            inputweaver::app::SourceHash(source),
             {}};
     }
 
@@ -87,6 +88,15 @@ public:
         return inputweaver::app::OperationResult::Success();
     }
 
+    [[nodiscard]] inputweaver::app::OperationResult PublishNew(
+        const inputweaver::app::ProgramPublishRequest& request) override
+    {
+        lastNew = request;
+        savedEntry = request.entry;
+        savedOrder = request.order;
+        return inputweaver::app::OperationResult::Success();
+    }
+
     [[nodiscard]] inputweaver::app::OperationResult SaveEntry(
         const inputweaver::app::ProgramEntry& entry) override
     {
@@ -112,6 +122,41 @@ public:
         inputweaver::app::ProgramEntryId) const override
     {
         return "compiled dump";
+    }
+
+    [[nodiscard]] inputweaver::app::SourceReadResult LoadSource(
+        inputweaver::app::ProgramEntryId) const override
+    {
+        return {true, source, {}};
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult SaveSource(
+        inputweaver::app::ProgramEntryId,
+        std::string_view text) override
+    {
+        source = text;
+        return inputweaver::app::OperationResult::Success();
+    }
+
+    [[nodiscard]] inputweaver::app::SourceValidationResult ValidateSource(
+        const inputweaver::app::ProgramEntry&) override
+    {
+        return {true, true, {}, {}};
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult CompileProgram(
+        const inputweaver::app::ProgramEntry& entry) override
+    {
+        ++compileCount;
+        savedEntry = entry;
+        return inputweaver::app::OperationResult::Success();
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult GenerateDump(
+        const inputweaver::app::ProgramEntry&) override
+    {
+        ++dumpCount;
+        return inputweaver::app::OperationResult::Success();
     }
 
     [[nodiscard]] inputweaver::app::OperationResult LaunchExecutor(
@@ -200,6 +245,7 @@ public:
     }
 
     inputweaver::app::ImportPublishRequest lastImport{};
+    inputweaver::app::ProgramPublishRequest lastNew{};
     inputweaver::app::ProgramEntry savedEntry{};
     std::vector<inputweaver::app::ProgramEntryId> savedOrder;
     inputweaver::app::ProgramEntryId deletedId{};
@@ -209,6 +255,9 @@ public:
     inputweaver::app::ProgramEntryId debugId{};
     std::shared_ptr<inputweaver::debug::DebugClientState> debugState;
     std::size_t launchCount{};
+    std::size_t compileCount{};
+    std::size_t dumpCount{};
+    std::string source{"A:down => tap(B);"};
 };
 
 void TestEntryCodec()
@@ -218,7 +267,8 @@ void TestEntryCodec()
         "Game\\Main",
         {inputweaver::app::TargetMode::Executable,
          "game.exe",
-         inputweaver::app::LoggingMode::InputTrace}};
+         inputweaver::app::LoggingMode::InputTrace},
+        42U};
     inputweaver::app::ProgramEntry decoded{};
     std::string error;
     Check(
@@ -258,6 +308,16 @@ void TestApplicationFlow()
             == inputweaver::app::ImportPreparationStatus::NameConflict
             && conflict.conflictId == 1U,
         "import names use platform case-insensitive comparison");
+    platform.source = "A:down => tap(C);";
+    Check(
+        application.ImportProgram(
+            conflict.sourcePath,
+            conflict.defaultName,
+            conflict.conflictId)
+                .succeeded
+            && application.ReadSnapshot().programs[0].compiledSourceHash
+                == inputweaver::app::SourceHash(platform.source),
+        "overwrite import refreshes the compiled source identity");
 
     const auto ready = application.PrepareImport("C:/new/media.weave");
     Check(
@@ -274,6 +334,19 @@ void TestApplicationFlow()
             && platform.lastImport.order
                 == std::vector<inputweaver::app::ProgramEntryId>({1U, 2U}),
         "new import receives stable ID and order");
+
+    Check(
+        application.ReadSource(1U).succeeded
+            && application.SaveSource(1U, "A:down => tap(D);").succeeded
+            && !application.IsCompiledCurrent(1U),
+        "source edits persist and make the compiled artifact stale");
+    Check(
+        application.CompileProgram(1U).succeeded
+            && platform.compileCount == 1U
+            && application.IsCompiledCurrent(1U)
+            && application.GenerateDump(1U).succeeded
+            && platform.dumpCount == 1U,
+        "compile and dump operations flow through the platform port");
 
     Check(
         application.StartProgram(1U, {}).succeeded
@@ -307,6 +380,12 @@ void TestApplicationFlow()
             && platform.deletedId == 2U
             && application.ReadSnapshot().programs.size() == 1U,
         "deletion stops and removes the selected entry");
+    Check(
+        application.CreateProgram("Blank").succeeded
+            && platform.lastNew.entry.id == 3U
+            && application.ReadSnapshot().programs.back().displayName
+                == "Blank",
+        "blank programs publish source metadata and join the library");
 }
 
 } // namespace

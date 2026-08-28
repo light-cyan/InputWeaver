@@ -142,6 +142,17 @@ enum class ExpressionType : std::uint8_t {
     Duration,
 };
 
+[[nodiscard]] constexpr ExpressionType ToExpressionType(
+    ValueType type) noexcept
+{
+    switch (type) {
+    case ValueType::State: return ExpressionType::State;
+    case ValueType::Number: return ExpressionType::Number;
+    case ValueType::Duration: return ExpressionType::Duration;
+    }
+    return ExpressionType::None;
+}
+
 enum class ValueDomain : std::uint8_t {
     UserState,
     UserNumber,

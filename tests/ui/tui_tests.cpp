@@ -1,12 +1,15 @@
 #include "app/application.hpp"
 #include "ui/tui/support/color_scheme.hpp"
 #include "ui/tui/support/interaction.hpp"
+#include "ui/tui/support/source_editor.hpp"
+#include "ui/tui/support/source_highlighter.hpp"
 #include "ui/tui/support/text_layout.hpp"
 #include "ui/tui/tui_controller.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -14,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -46,19 +50,48 @@ void Check(bool condition, std::string_view name)
     return text;
 }
 
+[[nodiscard]] std::size_t FindAscii(
+    const inputweaver::ui::tui::Canvas& canvas,
+    std::string_view text)
+{
+    for (std::size_t row = 0U; row < canvas.Height(); ++row) {
+        for (std::size_t column = 0U;
+             column + text.size() <= canvas.Width();
+             ++column) {
+            bool matched = true;
+            for (std::size_t index = 0U; index < text.size(); ++index) {
+                matched = matched
+                    && canvas.Cells()[row * canvas.Width() + column + index]
+                            .codePoint
+                        == static_cast<char32_t>(
+                            static_cast<unsigned char>(text[index]));
+            }
+            if (matched) {
+                return row * canvas.Width() + column;
+            }
+        }
+    }
+    return canvas.Cells().size();
+}
+
 class FakePlatform final : public inputweaver::app::AppPlatform {
 public:
     [[nodiscard]] inputweaver::app::LibraryLoadResult LoadProgramLibrary()
         override
     {
-        return {true, {{1U, "Game", {}}}, 2U, {}, {}};
+        return {
+            true,
+            {{1U, "Game", {}, inputweaver::app::SourceHash(source)}},
+            2U,
+            {},
+            {}};
     }
 
     [[nodiscard]] inputweaver::app::ImportSourceInfo InspectImportSource(
         std::string_view sourcePath) const override
     {
         if (!sourcePath.ends_with(".weave")) {
-            return {false, {}, {}, "A .weave file is required."};
+            return {false, {}, {}, 0U, "A .weave file is required."};
         }
         const std::size_t slash = sourcePath.find_last_of("/\\");
         const std::size_t begin = slash == std::string_view::npos
@@ -70,6 +103,7 @@ public:
             std::string{sourcePath.substr(
                 begin,
                 sourcePath.size() - begin - 6U)},
+            inputweaver::app::SourceHash(source),
             {}};
     }
 
@@ -97,6 +131,13 @@ public:
         return inputweaver::app::OperationResult::Success();
     }
 
+    [[nodiscard]] inputweaver::app::OperationResult PublishNew(
+        const inputweaver::app::ProgramPublishRequest& request) override
+    {
+        imported = request.entry;
+        return inputweaver::app::OperationResult::Success();
+    }
+
     [[nodiscard]] inputweaver::app::OperationResult SaveEntry(
         const inputweaver::app::ProgramEntry&) override
     {
@@ -118,7 +159,42 @@ public:
     [[nodiscard]] std::string LoadDump(
         inputweaver::app::ProgramEntryId) const override
     {
-        return "source display=test.weave\ncontrols 1\n";
+        return dump;
+    }
+
+    [[nodiscard]] inputweaver::app::SourceReadResult LoadSource(
+        inputweaver::app::ProgramEntryId) const override
+    {
+        return {true, source, {}};
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult SaveSource(
+        inputweaver::app::ProgramEntryId,
+        std::string_view text) override
+    {
+        source = text;
+        return inputweaver::app::OperationResult::Success();
+    }
+
+    [[nodiscard]] inputweaver::app::SourceValidationResult ValidateSource(
+        const inputweaver::app::ProgramEntry&) override
+    {
+        return validation;
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult CompileProgram(
+        const inputweaver::app::ProgramEntry& entry) override
+    {
+        imported = entry;
+        return inputweaver::app::OperationResult::Success();
+    }
+
+    [[nodiscard]] inputweaver::app::OperationResult GenerateDump(
+        const inputweaver::app::ProgramEntry&) override
+    {
+        ++dumpCount;
+        dump = "generated dump\n";
+        return inputweaver::app::OperationResult::Success();
     }
 
     [[nodiscard]] inputweaver::app::OperationResult LaunchExecutor(
@@ -195,6 +271,10 @@ public:
     std::vector<inputweaver::app::ExecutorInfo> executors;
     std::vector<inputweaver::app::PlatformEvent> events;
     std::shared_ptr<const inputweaver::debug::DebugClientState> debugState;
+    std::string source{"number count = 1;\nA:down => tap(B);"};
+    std::string dump{"source display=test.weave\ncontrols 1\n"};
+    inputweaver::app::SourceValidationResult validation{true, true, {}, {}};
+    std::size_t dumpCount{};
 };
 
 [[nodiscard]] inputweaver::ui::tui::ColorScheme LoadColors()
@@ -291,6 +371,207 @@ void TestSupport()
             && balancedRows[0].count == 1U
             && balancedRows[1].count == 3U,
         "wrapped column rows balance occupied width instead of filling greedily");
+
+    inputweaver::ui::tui::SourceEditor sourceEditor;
+    sourceEditor.Set("state combat = off;\nA:down => tap(B);");
+    Check(
+        sourceEditor.LineCount() == 2U
+            && sourceEditor.Insert(U'x')
+            && sourceEditor.Text().starts_with("xstate"),
+        "source editor stores logical lines and inserts UTF-8 text");
+    sourceEditor.End();
+    Check(
+        sourceEditor.NewLine()
+            && sourceEditor.Backspace()
+            && sourceEditor.LineCount() == 2U,
+        "source editor splits and rejoins lines");
+    sourceEditor.Set("ab\ncd");
+    sourceEditor.BeginSelection();
+    sourceEditor.Down();
+    Check(
+        sourceEditor.HasSelection()
+            && sourceEditor.SelectedText() == "ab\n"
+            && sourceEditor.Delete()
+            && sourceEditor.Text() == "cd",
+        "source editor selects and replaces ranges across lines");
+    Check(
+        sourceEditor.Undo() && sourceEditor.Text() == "ab\ncd"
+            && sourceEditor.Redo() && sourceEditor.Text() == "cd",
+        "source editor restores edits through bounded undo and redo history");
+    sourceEditor.Set("a\nb\nc");
+    sourceEditor.LastLine();
+    const bool reachedLastLine = sourceEditor.CursorLine() == 2U;
+    sourceEditor.FirstLine();
+    Check(
+        reachedLastLine && sourceEditor.CursorLine() == 0U,
+        "source viewer navigation reaches the first and last logical lines");
+
+    inputweaver::ui::tui::SourceHighlightState highlightState{};
+    const auto hasSpan = [](
+                             std::string_view source,
+                             const auto& spans,
+                             std::string_view text,
+                             inputweaver::ui::tui::SourceTokenKind kind) {
+        const std::size_t begin = source.find(text);
+        return begin != std::string_view::npos
+            && std::any_of(
+                spans.begin(),
+                spans.end(),
+                [begin, text, kind](const auto& span) {
+                    return span.beginByte == begin
+                        && span.endByte == begin + text.size()
+                        && span.kind == kind;
+                });
+    };
+    constexpr std::string_view declaration =
+        "state combat = off; // disabled";
+    const auto declarationSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            declaration,
+            highlightState);
+    Check(
+        declarationSpans.size() == 4U
+            && declarationSpans.front().kind
+                == inputweaver::ui::tui::SourceTokenKind::Type
+            && hasSpan(
+                declaration,
+                declarationSpans,
+                "combat",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                declaration,
+                declarationSpans,
+                "off",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && declarationSpans.back().kind
+                == inputweaver::ui::tui::SourceTokenKind::Comment,
+        "Weave highlighter classifies types, variables, constants, and comments");
+    constexpr std::string_view setting = "TARGET = GLOBAL;";
+    const auto settingSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        setting,
+        highlightState);
+    Check(
+        hasSpan(
+            setting,
+            settingSpans,
+            "TARGET",
+            inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "GLOBAL",
+                inputweaver::ui::tui::SourceTokenKind::Constant),
+        "Weave highlighter separates builtin variables from constants");
+    constexpr std::string_view pauseState = "PAUSE[on]";
+    const auto pauseSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        pauseState,
+        highlightState);
+    Check(
+        hasSpan(
+            pauseState,
+            pauseSpans,
+            "PAUSE",
+            inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                pauseState,
+                pauseSpans,
+                "on",
+                inputweaver::ui::tui::SourceTokenKind::Constant),
+        "PAUSE uses variable color while its state predicate is a constant");
+    constexpr std::string_view action =
+        "A:down => tap(B) | wait(20ms);";
+    const auto actionSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        action,
+        highlightState);
+    Check(
+        hasSpan(
+            action,
+            actionSpans,
+            "tap",
+            inputweaver::ui::tui::SourceTokenKind::Function)
+            && hasSpan(
+                action,
+                actionSpans,
+                "(",
+                inputweaver::ui::tui::SourceTokenKind::Function)
+            && hasSpan(
+                action,
+                actionSpans,
+                ")",
+                inputweaver::ui::tui::SourceTokenKind::Function)
+            && hasSpan(
+                action,
+                actionSpans,
+                "|",
+                inputweaver::ui::tui::SourceTokenKind::Function)
+            && hasSpan(
+                action,
+                actionSpans,
+                "down",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                action,
+                actionSpans,
+                "20ms",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                action,
+                actionSpans,
+                "=>",
+                inputweaver::ui::tui::SourceTokenKind::Operator)
+            && hasSpan(
+                action,
+                actionSpans,
+                "A",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                action,
+                actionSpans,
+                "B",
+                inputweaver::ui::tui::SourceTokenKind::Control),
+        "Weave highlighter treats states, numbers, and durations as constants");
+    constexpr std::string_view upRule = "A:up ~> toggle;";
+    const auto upSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        upRule,
+        highlightState);
+    Check(
+        hasSpan(
+            upRule,
+            upSpans,
+            "up",
+            inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                upRule,
+                upSpans,
+                "toggle",
+                inputweaver::ui::tui::SourceTokenKind::Function)
+            && hasSpan(
+                upRule,
+                upSpans,
+                "~>",
+                inputweaver::ui::tui::SourceTokenKind::Operator),
+        "Weave highlighter treats up as a constant and pause toggle as a function");
+    constexpr std::string_view mapping = "Mouse.Middle -> Keyboard.F6;";
+    const auto mappingSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        mapping,
+        highlightState);
+    Check(
+        hasSpan(
+            mapping,
+            mappingSpans,
+            "Mouse.Middle",
+            inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                mapping,
+                mappingSpans,
+                "Keyboard.F6",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                mapping,
+                mappingSpans,
+                "->",
+                inputweaver::ui::tui::SourceTokenKind::Operator),
+        "complete control names use the designed control color");
 }
 
 void TestController()
@@ -302,8 +583,10 @@ void TestController()
     const auto colors = LoadColors();
     Check(
         colors.executionCompleted
-            == inputweaver::ui::tui::RgbColor{0x43U, 0xa0U, 0x47U},
-        "completed execution uses the darker configured green");
+                == inputweaver::ui::tui::RgbColor{0x43U, 0xa0U, 0x47U}
+            && colors.syntaxControl
+                == inputweaver::ui::tui::RgbColor{0x4fU, 0xc1U, 0xffU},
+        "configured colors include darker completion green and blue controls");
     inputweaver::ui::tui::TuiController controller(application, colors);
     platform.events = {
         {inputweaver::app::PlatformEventKind::Output,
@@ -339,7 +622,7 @@ void TestController()
             && firstOutput < secondOutput
             && secondOutput < compilerIdentity,
         "Console renders one identity line for each consecutive source group");
-    controller.Handle({Key::Character, U'q'});
+    controller.Handle({Key::Escape, 0U});
     const auto canvas = controller.Render(80U, 30U);
     Check(
         canvas.Width() == 80U && canvas.Height() == 30U,
@@ -350,16 +633,34 @@ void TestController()
             && minimumPrograms.Cells()[23U * 80U].codePoint == U'└',
         "NEXT RUN remains boxed at the minimum terminal size");
     Check(
-        minimumPrograms.Cells()[80U + 1U].codePoint == U' '
-            && minimumPrograms.Cells()[80U + 2U].codePoint == U'[',
-        "header key rows retain space between text and the border");
+        CanvasText(minimumPrograms).find("[E] Edit") == std::string::npos
+            && CanvasText(minimumPrograms).find("[Z] Fullscreen")
+                == std::string::npos
+            && CanvasText(minimumPrograms).find("[C] Compile")
+                == std::string::npos
+            && CanvasText(minimumPrograms).find("[V] Source/Dump")
+                == std::string::npos
+            && FindAscii(minimumPrograms, "[Space] Run") / 80U >= 20U,
+        "Programs header omits document commands while NEXT RUN owns Run");
+    const std::size_t offModePosition = FindAscii(minimumPrograms, "[S]");
+    controller.Handle({Key::Character, U't'});
+    const auto enabledMode = controller.Render(80U, 24U);
+    Check(
+        FindAscii(enabledMode, "[S]") == offModePosition,
+        "fixed-width ON and OFF labels keep NEXT RUN positions stable");
+    controller.Handle({Key::Character, U't'});
 
     controller.Handle({Key::Enter, 0U});
     const auto informationCanvas = controller.Render(80U, 24U);
     Check(
         informationCanvas.Cells()[0U].style.foreground
-            == colors.focusProgramInformation,
-        "Programs header color follows the focused information region");
+                == colors.focusProgramInformation
+            && CanvasText(informationCanvas).find("[E] Edit Source")
+                == std::string::npos
+            && CanvasText(informationCanvas).find("[X] Stop")
+                == std::string::npos,
+        "information focus shows only information editing commands");
+    controller.Handle({Key::Down, 0U});
     controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Down, 0U});
     controller.Handle({Key::Enter, 0U});
@@ -382,13 +683,31 @@ void TestController()
     controller.Handle({Key::Character, U's'});
     controller.Handle({Key::Character, U'p'});
     controller.Handle({Key::Character, U' '});
+    const auto pendingDebug = controller.Render(80U, 24U);
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Debug
+            && platform.executors.empty()
+            && CanvasText(pendingDebug).find("STARTING") != std::string::npos
+            && pendingDebug.Cells()[20U * 80U].style.foreground
+                == colors.healthRecovering,
+        "debug run switches pages before its delayed launch");
+    std::this_thread::sleep_for(std::chrono::milliseconds{550});
+    controller.Tick();
     Check(
         platform.launched.options.debug
             && platform.launched.options.dryRun
             && platform.launched.options.allowExec,
-        "T/S/P options are submitted on Space");
+        "T/S/P options reach the delayed debug launch");
+    controller.Handle({Key::Escape, 0U});
 
     controller.Handle({Key::Character, U'a'});
+    const auto addModal = controller.Render(80U, 24U);
+    Check(
+        CanvasText(addModal).find("[←]/[→] Select") != std::string::npos
+            && FindAscii(addModal, "> New Blank") % 80U == 20U,
+        "horizontal add choices use matching keys and a centered group");
+    controller.Handle({Key::Right, 0U});
+    controller.Handle({Key::Enter, 0U});
     for (const char character : std::string{"media.weave"}) {
         controller.Handle({Key::Character, static_cast<char32_t>(character)});
     }
@@ -415,14 +734,6 @@ void TestController()
     inputweaver::debug::DebugPressedControl pressed{};
     pressed.control.virtualKey = 0xa2U;
     debugState->pressedControls.push_back(pressed);
-    auto rule = std::make_shared<inputweaver::debug::DebugRuleProgram>();
-    rule->conditionText = "combat[on] and LCtrl[held]";
-    rule->actionInstructions = {
-        {inputweaver::ActionOpcode::Tap, 0U, 0U},
-        {inputweaver::ActionOpcode::Set, 0U, 0U},
-        {inputweaver::ActionOpcode::End, 0U, 0U},
-    };
-    rule->actionText = "tap(B) | set(count, count + 1)";
     inputweaver::debug::DebugRuleExecution execution{};
     execution.executionMarker = 17U;
     execution.matchedUnixTimeMilliseconds = 1'725'000'000'123LL;
@@ -432,12 +743,12 @@ void TestController()
     execution.triggerInput.origin = inputweaver::InputOrigin::PhysicalCandidate;
     execution.triggerInput.disposition =
         inputweaver::debug::InputDisposition::Suppress;
-    execution.program = std::move(rule);
+    execution.conditionText = "combat[on] and LCtrl[held]";
+    execution.actionText = "tap(B) | set(count, count + 1)";
     execution.result = inputweaver::RuntimeExecutionResult::Completed;
     debugState->ruleExecutions.push_back(std::move(execution));
     platform.debugState = debugState;
     controller.Tick();
-    controller.Handle({Key::Right, 0U});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
         "Right opens Debug page");
@@ -462,37 +773,18 @@ void TestController()
             && debugText.find("ACT  tap(B) | set(count, count + 1)")
                 != std::string::npos,
         "Debug executions render readable event, AS, and ACT lines");
-    const auto findAscii = [&](std::string_view text) {
-        for (std::size_t row = 0U; row < minimumDebug.Height(); ++row) {
-            for (std::size_t column = 0U;
-                 column + text.size() <= minimumDebug.Width();
-                 ++column) {
-                bool matched = true;
-                for (std::size_t index = 0U; index < text.size(); ++index) {
-                    matched = matched
-                        && minimumDebug.Cells()[
-                                row * minimumDebug.Width() + column + index]
-                                .codePoint
-                            == static_cast<char32_t>(
-                                static_cast<unsigned char>(text[index]));
-                }
-                if (matched) {
-                    return row * minimumDebug.Width() + column;
-                }
-            }
-        }
-        return minimumDebug.Cells().size();
-    };
-    const std::size_t marker = findAscii("#17");
-    const std::size_t event = findAscii("EVENT ");
-    const std::size_t conditionLabel = findAscii(
+    const std::size_t marker = FindAscii(minimumDebug, "#17");
+    const std::size_t event = FindAscii(minimumDebug, "EVENT ");
+    const std::size_t conditionLabel = FindAscii(
+        minimumDebug,
         "AS   combat[on] and LCtrl[held]");
-    const std::size_t condition = findAscii("combat[on]");
-    const std::size_t actionLabel = findAscii(
+    const std::size_t condition = FindAscii(minimumDebug, "combat[on]");
+    const std::size_t actionLabel = FindAscii(
+        minimumDebug,
         "ACT  tap(B) | set(count, count + 1)");
-    const std::size_t action = findAscii("tap(B)");
-    const std::size_t stateNumber = findAscii("count=2");
-    const std::size_t stateControl = findAscii("LCtrl PHY");
+    const std::size_t action = FindAscii(minimumDebug, "tap(B)");
+    const std::size_t stateNumber = FindAscii(minimumDebug, "count=2");
+    const std::size_t stateControl = FindAscii(minimumDebug, "LCtrl PHY");
     Check(
         marker < minimumDebug.Cells().size()
             && minimumDebug.Cells()[marker].style.foreground == colors.mutedText
@@ -543,6 +835,188 @@ void TestController()
         "Left returns to Programs page");
 }
 
+void TestSourceEditorPage()
+{
+    using inputweaver::ui::tui::Key;
+    FakePlatform platform;
+    platform.dump.clear();
+    platform.source =
+        "TARGET = GLOBAL;\nnumber count = 1;\nA:down => tap(B);";
+    platform.validation = {
+        true,
+        false,
+        {{2U, 8U, 5U, "Unknown value."}},
+        {}};
+    inputweaver::app::Application application(platform);
+    Check(application.Initialize().succeeded, "editor application initializes");
+    const auto colors = LoadColors();
+    inputweaver::ui::tui::TuiController controller(application, colors);
+    std::this_thread::sleep_for(std::chrono::milliseconds{450});
+    controller.Tick();
+    controller.Handle({Key::Tab, 0U});
+    controller.Handle({Key::Tab, 0U});
+
+    const auto sourceCanvas = controller.Render(100U, 30U);
+    const std::string sourceText = CanvasText(sourceCanvas);
+    const std::size_t keyword = FindAscii(sourceCanvas, "number");
+    const std::size_t error = FindAscii(sourceCanvas, "count");
+    const std::size_t target = FindAscii(sourceCanvas, "TARGET");
+    const std::size_t global = FindAscii(sourceCanvas, "GLOBAL");
+    Check(
+        sourceText.find("SOURCE") != std::string::npos
+            && sourceText.find("1 │ TARGET = GLOBAL;") != std::string::npos
+            && sourceText.find("2 │ number count = 1;") != std::string::npos,
+        "Programs page shows editable source with line numbers and a gutter");
+    Check(
+        target < sourceCanvas.Cells().size()
+            && sourceCanvas.Cells()[target].style.foreground
+                == colors.syntaxVariable
+            && global < sourceCanvas.Cells().size()
+            && sourceCanvas.Cells()[global].style.foreground
+                == colors.syntaxConstant,
+        "source view distinguishes TARGET variables from GLOBAL constants");
+    Check(
+        keyword < sourceCanvas.Cells().size()
+            && sourceCanvas.Cells()[keyword].style.foreground
+                == colors.syntaxType
+            && sourceCanvas.Cells()[keyword].style.hasBackground
+            && sourceCanvas.Cells()[keyword].style.background
+                == colors.editorErrorLine,
+        "source view colors types green and gives error lines a red background");
+    Check(
+        error < sourceCanvas.Cells().size()
+            && sourceCanvas.Cells()[error].style.foreground
+                == colors.healthFault
+            && sourceCanvas.Cells()[error].style.underline,
+        "validation diagnostics render as red underlined source ranges");
+
+    controller.Handle({Key::Character, U'e'});
+    const auto splitEdit = controller.Render(100U, 30U);
+    const std::size_t splitExit = FindAscii(splitEdit, "[Esc] Exit");
+    Check(
+        splitExit < splitEdit.Cells().size() && splitExit % 100U == 88U
+            && CanvasText(splitEdit).find("[Enter] New Line")
+                == std::string::npos
+            && CanvasText(splitEdit).find("NEXT RUN") == std::string::npos,
+        "split source editing places Escape at the top title's right edge");
+    controller.Handle({Key::Escape, 0U});
+
+    controller.Handle({Key::Character, U'z'});
+    const auto fullscreenView = controller.Render(100U, 30U);
+    Check(
+        CanvasText(fullscreenView).find("DOCUMENT FULLSCREEN")
+                != std::string::npos
+            && CanvasText(fullscreenView).find("NEXT RUN")
+                != std::string::npos
+            && CanvasText(fullscreenView).find("[Space] Run")
+                != std::string::npos,
+        "fullscreen source keeps NEXT RUN at the bottom outside editing");
+    controller.Handle({Key::Character, U'e'});
+    const auto cursorVisible = controller.Render(100U, 30U);
+    const std::size_t fullscreenExit = FindAscii(cursorVisible, "[Esc] Exit");
+    Check(
+        CanvasText(cursorVisible).find("NEXT RUN") == std::string::npos
+            && fullscreenExit < cursorVisible.Cells().size()
+            && fullscreenExit % 100U == 88U
+            && CanvasText(cursorVisible).find("[Enter] New Line")
+                == std::string::npos
+            && std::any_of(
+            cursorVisible.Cells().begin(),
+            cursorVisible.Cells().end(),
+            [&colors](const inputweaver::ui::tui::Cell& cell) {
+                return cell.codePoint == U'▏'
+                    && cell.style.hasBackground
+                    && cell.style.background == colors.editorCurrentLine;
+            }),
+        "fullscreen editing is distraction-free and preserves the line background");
+    std::this_thread::sleep_for(std::chrono::milliseconds{350});
+    const auto cursorHidden = controller.Render(100U, 30U);
+    Check(
+        std::none_of(
+            cursorHidden.Cells().begin(),
+            cursorHidden.Cells().end(),
+            [](const inputweaver::ui::tui::Cell& cell) {
+                return cell.codePoint == U'▏';
+            }),
+        "source cursor blink reaches its hidden phase");
+    controller.Handle({Key::Right, 0U});
+    const auto movedCursor = controller.Render(100U, 30U);
+    Check(
+        std::any_of(
+            movedCursor.Cells().begin(),
+            movedCursor.Cells().end(),
+            [](const inputweaver::ui::tui::Cell& cell) {
+                return cell.codePoint == U'▏';
+            }),
+        "moving the source cursor restarts its visible blink phase");
+    controller.Handle({Key::Home, 0U});
+    for (std::size_t index = 0U; index < 6U; ++index) {
+        controller.Handle({Key::Right, 0U, true});
+    }
+    const auto selectionCanvas = controller.Render(100U, 30U);
+    const std::size_t selection = FindAscii(selectionCanvas, "TARGET");
+    controller.Handle({Key::Copy, 0U});
+    const auto copied = controller.TakeClipboardText();
+    Check(
+        selection < selectionCanvas.Cells().size()
+            && selectionCanvas.Cells()[selection].style.background
+                == colors.selectionActiveBackground
+            && copied.has_value() && *copied == "TARGET",
+        "Shift movement selects source and Copy publishes the selected text");
+    controller.Handle({Key::Cut, 0U});
+    const auto cut = controller.TakeClipboardText();
+    const bool cutRemovedSelection =
+        CanvasText(controller.Render(100U, 30U)).find("TARGET")
+        == std::string::npos;
+    controller.Handle({Key::Undo, 0U});
+    const bool undoRestoredSelection =
+        CanvasText(controller.Render(100U, 30U)).find("TARGET")
+        != std::string::npos;
+    controller.Handle({Key::Redo, 0U});
+    const bool redoRemovedSelection =
+        CanvasText(controller.Render(100U, 30U)).find("TARGET")
+        == std::string::npos;
+    controller.Handle({Key::Undo, 0U});
+    Check(
+        cut.has_value() && *cut == "TARGET" && cutRemovedSelection
+            && undoRestoredSelection && redoRemovedSelection,
+        "Cut, Undo, and Redo share the source editor command history");
+    controller.Handle({Key::Home, 0U});
+    controller.Handle({Key::Character, U'/'});
+    controller.Handle({Key::Escape, 0U});
+    Check(
+        platform.source.starts_with("/TARGET")
+            && CanvasText(controller.Render(100U, 30U))
+                    .find("DOCUMENT FULLSCREEN")
+                != std::string::npos,
+        "first Escape saves and exits editing while preserving fullscreen");
+    controller.Handle({Key::Escape, 0U});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
+            == std::string::npos,
+        "second Escape restores the split Programs layout");
+
+    controller.Handle({Key::Character, U'v'});
+    Check(
+        platform.dumpCount == 1U
+            && CanvasText(controller.Render(100U, 30U)).find("generated dump")
+                != std::string::npos,
+        "V generates a missing dump and shows it in the source region");
+    controller.Handle({Key::Character, U'v'});
+    controller.Handle({Key::Character, U' '});
+    Check(!platform.executors.empty(), "Space runs the selected program");
+    controller.Handle({Key::Character, U'x'});
+    Check(platform.executors.empty(), "X stops the selected program");
+
+    controller.Handle({Key::Escape, 0U});
+    controller.Handle({Key::Character, U'a'});
+    controller.Handle({Key::Enter, 0U});
+    controller.Handle({Key::Enter, 0U});
+    Check(
+        application.ReadSnapshot().programs.size() == 2U,
+        "A creates a named blank program without an import path");
+}
+
 void TestQuitNavigation()
 {
     using inputweaver::ui::tui::Key;
@@ -553,26 +1027,26 @@ void TestQuitNavigation()
     inputweaver::ui::tui::TuiController controller(application, LoadColors());
 
     controller.Handle({Key::Left, 0U});
-    controller.Handle({Key::Character, U'q'});
+    controller.Handle({Key::Escape, 0U});
     Check(
         controller.Running() && controller.CurrentPage() == Page::Programs,
-        "Q returns Console to Programs without exiting");
+        "Escape returns Console to Programs without exiting");
 
     controller.Handle({Key::Right, 0U});
-    controller.Handle({Key::Character, U'q'});
+    controller.Handle({Key::Escape, 0U});
     Check(
         controller.Running() && controller.CurrentPage() == Page::Programs,
-        "Q returns Debug to Programs without exiting");
+        "Escape returns Debug to Programs without exiting");
 
     controller.Handle({Key::Enter, 0U});
-    controller.Handle({Key::Character, U'q'});
+    controller.Handle({Key::Escape, 0U});
     Check(
         controller.Running(),
-        "Q returns a secondary Programs focus to the program list");
-    controller.Handle({Key::Character, U'q'});
+        "Escape returns a secondary Programs focus to the program list");
+    controller.Handle({Key::Escape, 0U});
     Check(
         !controller.Running(),
-        "Q exits only from the Programs list focus");
+        "Escape exits only from the Programs list focus");
 }
 
 } // namespace
@@ -581,6 +1055,7 @@ int main()
 {
     TestSupport();
     TestController();
+    TestSourceEditorPage();
     TestQuitNavigation();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " TUI test(s) failed.\n";

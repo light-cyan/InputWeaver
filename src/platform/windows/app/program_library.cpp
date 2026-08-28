@@ -4,7 +4,6 @@
 #include "platform/windows/support/atomic_file.hpp"
 #include "platform/windows/support/ordinal_string.hpp"
 #include "platform/windows/support/text_encoding.hpp"
-#include "platform/windows/support/unique_handle.hpp"
 #include "support/utf8.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -72,50 +71,6 @@ namespace {
     }
 }
 
-[[nodiscard]] bool WriteNewFile(
-    const std::filesystem::path& path,
-    std::string_view bytes,
-    std::string& error)
-{
-    UniqueHandle file(CreateFileW(
-        path.c_str(),
-        GENERIC_WRITE,
-        0U,
-        nullptr,
-        CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr));
-    if (!file) {
-        error = std::system_category().message(static_cast<int>(GetLastError()));
-        return false;
-    }
-    std::size_t offset = 0U;
-    while (offset < bytes.size()) {
-        const std::size_t remaining = bytes.size() - offset;
-        const DWORD requested = static_cast<DWORD>((std::min)(
-            remaining,
-            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
-        DWORD written{};
-        if (WriteFile(
-                file.Get(),
-                bytes.data() + offset,
-                requested,
-                &written,
-                nullptr) == FALSE
-            || written == 0U) {
-            error = std::system_category().message(
-                static_cast<int>(GetLastError()));
-            return false;
-        }
-        offset += written;
-    }
-    if (FlushFileBuffers(file.Get()) == FALSE) {
-        error = std::system_category().message(static_cast<int>(GetLastError()));
-        return false;
-    }
-    return true;
-}
-
 [[nodiscard]] bool ParseEntryId(
     const std::filesystem::path& path,
     app::ProgramEntryId& id) noexcept
@@ -165,6 +120,73 @@ void RemoveIfPresent(const std::filesystem::path& path) noexcept
         source.remove_suffix(1U);
     }
     return std::string{source};
+}
+
+template <std::size_t Count>
+[[nodiscard]] bool PublishFiles(
+    const std::array<std::filesystem::path, Count>& sources,
+    const std::array<std::filesystem::path, Count>& destinations,
+    std::string& error)
+{
+    std::array<std::filesystem::path, Count> backups{};
+    std::array<bool, Count> hasBackup{};
+    for (std::size_t index = 0U; index < Count; ++index) {
+        if (!IsRegularFile(destinations[index])) {
+            continue;
+        }
+        backups[index] = MakeSiblingTemporaryPath(destinations[index]);
+        if (CopyFileW(
+                destinations[index].c_str(),
+                backups[index].c_str(),
+                TRUE) == FALSE) {
+            error = std::system_category().message(
+                static_cast<int>(GetLastError()));
+            for (const auto& backup : backups) {
+                RemoveIfPresent(backup);
+            }
+            return false;
+        }
+        hasBackup[index] = true;
+    }
+
+    std::size_t published{};
+    for (; published < Count; ++published) {
+        if (ReplaceFileAtomically(
+                sources[published],
+                destinations[published],
+                error)) {
+            continue;
+        }
+        bool rollbackSucceeded = true;
+        for (std::size_t count = published; count > 0U; --count) {
+            const std::size_t index = count - 1U;
+            if (!hasBackup[index]) {
+                RemoveIfPresent(destinations[index]);
+                continue;
+            }
+            std::string rollbackError;
+            if (!ReplaceFileAtomically(
+                    backups[index],
+                    destinations[index],
+                    rollbackError)) {
+                rollbackSucceeded = false;
+            }
+        }
+        for (std::size_t index = 0U; index < Count; ++index) {
+            if (!hasBackup[index] || index >= published
+                || rollbackSucceeded) {
+                RemoveIfPresent(backups[index]);
+            }
+        }
+        if (!rollbackSucceeded) {
+            error += " Rollback was incomplete; backup files were retained.";
+        }
+        return false;
+    }
+    for (const auto& backup : backups) {
+        RemoveIfPresent(backup);
+    }
+    return true;
 }
 
 } // namespace
@@ -239,13 +261,29 @@ app::LibraryLoadResult WindowsProgramLibrary::Load()
                 + " from the index because its metadata is invalid.");
             continue;
         }
-        if (!IsRegularFile(ArtifactPath(id))) {
+        if (!IsRegularFile(SourcePath(id))) {
+            if (!WriteFileAtomically(SourcePath(id), {}, error)) {
+                result.notices.push_back(
+                    "Removed " + entry.displayName
+                    + " because its source file could not be created.");
+                continue;
+            }
             result.notices.push_back(
-                "Removed " + entry.displayName
-                + " because its compiled artifact is missing.");
-            RemoveIfPresent(EntryPath(id));
-            RemoveIfPresent(DumpPath(id));
-            continue;
+                "Created an empty editable source for legacy program "
+                + entry.displayName + ".");
+        }
+        if (entry.compiledSourceHash != 0U
+            && !IsRegularFile(ArtifactPath(id))) {
+            entry.compiledSourceHash = 0U;
+            if (!SaveEntry(entry).succeeded) {
+                result.notices.push_back(
+                    "Removed " + entry.displayName
+                    + " because its metadata could not be repaired.");
+                continue;
+            }
+            result.notices.push_back(
+                "Marked " + entry.displayName
+                + " uncompiled because its artifact is missing.");
         }
         repairedOrder.push_back(id);
         result.entries.push_back(std::move(entry));
@@ -269,31 +307,41 @@ app::ImportSourceInfo WindowsProgramLibrary::InspectSource(
 {
     const std::string unquoted = TrimAndUnquote(sourcePath);
     if (unquoted.empty() || !support::IsValidUtf8(unquoted)) {
-        return {false, {}, {}, "A valid UTF-8 path is required."};
+        return {false, {}, {}, 0U, "A valid UTF-8 path is required."};
     }
     std::wstring wide;
     if (!Utf8ToWide(unquoted, wide)) {
-        return {false, {}, {}, "The source path is not valid UTF-8."};
+        return {false, {}, {}, 0U, "The source path is not valid UTF-8."};
     }
     try {
         std::filesystem::path path = std::filesystem::absolute(
             std::filesystem::path{wide});
         if (!IsRegularFile(path)) {
-            return {false, {}, {}, "The source file does not exist."};
+            return {false, {}, {}, 0U, "The source file does not exist."};
         }
         if (!EqualOrdinalIgnoreCase(path.extension().wstring(), L".weave")) {
-            return {false, {}, {}, "A single .weave file is required."};
+            return {false, {}, {}, 0U, "A single .weave file is required."};
         }
         std::string normalized;
         std::string name;
         if (!WideToUtf8(path.wstring(), normalized)
             || !WideToUtf8(path.stem().wstring(), name)
             || !app::ValidDisplayName(name)) {
-            return {false, {}, {}, "The source filename cannot be used."};
+            return {false, {}, {}, 0U, "The source filename cannot be used."};
         }
-        return {true, std::move(normalized), std::move(name), {}};
+        std::string source;
+        std::string error;
+        if (!ReadBytes(path, source, error)) {
+            return {false, {}, {}, 0U, std::move(error)};
+        }
+        return {
+            true,
+            std::move(normalized),
+            std::move(name),
+            app::SourceHash(source),
+            {}};
     } catch (const std::exception& exception) {
-        return {false, {}, {}, exception.what()};
+        return {false, {}, {}, 0U, exception.what()};
     }
 }
 
@@ -317,6 +365,16 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
     if (!EnsureDirectories(error)) {
         return app::OperationResult::Failure(std::move(error));
     }
+    std::wstring sourcePath;
+    std::string sourceText;
+    if (!Utf8ToWide(request.sourcePath, sourcePath)
+        || !ReadBytes(sourcePath, sourceText, error)) {
+        RemoveIfPresent(compiledTemporary);
+        return app::OperationResult::Failure(
+            error.empty() ? "The source path is invalid." : std::move(error));
+    }
+    const std::filesystem::path sourceTemporary = MakeSiblingTemporaryPath(
+        SourcePath(request.entry.id));
     const std::filesystem::path entryTemporary = MakeSiblingTemporaryPath(
         EntryPath(request.entry.id));
     const std::filesystem::path dumpTemporary = MakeSiblingTemporaryPath(
@@ -324,6 +382,7 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
     const std::filesystem::path indexTemporary = MakeSiblingTemporaryPath(
         IndexPath());
     const std::array temporaryFiles{
+        sourceTemporary,
         entryTemporary,
         dumpTemporary,
         indexTemporary};
@@ -333,7 +392,11 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
         }
         RemoveIfPresent(compiledTemporary);
     };
-    if (!WriteNewFile(entryTemporary, app::EncodeEntry(request.entry), error)
+    if (!WriteNewFile(sourceTemporary, sourceText, error)
+        || !WriteNewFile(
+            entryTemporary,
+            app::EncodeEntry(request.entry),
+            error)
         || !WriteNewFile(dumpTemporary, dumpText, error)
         || !WriteNewFile(
             indexTemporary,
@@ -344,73 +407,84 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
     }
     const std::array sources{
         compiledTemporary,
+        sourceTemporary,
         dumpTemporary,
         entryTemporary,
         indexTemporary};
     const std::array destinations{
         ArtifactPath(request.entry.id),
+        SourcePath(request.entry.id),
         DumpPath(request.entry.id),
         EntryPath(request.entry.id),
         IndexPath()};
-    std::array<std::filesystem::path, sources.size()> backups{};
-    std::array<bool, sources.size()> hasBackup{};
-    for (std::size_t index = 0U; index < destinations.size(); ++index) {
-        if (!IsRegularFile(destinations[index])) {
-            continue;
-        }
-        backups[index] = MakeSiblingTemporaryPath(destinations[index]);
-        if (CopyFileW(
-                destinations[index].c_str(),
-                backups[index].c_str(),
-                TRUE) == FALSE) {
-            error = std::system_category().message(
-                static_cast<int>(GetLastError()));
-            for (const auto& backup : backups) {
-                RemoveIfPresent(backup);
-            }
-            cleanup();
-            return app::OperationResult::Failure(std::move(error));
-        }
-        hasBackup[index] = true;
-    }
-
-    std::size_t published{};
-    for (; published < sources.size(); ++published) {
-        if (ReplaceFileAtomically(
-                sources[published],
-                destinations[published],
-                error)) {
-            continue;
-        }
-        bool rollbackSucceeded = true;
-        for (std::size_t count = published; count > 0U; --count) {
-            const std::size_t index = count - 1U;
-            if (!hasBackup[index]) {
-                RemoveIfPresent(destinations[index]);
-                continue;
-            }
-            std::string rollbackError;
-            if (!ReplaceFileAtomically(
-                    backups[index],
-                    destinations[index],
-                    rollbackError)) {
-                rollbackSucceeded = false;
-            }
-        }
-        for (std::size_t index = 0U; index < backups.size(); ++index) {
-            if (!hasBackup[index] || index >= published
-                || rollbackSucceeded) {
-                RemoveIfPresent(backups[index]);
-            }
-        }
+    if (!PublishFiles(sources, destinations, error)) {
         cleanup();
-        if (!rollbackSucceeded) {
-            error += " Import rollback was incomplete; backup files were retained.";
-        }
         return app::OperationResult::Failure(std::move(error));
     }
-    for (const auto& backup : backups) {
-        RemoveIfPresent(backup);
+    return app::OperationResult::Success();
+}
+
+app::OperationResult WindowsProgramLibrary::PublishNew(
+    const app::ProgramPublishRequest& request)
+{
+    std::string error;
+    if (!EnsureDirectories(error)) {
+        return app::OperationResult::Failure(std::move(error));
+    }
+    const std::array destinations{
+        SourcePath(request.entry.id),
+        EntryPath(request.entry.id),
+        IndexPath()};
+    std::array<std::filesystem::path, 3U> sources{};
+    for (std::size_t index = 0U; index < sources.size(); ++index) {
+        sources[index] = MakeSiblingTemporaryPath(destinations[index]);
+    }
+    const auto cleanup = [&] {
+        for (const auto& path : sources) {
+            RemoveIfPresent(path);
+        }
+    };
+    if (!WriteNewFile(sources[0], {}, error)
+        || !WriteNewFile(sources[1], app::EncodeEntry(request.entry), error)
+        || !WriteNewFile(
+            sources[2],
+            app::EncodeProgramIndex(request.order),
+            error)
+        || !PublishFiles(sources, destinations, error)) {
+        cleanup();
+        return app::OperationResult::Failure(std::move(error));
+    }
+    return app::OperationResult::Success();
+}
+
+app::OperationResult WindowsProgramLibrary::PublishCompilation(
+    const app::ProgramEntry& entry,
+    const std::filesystem::path& compiledTemporary,
+    std::string_view dumpText)
+{
+    std::string error;
+    const std::filesystem::path dumpTemporary = MakeSiblingTemporaryPath(
+        DumpPath(entry.id));
+    const std::filesystem::path entryTemporary = MakeSiblingTemporaryPath(
+        EntryPath(entry.id));
+    const std::array sources{
+        compiledTemporary,
+        dumpTemporary,
+        entryTemporary};
+    const std::array destinations{
+        ArtifactPath(entry.id),
+        DumpPath(entry.id),
+        EntryPath(entry.id)};
+    const auto cleanup = [&] {
+        for (const auto& path : sources) {
+            RemoveIfPresent(path);
+        }
+    };
+    if (!WriteNewFile(dumpTemporary, dumpText, error)
+        || !WriteNewFile(entryTemporary, app::EncodeEntry(entry), error)
+        || !PublishFiles(sources, destinations, error)) {
+        cleanup();
+        return app::OperationResult::Failure(std::move(error));
     }
     return app::OperationResult::Success();
 }
@@ -451,9 +525,18 @@ app::OperationResult WindowsProgramLibrary::DeleteEntry(app::ProgramEntryId id)
         return saved;
     }
     RemoveIfPresent(EntryPath(id));
+    RemoveIfPresent(SourcePath(id));
     RemoveIfPresent(ArtifactPath(id));
     RemoveIfPresent(DumpPath(id));
     return app::OperationResult::Success();
+}
+
+app::SourceReadResult WindowsProgramLibrary::LoadSource(
+    app::ProgramEntryId id) const
+{
+    app::SourceReadResult result{};
+    result.succeeded = ReadBytes(SourcePath(id), result.text, result.error);
+    return result;
 }
 
 std::string WindowsProgramLibrary::LoadDump(app::ProgramEntryId id) const
@@ -461,9 +544,36 @@ std::string WindowsProgramLibrary::LoadDump(app::ProgramEntryId id) const
     std::string dump;
     std::string error;
     if (!ReadBytes(DumpPath(id), dump, error)) {
-        return "Unable to load compiled dump: " + error;
+        return {};
     }
     return dump;
+}
+
+app::OperationResult WindowsProgramLibrary::SaveSource(
+    app::ProgramEntryId id,
+    std::string_view source)
+{
+    if (source.size() > 16U * 1024U * 1024U
+        || !support::IsValidUtf8(source)) {
+        return app::OperationResult::Failure(
+            "Source must be valid UTF-8 and no larger than 16 MiB.");
+    }
+    std::string error;
+    if (!WriteFileAtomically(SourcePath(id), source, error)) {
+        return app::OperationResult::Failure(std::move(error));
+    }
+    RemoveIfPresent(DumpPath(id));
+    return app::OperationResult::Success();
+}
+
+app::OperationResult WindowsProgramLibrary::SaveDump(
+    app::ProgramEntryId id,
+    std::string_view dump)
+{
+    std::string error;
+    return WriteFileAtomically(DumpPath(id), dump, error)
+        ? app::OperationResult::Success()
+        : app::OperationResult::Failure(std::move(error));
 }
 
 const std::filesystem::path& WindowsProgramLibrary::ExecutableDirectory()
@@ -488,6 +598,12 @@ std::filesystem::path WindowsProgramLibrary::ArtifactTemporaryPath(
     app::ProgramEntryId id) const
 {
     return MakeSiblingTemporaryPath(ArtifactPath(id));
+}
+
+std::filesystem::path WindowsProgramLibrary::SourcePath(
+    app::ProgramEntryId id) const
+{
+    return programsDirectory_ / (FormatId(id) + L".weave");
 }
 
 std::pair<std::filesystem::path, std::string>

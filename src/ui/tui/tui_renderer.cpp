@@ -1,5 +1,6 @@
 #include "tui_controller.hpp"
 
+#include "support/source_highlighter.hpp"
 #include "support/text_layout.hpp"
 
 #include <algorithm>
@@ -46,11 +47,12 @@ using StyledLine = std::vector<StyledSegment>;
         false};
 }
 
-[[nodiscard]] bool EditorCursorVisible() noexcept
+[[nodiscard]] bool EditorCursorVisible(
+    std::chrono::steady_clock::time_point visibleSince) noexcept
 {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch());
-    return (elapsed.count() / 500LL) % 2LL == 0LL;
+        std::chrono::steady_clock::now() - visibleSince);
+    return (elapsed.count() / 300LL) % 2LL == 0LL;
 }
 
 void RenderLineEditor(
@@ -59,6 +61,7 @@ void RenderLineEditor(
     std::size_t x,
     std::size_t y,
     std::size_t width,
+    std::chrono::steady_clock::time_point cursorVisibleSince,
     const ColorScheme& colors)
 {
     if (width == 0U) {
@@ -68,7 +71,7 @@ void RenderLineEditor(
     canvas.Fill({x, y, width, 1U}, U' ', style);
     const LineEditorView view = editor.View(width - 1U);
     canvas.Text(x, y, view.text, width - 1U, style);
-    if (EditorCursorVisible()) {
+    if (EditorCursorVisible(cursorVisibleSince)) {
         canvas.Put(x + view.cursorColumn, y, U'▏', style);
     }
 }
@@ -127,7 +130,7 @@ void RenderLineEditor(
 
 [[nodiscard]] std::string OnOff(bool value)
 {
-    return value ? "ON" : "OFF";
+    return value ? "ON " : "OFF";
 }
 
 [[nodiscard]] std::string FormatTime(std::int64_t unixMilliseconds)
@@ -236,43 +239,36 @@ void RenderLineEditor(
     return field;
 }
 
+[[nodiscard]] std::string_view TransitionText(Transition transition) noexcept
+{
+    switch (transition) {
+    case Transition::Down: return "down";
+    case Transition::Up: return "up";
+    case Transition::Move: return "move";
+    case Transition::VerticalWheel: return "wheel-v";
+    case Transition::HorizontalWheel: return "wheel-h";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string_view DispositionText(
+    debug::InputDisposition disposition) noexcept
+{
+    switch (disposition) {
+    case debug::InputDisposition::NotApplicable: return "-";
+    case debug::InputDisposition::Forward: return "PASS";
+    case debug::InputDisposition::Suppress: return "DROP";
+    }
+    return "unknown";
+}
+
 [[nodiscard]] std::string EventText(const debug::DebugInputEvent& event)
 {
-    std::string disposition;
-    switch (event.disposition) {
-    case debug::InputDisposition::NotApplicable:
-        disposition = "-";
-        break;
-    case debug::InputDisposition::Forward:
-        disposition = "PASS";
-        break;
-    case debug::InputDisposition::Suppress:
-        disposition = "DROP";
-        break;
-    }
-    std::string transition;
-    switch (event.transition) {
-    case Transition::Down:
-        transition = "down";
-        break;
-    case Transition::Up:
-        transition = "up";
-        break;
-    case Transition::Move:
-        transition = "move";
-        break;
-    case Transition::VerticalWheel:
-        transition = "wheel-v";
-        break;
-    case Transition::HorizontalWheel:
-        transition = "wheel-h";
-        break;
-    }
     std::string text = FormatTime(event.captureUnixTimeMilliseconds) + "  "
         + FixedField(ControlName(event.control), 16U) + "  "
-        + FixedField(transition, 7U) + "  "
+        + FixedField(TransitionText(event.transition), 7U) + "  "
         + FixedField(debug::InputOriginLabel(event.origin), 4U) + "  "
-        + FixedField(disposition, 4U);
+        + FixedField(DispositionText(event.disposition), 4U);
     if (event.repeatedDown) {
         text += " REPEAT";
     }
@@ -285,39 +281,10 @@ void RenderLineEditor(
 [[nodiscard]] std::string ExecutionEventText(
     const debug::DebugInputEvent& event)
 {
-    std::string transition;
-    switch (event.transition) {
-    case Transition::Down:
-        transition = "down";
-        break;
-    case Transition::Up:
-        transition = "up";
-        break;
-    case Transition::Move:
-        transition = "move";
-        break;
-    case Transition::VerticalWheel:
-        transition = "wheel-v";
-        break;
-    case Transition::HorizontalWheel:
-        transition = "wheel-h";
-        break;
-    }
-    std::string disposition;
-    switch (event.disposition) {
-    case debug::InputDisposition::NotApplicable:
-        disposition = "-";
-        break;
-    case debug::InputDisposition::Forward:
-        disposition = "PASS";
-        break;
-    case debug::InputDisposition::Suppress:
-        disposition = "DROP";
-        break;
-    }
-    std::string text = ControlName(event.control) + ' ' + transition;
+    std::string text = ControlName(event.control) + ' '
+        + std::string{TransitionText(event.transition)};
     if (event.disposition != debug::InputDisposition::NotApplicable) {
-        text += " (" + disposition + ')';
+        text += " (" + std::string{DispositionText(event.disposition)} + ')';
     }
     if (event.repeatedDown) {
         text += " REPEAT";
@@ -326,58 +293,6 @@ void RenderLineEditor(
         text += " NO-DOWN";
     }
     return text;
-}
-
-[[nodiscard]] std::string ActionOpcodeName(ActionOpcode opcode)
-{
-    switch (opcode) {
-    case ActionOpcode::Press:
-        return "press";
-    case ActionOpcode::Release:
-        return "release";
-    case ActionOpcode::Tap:
-        return "tap";
-    case ActionOpcode::Wait:
-        return "wait";
-    case ActionOpcode::Gap:
-        return "gap";
-    case ActionOpcode::Set:
-        return "set";
-    case ActionOpcode::Toggle:
-        return "toggle";
-    case ActionOpcode::Exec:
-        return "exec";
-    case ActionOpcode::Jump:
-        return "jump";
-    case ActionOpcode::JumpIfFalse:
-        return "jump-if-false";
-    case ActionOpcode::RepeatInit:
-        return "repeat-init";
-    case ActionOpcode::RepeatCheck:
-        return "repeat-check";
-    case ActionOpcode::RepeatNext:
-        return "repeat-next";
-    case ActionOpcode::Yield:
-        return "yield";
-    case ActionOpcode::End:
-        return "end";
-    }
-    return "unknown";
-}
-
-[[nodiscard]] std::string ActionText(const ActionInstruction& instruction)
-{
-    const std::string opcode = ActionOpcodeName(instruction.opcode);
-    if (instruction.opcode == ActionOpcode::End
-        || instruction.opcode == ActionOpcode::Yield
-        || instruction.opcode == ActionOpcode::Gap) {
-        return opcode;
-    }
-    if (instruction.operand1 == 0U) {
-        return opcode + '(' + std::to_string(instruction.operand0) + ')';
-    }
-    return opcode + '(' + std::to_string(instruction.operand0) + ','
-        + std::to_string(instruction.operand1) + ')';
 }
 
 [[nodiscard]] TextStyle ExecutionStyle(
@@ -398,100 +313,20 @@ void RenderLineEditor(
     return Foreground(colors.executionFailed);
 }
 
-void AppendInstructionLines(
+void AppendExecutionField(
     std::vector<StyledLine>& lines,
     const debug::DebugRuleExecution& execution,
+    std::string_view firstPrefix,
+    std::string_view text,
     std::size_t width,
     const ColorScheme& colors)
 {
-    constexpr std::string_view firstPrefix = "  ACT  ";
     constexpr std::string_view continuationPrefix = "       ";
     constexpr std::size_t prefixWidth = 7U;
     const TextStyle executionStyle = ExecutionStyle(execution, colors);
-    StyledLine line{{std::string{firstPrefix}, Foreground(colors.mutedText)}};
-    std::size_t used = prefixWidth;
-    const auto startLine = [&]() {
-        line = {{
-            std::string{continuationPrefix},
-            Foreground(colors.mutedText)}};
-        used = prefixWidth;
-    };
-    if (execution.program == nullptr) {
-        line.push_back({"<program unavailable>", executionStyle});
-        lines.push_back(std::move(line));
-        return;
-    }
-    if (!execution.program->actionText.empty()) {
-        const std::vector<std::string> wrapped = WrapUtf8(
-            execution.program->actionText,
-            width - prefixWidth);
-        for (std::size_t index = 0U; index < wrapped.size(); ++index) {
-            lines.push_back({
-                {std::string{index == 0U ? firstPrefix : continuationPrefix},
-                 Foreground(colors.mutedText)},
-                {wrapped[index], executionStyle}});
-        }
-        return;
-    }
-    bool appended = false;
-    for (std::size_t index = 0U;
-         index < execution.program->actionInstructions.size();
-         ++index) {
-        const std::string sourceText = ActionText(
-            execution.program->actionInstructions[index]);
-        const std::string token = sourceText + "  ";
-        const std::size_t tokenWidth = Utf8DisplayWidth(token);
-        if (used > prefixWidth && used + tokenWidth > width) {
-            lines.push_back(std::move(line));
-            startLine();
-        }
-        if (tokenWidth > width - prefixWidth) {
-            const std::vector<std::string> wrapped = WrapUtf8(
-                sourceText,
-                width - prefixWidth);
-            for (std::size_t part = 0U; part < wrapped.size(); ++part) {
-                if (used > prefixWidth) {
-                    lines.push_back(std::move(line));
-                    startLine();
-                }
-                line.push_back({wrapped[part], executionStyle});
-                used += Utf8DisplayWidth(wrapped[part]);
-                if (part + 1U < wrapped.size()) {
-                    lines.push_back(std::move(line));
-                    startLine();
-                }
-            }
-            appended = true;
-            continue;
-        }
-        line.push_back({token, executionStyle});
-        used += tokenWidth;
-        appended = true;
-    }
-    if (!appended) {
-        line.push_back({"<none>", executionStyle});
-    }
-    lines.push_back(std::move(line));
-}
-
-void AppendConditionLines(
-    std::vector<StyledLine>& lines,
-    const debug::DebugRuleExecution& execution,
-    std::size_t width,
-    const ColorScheme& colors)
-{
-    constexpr std::string_view firstPrefix = "  AS   ";
-    constexpr std::string_view continuationPrefix = "       ";
-    constexpr std::size_t prefixWidth = 7U;
-    const std::string condition = execution.program == nullptr
-        ? "<program unavailable>"
-        : execution.program->conditionText.empty()
-            ? "always"
-            : execution.program->conditionText;
     const std::vector<std::string> wrapped = WrapUtf8(
-        condition,
+        text,
         width - prefixWidth);
-    const TextStyle executionStyle = ExecutionStyle(execution, colors);
     for (std::size_t index = 0U; index < wrapped.size(); ++index) {
         lines.push_back({
             {std::string{index == 0U ? firstPrefix : continuationPrefix},
@@ -524,8 +359,20 @@ void AppendConditionLines(
                  Foreground(colors.mutedText)},
                 {wrapped[index], ExecutionStyle(execution, colors)}});
         }
-        AppendConditionLines(lines, execution, width, colors);
-        AppendInstructionLines(lines, execution, width, colors);
+        AppendExecutionField(
+            lines,
+            execution,
+            "  AS   ",
+            execution.conditionText.empty() ? "always" : execution.conditionText,
+            width,
+            colors);
+        AppendExecutionField(
+            lines,
+            execution,
+            "  ACT  ",
+            execution.actionText.empty() ? "<none>" : execution.actionText,
+            width,
+            colors);
     }
     return lines;
 }
@@ -715,37 +562,7 @@ void RenderViewportRows(
         return "DebugStreamOverflow(" + std::to_string(payload.droppedRecords)
             + ')';
     }
-    switch (payload.issue.kind) {
-    case RuntimeDiagnosticKind::ActivationFailure:
-        return "ActivationFailure";
-    case RuntimeDiagnosticKind::TransactionCapacity:
-        return "TransactionCapacity";
-    case RuntimeDiagnosticKind::PredicateFault:
-        return "PredicateFault";
-    case RuntimeDiagnosticKind::TaskExpressionFault:
-        return "TaskExpressionFault";
-    case RuntimeDiagnosticKind::TaskActionFault:
-        return "TaskActionFault";
-    case RuntimeDiagnosticKind::LaunchFailure:
-        return "LaunchFailure";
-    case RuntimeDiagnosticKind::OutputFailure:
-        return "OutputFailure";
-    case RuntimeDiagnosticKind::OwnershipChange:
-        return "OwnershipChange";
-    case RuntimeDiagnosticKind::MappingChange:
-        return "MappingChange";
-    case RuntimeDiagnosticKind::Cancellation:
-        return "Cancellation";
-    case RuntimeDiagnosticKind::TargetEligibilityChange:
-        return "TargetEligibilityChange";
-    case RuntimeDiagnosticKind::PhysicalStateSynchronization:
-        return "PhysicalStateSynchronization";
-    case RuntimeDiagnosticKind::TaskBudgetExceeded:
-        return "TaskBudgetExceeded";
-    case RuntimeDiagnosticKind::OutputRateExceeded:
-        return "OutputRateExceeded";
-    }
-    return "Unknown";
+    return RuntimeDiagnosticKindName(payload.issue.kind);
 }
 
 [[nodiscard]] std::string ProgramName(
@@ -757,6 +574,217 @@ void RenderViewportRows(
         snapshot.programs.end(),
         [id](const app::ProgramEntry& program) { return program.id == id; });
     return found == snapshot.programs.end() ? "" : found->displayName;
+}
+
+[[nodiscard]] RgbColor SourceTokenColor(
+    SourceTokenKind kind,
+    const ColorScheme& colors) noexcept
+{
+    switch (kind) {
+    case SourceTokenKind::Keyword:
+        return colors.syntaxKeyword;
+    case SourceTokenKind::Type:
+        return colors.syntaxType;
+    case SourceTokenKind::Variable:
+        return colors.syntaxVariable;
+    case SourceTokenKind::Constant:
+        return colors.syntaxConstant;
+    case SourceTokenKind::Control:
+        return colors.syntaxControl;
+    case SourceTokenKind::Function:
+        return colors.syntaxFunction;
+    case SourceTokenKind::Operator:
+        return colors.syntaxOperator;
+    case SourceTokenKind::String:
+        return colors.syntaxString;
+    case SourceTokenKind::Comment:
+        return colors.syntaxComment;
+    }
+    return colors.text;
+}
+
+[[nodiscard]] bool DiagnosticOnLine(
+    std::span<const app::SourceDiagnostic> diagnostics,
+    std::size_t line) noexcept
+{
+    return std::any_of(
+        diagnostics.begin(),
+        diagnostics.end(),
+        [line](const app::SourceDiagnostic& diagnostic) {
+            return diagnostic.line == line + 1U;
+        });
+}
+
+[[nodiscard]] std::size_t DecimalDigits(std::size_t value) noexcept
+{
+    std::size_t digits = 1U;
+    while (value >= 10U) {
+        value /= 10U;
+        ++digits;
+    }
+    return digits;
+}
+
+[[nodiscard]] bool DiagnosticCovers(
+    std::span<const app::SourceDiagnostic> diagnostics,
+    std::size_t line,
+    std::size_t byte) noexcept
+{
+    for (const app::SourceDiagnostic& diagnostic : diagnostics) {
+        if (diagnostic.line != line + 1U) {
+            continue;
+        }
+        const std::size_t begin = diagnostic.column == 0U
+            ? 0U
+            : diagnostic.column - 1U;
+        const std::size_t length = (std::max)(
+            static_cast<std::size_t>(diagnostic.byteLength),
+            static_cast<std::size_t>(1U));
+        if (byte >= begin && byte < begin + length) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RenderSource(
+    Canvas& canvas,
+    SourceEditor& editor,
+    std::span<const app::SourceDiagnostic> diagnostics,
+    Rectangle body,
+    bool editing,
+    std::chrono::steady_clock::time_point cursorVisibleSince,
+    const ColorScheme& colors)
+{
+    if (body.width < 8U || body.height == 0U) {
+        return;
+    }
+    const std::size_t numberWidth = DecimalDigits(editor.LineCount());
+    const std::size_t gutterWidth = numberWidth + 3U;
+    const std::size_t codeWidth = body.width > gutterWidth
+        ? body.width - gutterWidth
+        : 1U;
+    editor.PrepareView(body.height, codeWidth);
+
+    SourceHighlightState highlightState{};
+    for (std::size_t line = 0U; line < editor.TopLine(); ++line) {
+        (void)HighlightWeaveLine(editor.Line(line), highlightState);
+    }
+    for (std::size_t row = 0U; row < body.height; ++row) {
+        const std::size_t lineIndex = editor.TopLine() + row;
+        if (lineIndex >= editor.LineCount()) {
+            break;
+        }
+        const bool current = lineIndex == editor.CursorLine();
+        const bool errorLine = DiagnosticOnLine(diagnostics, lineIndex);
+        TextStyle base = Foreground(colors.text);
+        if (current || errorLine) {
+            base.background = errorLine
+                ? colors.editorErrorLine
+                : colors.editorCurrentLine;
+            base.hasBackground = true;
+            canvas.Fill(
+                {body.x, body.y + row, body.width, 1U},
+                U' ',
+                base);
+        }
+        std::string number = std::to_string(lineIndex + 1U);
+        if (number.size() < numberWidth) {
+            number.insert(0U, numberWidth - number.size(), ' ');
+        }
+        TextStyle gutter = Foreground(colors.mutedText);
+        if (current || errorLine) {
+            gutter.background = base.background;
+            gutter.hasBackground = true;
+        }
+        canvas.Text(body.x, body.y + row, number, numberWidth, gutter);
+        canvas.Put(
+            body.x + numberWidth + 1U,
+            body.y + row,
+            U'│',
+            gutter);
+
+        const std::string_view line = editor.Line(lineIndex);
+        const std::vector<SourceTokenSpan> spans = HighlightWeaveLine(
+            line,
+            highlightState);
+        std::size_t offset{};
+        std::size_t displayColumn{};
+        Utf8CodePoint codePoint{};
+        while (NextUtf8CodePoint(line, offset, codePoint)) {
+            const std::size_t characterWidth = codePoint.displayWidth;
+            if (displayColumn + characterWidth <= editor.LeftColumn()) {
+                displayColumn += characterWidth;
+                continue;
+            }
+            const std::size_t visibleColumn = displayColumn
+                - editor.LeftColumn();
+            if (visibleColumn + characterWidth > codeWidth) {
+                break;
+            }
+            TextStyle style = base;
+            for (const SourceTokenSpan& span : spans) {
+                if (codePoint.byteOffset >= span.beginByte
+                    && codePoint.byteOffset < span.endByte) {
+                    style.foreground = SourceTokenColor(span.kind, colors);
+                    break;
+                }
+            }
+            if (editing
+                && editor.IsSelected(lineIndex, codePoint.byteOffset)) {
+                style.foreground = colors.selectionActiveForeground;
+                style.background = colors.selectionActiveBackground;
+                style.hasBackground = true;
+            }
+            if (DiagnosticCovers(diagnostics, lineIndex, codePoint.byteOffset)) {
+                style.foreground = colors.healthFault;
+                style.underline = true;
+            }
+            canvas.Put(
+                body.x + gutterWidth + visibleColumn,
+                body.y + row,
+                codePoint.value == U'\t' ? U' ' : codePoint.value,
+                style);
+            displayColumn += characterWidth;
+        }
+        for (const app::SourceDiagnostic& diagnostic : diagnostics) {
+            if (diagnostic.line != lineIndex + 1U) {
+                continue;
+            }
+            const std::size_t errorByte = diagnostic.column == 0U
+                ? 0U
+                : diagnostic.column - 1U;
+            if (errorByte < line.size()) {
+                continue;
+            }
+            const std::size_t errorColumn = Utf8DisplayWidth(line)
+                + errorByte - line.size();
+            if (errorColumn >= editor.LeftColumn()
+                && errorColumn - editor.LeftColumn() < codeWidth) {
+                TextStyle errorStyle = base;
+                errorStyle.foreground = colors.healthFault;
+                errorStyle.underline = true;
+                canvas.Put(
+                    body.x + gutterWidth + errorColumn - editor.LeftColumn(),
+                    body.y + row,
+                    U' ',
+                    errorStyle);
+            }
+        }
+        if (editing && current && EditorCursorVisible(cursorVisibleSince)) {
+            const std::size_t cursorColumn = editor.CursorDisplayColumn();
+            if (cursorColumn >= editor.LeftColumn()
+                && cursorColumn - editor.LeftColumn() < codeWidth) {
+                TextStyle cursorStyle = base;
+                cursorStyle.foreground = colors.text;
+                canvas.Put(
+                    body.x + gutterWidth + cursorColumn - editor.LeftColumn(),
+                    body.y + row,
+                    U'▏',
+                    cursorStyle);
+            }
+        }
+    }
 }
 
 } // namespace
@@ -788,72 +816,99 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             "[Home] First",
             "[End] Latest",
             "[→] Programs",
-            "[Q] Programs"};
+            "[Esc] Programs"};
     } else if (page_ == Page::Programs) {
         headerTitle = "InputWeaver | PROGRAMS";
-        headerColor = programsFocus_ == ProgramsFocus::Programs
+        headerColor = programsState_ == ProgramsState::Programs
             ? colors_.focusPrograms
-            : programsFocus_ == ProgramsFocus::Information
+            : programsState_ == ProgramsState::Information
                 ? colors_.focusProgramInformation
-                : colors_.focusCompiledDump;
-        if (mode_ == Mode::Move) {
+                : colors_.focusSourceEditor;
+        if (DocumentFullscreen()) {
+            headerTitle += " | DOCUMENT FULLSCREEN";
+        }
+        switch (mode_) {
+        case Mode::Move:
             headerKeys = {
                 "[↑]/[↓] Move", "[Enter] Save Order", "[Esc] Cancel"};
-        } else if (mode_ == Mode::TargetSelect
-            || mode_ == Mode::LoggingSelect) {
+            break;
+        case Mode::TargetSelect:
+        case Mode::LoggingSelect:
             headerKeys = {
                 "[↑]/[↓] Mode", "[Enter] Confirm", "[Esc] Cancel"};
-        } else if (mode_ == Mode::ExecutableInput) {
+            break;
+        case Mode::ExecutableInput:
+        case Mode::AddPath:
+        case Mode::NewName:
+        case Mode::Rename:
+        case Mode::ConflictRename:
             headerKeys = {
                 "[←]/[→] Cursor",
                 "[Home]/[End] Edge",
                 "[Backspace]/[Delete] Edit",
                 "[Enter] Confirm",
-                "[Esc] Modes"};
-        } else if (mode_ == Mode::AddPath || mode_ == Mode::Rename
-            || mode_ == Mode::ConflictRename) {
-            headerKeys = {
-                "[←]/[→] Cursor",
-                "[Home]/[End] Edge",
-                "[Backspace]/[Delete] Edit",
-                "[Enter] Confirm",
-                "[Esc] Cancel"};
-        } else if (mode_ == Mode::DeleteConfirm) {
+                mode_ == Mode::ExecutableInput
+                    ? "[Esc] Modes"
+                    : "[Esc] Cancel"};
+            break;
+        case Mode::DeleteConfirm:
             headerKeys = {"[Enter] Delete", "[Esc] Cancel"};
-        } else if (mode_ == Mode::ConflictSelect) {
+            break;
+        case Mode::AddSelect:
+        case Mode::ConflictSelect:
             headerKeys = {
-                "[↑]/[↓] Select", "[Enter] Confirm", "[Esc] Cancel"};
-        } else if (programsFocus_ == ProgramsFocus::Programs) {
-            headerKeys = {
-                "[↑]/[↓] Select",
-                "[A] Add",
-                "[D] Delete",
-                "[R] Rename",
-                "[M] Move",
-                "[Enter] Configure",
-                "[Space] Start",
-                "[X] Stop",
-                "[Tab] Focus",
-                "[←] Console",
-                "[→] Debug",
-                "[Q] Quit"};
-        } else if (programsFocus_ == ProgramsFocus::Information) {
-            headerKeys = {
-                "[↑]/[↓] Field",
-                "[Enter] Edit",
-                "[Tab] Dump",
-                "[Esc] Programs",
-                "[←] Console",
-                "[→] Debug",
-                "[Q] Programs"};
-        } else {
-            headerKeys = {
-                "[↑]/[↓] Line",
-                "[PgUp]/[PgDn] Page",
-                "[Home]/[End] Edge",
-                "[Tab] Programs",
-                "[Esc] Programs",
-                "[Q] Programs"};
+                "[←]/[→] Select", "[Enter] Confirm", "[Esc] Cancel"};
+            break;
+        case Mode::None:
+            if (SourceEditing()) {
+                break;
+            }
+            switch (programsState_) {
+            case ProgramsState::Programs:
+                headerKeys = {
+                    "[↑]/[↓] Select",
+                    "[A] Add",
+                    "[D] Delete",
+                    "[M] Move",
+                    "[Enter] Configure",
+                    "[X] Stop",
+                    "[Tab] Focus",
+                    "[←] Console",
+                    "[→] Debug",
+                    "[Esc] Quit"};
+                break;
+            case ProgramsState::Information:
+                headerKeys = {
+                    "[↑]/[↓] Field",
+                    "[Enter] Edit",
+                    "[Tab] Source",
+                    "[Esc] Programs"};
+                break;
+            case ProgramsState::Source:
+                headerKeys = {
+                    "[↑]/[↓] Line",
+                    "[PgUp]/[PgDn] Page",
+                    "[Home]/[End] First/Last",
+                    "[E] Edit",
+                    "[Z] Fullscreen",
+                    "[V] Source/Dump",
+                    "[X] Stop",
+                    "[Tab] Programs",
+                    "[Esc] Programs"};
+                break;
+            case ProgramsState::Fullscreen:
+                headerKeys = {
+                    "[E] Edit Source",
+                    "[Z] Split View",
+                    "[V] Source/Dump",
+                    "[X] Stop",
+                    "[Esc] Split View"};
+                break;
+            case ProgramsState::Editing:
+            case ProgramsState::FullscreenEditing:
+                break;
+            }
+            break;
         }
     } else {
         headerTitle = "InputWeaver | DEBUG";
@@ -862,11 +917,16 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             : debugFocus_ == DebugFocus::Pressed
                 ? colors_.focusPressed
                 : colors_.focusActionExecutions;
-        const app::ExecutorInfo* debugExecutor = ExecutorFor(
-            snapshot_.debugProgramId);
+        const app::ProgramEntryId displayedDebugId =
+            snapshot_.debugProgramId != app::kInvalidProgramEntryId
+            ? snapshot_.debugProgramId
+            : pendingDebugRun_.has_value()
+                ? pendingDebugRun_->id
+                : app::kInvalidProgramEntryId;
+        const app::ExecutorInfo* debugExecutor = ExecutorFor(displayedDebugId);
         const std::string debugProgram = ProgramName(
             snapshot_,
-            snapshot_.debugProgramId);
+            displayedDebugId);
         if (!debugProgram.empty()) {
             headerTitle += " | " + debugProgram;
         }
@@ -875,6 +935,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             if (debugExecutor->dryRun) {
                 headerTitle += " + SAFETY";
             }
+        } else if (pendingDebugRun_.has_value()) {
+            headerTitle += " | STARTING";
         }
         std::string focusKey = debugFocus_ == DebugFocus::Events
             ? "Event"
@@ -887,7 +949,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             "[C] Start/Stop Capture",
             "[X] Stop Executor",
             "[←] Programs",
-            "[Q] Programs"};
+            "[Esc] Programs"};
     }
     StyledLine headerSegments;
     if (!statusMessage_.empty()) {
@@ -912,6 +974,16 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         headerColor,
         headerColor,
         colors_.text);
+    if (page_ == Page::Programs && SourceEditing()) {
+        constexpr std::string_view exitLabel = "[Esc] Exit";
+        const std::size_t labelWidth = Utf8DisplayWidth(exitLabel);
+        canvas.Text(
+            width - labelWidth - 2U,
+            0U,
+            exitLabel,
+            labelWidth,
+            Foreground(headerColor));
+    }
     RenderDistributedRows(
         canvas,
         1U,
@@ -965,7 +1037,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     Foreground(colors_.text));
             });
     } else if (page_ == Page::Programs) {
-        const std::array<std::pair<std::string, RgbColor>, 3U> options{{
+        const std::array<std::pair<std::string, RgbColor>, 4U> options{{
             {"[T] Trace and Debug: " + OnOff(nextRun_.debug),
              nextRun_.debug ? colors_.statusDebug : colors_.mutedText},
             {"[S] Skip Simulated Input: " + OnOff(nextRun_.dryRun),
@@ -973,7 +1045,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             {"[P] Authorize Execution Permission: " + OnOff(nextRun_.allowExec),
              nextRun_.allowExec
                  ? colors_.statusExecPermission
-                 : colors_.mutedText}}};
+                 : colors_.mutedText},
+            {"[Space] Run", colors_.statusRunning}}};
         StyledLine optionSegments;
         optionSegments.reserve(options.size());
         for (const auto& [text, color] : options) {
@@ -984,233 +1057,310 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             width - 2U,
             3U,
             1U);
-        const std::size_t nextRunHeight = optionRows.size() + 2U;
+        const bool showNextRun = !SourceEditing();
+        const std::size_t nextRunHeight = showNextRun
+            ? optionRows.size() + 2U
+            : 0U;
         const std::size_t contentTop = headerHeight;
-        const std::size_t contentHeight = height - headerHeight - nextRunHeight;
-        const std::size_t leftWidth = (std::max)(
-            static_cast<std::size_t>(26U),
-            width * 3U / 10U);
-        const std::size_t rightWidth = width - leftWidth;
-        const RgbColor programsBorder = RegionBorder(
-            programsFocus_ == ProgramsFocus::Programs,
-            colors_.focusPrograms,
-            colors_);
-        const RgbColor informationBorder = RegionBorder(
-            programsFocus_ == ProgramsFocus::Information,
-            colors_.focusProgramInformation,
-            colors_);
-        const RgbColor dumpBorder = RegionBorder(
-            programsFocus_ == ProgramsFocus::Dump,
-            colors_.focusCompiledDump,
-            colors_);
-        canvas.Box(
-            {0U, contentTop, leftWidth, contentHeight},
-            "PROGRAMS",
-            programsBorder,
-            programsBorder,
-            colors_.text);
-        canvas.Box(
-            {leftWidth, contentTop, rightWidth, 5U},
-            "PROGRAM INFORMATION",
-            informationBorder,
-            informationBorder,
-            colors_.text);
-        canvas.Box(
-            {leftWidth, contentTop + 4U, rightWidth, contentHeight - 4U},
-            "COMPILED DUMP",
-            dumpBorder,
-            dumpBorder,
-            colors_.text);
 
-        const std::size_t visiblePrograms = contentHeight - 2U;
-        programsViewport_.Update(DisplayProgramCount(), visiblePrograms);
-        programsViewport_.Reveal(selectedIndex_);
-        for (std::size_t row = 0U; row < visiblePrograms; ++row) {
-            const std::size_t index = programsViewport_.Top() + row;
-            const app::ProgramEntry* program = DisplayProgram(index);
-            if (program == nullptr) {
-                break;
-            }
-            const bool selected = index == selectedIndex_;
-            const TextStyle selectedStyle = {
-                programsFocus_ == ProgramsFocus::Programs
-                    ? colors_.selectionActiveForeground
-                    : colors_.selectionInactiveForeground,
-                programsFocus_ == ProgramsFocus::Programs
-                    ? colors_.selectionActiveBackground
-                    : colors_.selectionInactiveBackground,
-                true,
-                false};
-            if (selected) {
-                canvas.Fill(
-                    {1U, contentTop + 1U + row, leftWidth - 2U, 1U},
-                    U' ',
-                    selectedStyle);
-            }
-            const app::ExecutorInfo* executor = ExecutorFor(program->id);
-            std::vector<std::pair<std::string_view, RgbColor>> tags;
-            if (executor != nullptr) {
-                tags.push_back(executor->mode == app::ExecutorMode::Debug
-                    ? std::pair<std::string_view, RgbColor>{
-                        "[DBG]", colors_.statusDebug}
-                    : std::pair<std::string_view, RgbColor>{
-                        "[RUN]", colors_.statusRunning});
-                if (executor->dryRun) {
-                    tags.emplace_back("[DRY]", colors_.statusDryRun);
-                }
-                if (executor->allowExec) {
-                    tags.emplace_back(
-                        "[EXEC]",
-                        colors_.statusExecPermission);
-                }
-            }
-            const std::size_t innerWidth = leftWidth - 2U;
-            std::size_t tagsWidth{};
-            for (const auto& [tag, color] : tags) {
-                (void)color;
-                tagsWidth += Utf8DisplayWidth(tag);
-            }
-            const std::string name = TruncateUtf8(
-                program->displayName,
-                innerWidth > tagsWidth + 2U
-                    ? innerWidth - tagsWidth - 2U
-                    : 1U);
-            const TextStyle rowStyle = selected
-                ? selectedStyle
-                : Foreground(colors_.text);
-            canvas.Text(
-                1U,
-                contentTop + 1U + row,
-                selected ? "> " + name : "  " + name,
-                innerWidth,
-                rowStyle);
-            if (!tags.empty() && tagsWidth <= innerWidth) {
-                std::size_t tagX = 1U + innerWidth - tagsWidth;
-                for (const auto& [tag, color] : tags) {
-                    const std::size_t tagWidth = Utf8DisplayWidth(tag);
-                    canvas.Text(
-                        tagX,
-                        contentTop + 1U + row,
-                        tag,
-                        tagWidth,
-                        selected ? selectedStyle : Foreground(color));
-                    tagX += tagWidth;
-                }
-            }
+        std::string documentTitle = documentView_ == DocumentView::Source
+            ? "SOURCE"
+            : "COMPILED DUMP";
+        if (SourceEditing()) {
+            documentTitle += " | EDITING";
         }
+        if (!sourceDiagnostics_.empty()) {
+            documentTitle += " | " + std::to_string(sourceDiagnostics_.size())
+                + (sourceDiagnostics_.size() == 1U ? " ERROR" : " ERRORS");
+        }
+        const auto renderDocument = [&](Rectangle body) {
+            if (documentView_ == DocumentView::Source) {
+                RenderSource(
+                    canvas,
+                    sourceEditor_,
+                    sourceDiagnostics_,
+                    body,
+                    SourceEditing(),
+                    cursorVisibleSince_,
+                    colors_);
+                return;
+            }
+            const std::vector<std::string> lines = WrapUtf8(
+                dumpText_,
+                body.width);
+            RenderViewportRows(
+                dumpViewport_,
+                lines.size(),
+                body.height,
+                [&](std::size_t row, std::size_t index) {
+                    canvas.Text(
+                        body.x,
+                        body.y + row,
+                        lines[index],
+                        body.width,
+                        Foreground(colors_.text));
+                });
+        };
 
-        const app::ProgramEntry* selected = SelectedProgram();
-        if (selected != nullptr) {
-            const TextStyle targetStyle = informationField_ == 0U
-                    && programsFocus_ == ProgramsFocus::Information
-                ? Foreground(colors_.focusProgramInformation)
-                : Foreground(colors_.text);
-            const TextStyle loggingStyle = informationField_ == 1U
-                    && programsFocus_ == ProgramsFocus::Information
-                ? Foreground(colors_.focusProgramInformation)
-                : Foreground(colors_.text);
-            const std::size_t informationX = leftWidth + 1U;
-            const std::size_t valueX = informationX + 10U;
-            const std::size_t valueWidth = rightWidth - 12U;
-            canvas.Text(
-                informationX,
+        if (DocumentFullscreen()) {
+            const Rectangle editorBox{
+                0U,
+                contentTop,
+                width,
+                height - contentTop - nextRunHeight};
+            canvas.Box(
+                editorBox,
+                documentTitle,
+                colors_.focusSourceEditor,
+                colors_.focusSourceEditor,
+                colors_.text);
+            const Rectangle documentBody{
+                1U,
                 contentTop + 1U,
-                "Target:   ",
-                10U,
-                targetStyle);
-            canvas.Text(
-                informationX,
-                contentTop + 2U,
-                "Logging:  ",
-                10U,
-                loggingStyle);
-            if (mode_ == Mode::TargetSelect) {
+                width - 2U,
+                editorBox.height - 2U};
+            renderDocument(documentBody);
+        } else {
+            const std::size_t contentHeight =
+                height - headerHeight - nextRunHeight;
+            const std::size_t leftWidth = (std::max)(
+                static_cast<std::size_t>(26U),
+                width * 3U / 10U);
+            const std::size_t rightWidth = width - leftWidth;
+            const RgbColor programsBorder = RegionBorder(
+                programsState_ == ProgramsState::Programs,
+                colors_.focusPrograms,
+                colors_);
+            const RgbColor informationBorder = RegionBorder(
+                programsState_ == ProgramsState::Information,
+                colors_.focusProgramInformation,
+                colors_);
+            const RgbColor sourceBorder = RegionBorder(
+                programsState_ == ProgramsState::Source
+                    || programsState_ == ProgramsState::Editing,
+                colors_.focusSourceEditor,
+                colors_);
+            canvas.Box(
+                {0U, contentTop, leftWidth, contentHeight},
+                "PROGRAMS",
+                programsBorder,
+                programsBorder,
+                colors_.text);
+            canvas.Box(
+                {leftWidth, contentTop, rightWidth, 6U},
+                "PROGRAM INFORMATION",
+                informationBorder,
+                informationBorder,
+                colors_.text);
+            canvas.Box(
+                {leftWidth, contentTop + 5U, rightWidth, contentHeight - 5U},
+                documentTitle,
+                sourceBorder,
+                sourceBorder,
+                colors_.text);
+
+            const std::size_t visiblePrograms = contentHeight - 2U;
+            programsViewport_.Update(DisplayProgramCount(), visiblePrograms);
+            programsViewport_.Reveal(selectedIndex_);
+            for (std::size_t row = 0U; row < visiblePrograms; ++row) {
+                const std::size_t index = programsViewport_.Top() + row;
+                const app::ProgramEntry* program = DisplayProgram(index);
+                if (program == nullptr) {
+                    break;
+                }
+                const bool selectedRow = index == selectedIndex_;
+                const TextStyle selectedStyle = {
+                    programsState_ == ProgramsState::Programs
+                        ? colors_.selectionActiveForeground
+                        : colors_.selectionInactiveForeground,
+                    programsState_ == ProgramsState::Programs
+                        ? colors_.selectionActiveBackground
+                        : colors_.selectionInactiveBackground,
+                    true,
+                    false};
+                if (selectedRow) {
+                    canvas.Fill(
+                        {1U, contentTop + 1U + row, leftWidth - 2U, 1U},
+                        U' ',
+                        selectedStyle);
+                }
+                const app::ExecutorInfo* executor = ExecutorFor(program->id);
+                std::vector<std::pair<std::string_view, RgbColor>> tags;
+                if (executor != nullptr) {
+                    tags.push_back(executor->mode == app::ExecutorMode::Debug
+                        ? std::pair<std::string_view, RgbColor>{
+                            "[DBG]", colors_.statusDebug}
+                        : std::pair<std::string_view, RgbColor>{
+                            "[RUN]", colors_.statusRunning});
+                    if (executor->dryRun) {
+                        tags.emplace_back("[DRY]", colors_.statusDryRun);
+                    }
+                    if (executor->allowExec) {
+                        tags.emplace_back(
+                            "[EXEC]",
+                            colors_.statusExecPermission);
+                    }
+                }
+                const std::size_t innerWidth = leftWidth - 2U;
+                std::size_t tagsWidth{};
+                for (const auto& [tag, color] : tags) {
+                    (void)color;
+                    tagsWidth += Utf8DisplayWidth(tag);
+                }
+                const std::string name = TruncateUtf8(
+                    program->displayName,
+                    innerWidth > tagsWidth + 2U
+                        ? innerWidth - tagsWidth - 2U
+                        : 1U);
+                const TextStyle rowStyle = selectedRow
+                    ? selectedStyle
+                    : Foreground(colors_.text);
                 canvas.Text(
-                    valueX,
-                    contentTop + 1U,
-                    TargetModeText(static_cast<app::TargetMode>(choice_)),
-                    valueWidth,
-                    ActiveFieldStyle(colors_));
-            } else if (mode_ == Mode::ExecutableInput) {
-                constexpr std::string_view prefix = "Executable -> ";
-                const std::size_t prefixWidth = Utf8DisplayWidth(prefix);
+                    1U,
+                    contentTop + 1U + row,
+                    selectedRow ? "> " + name : "  " + name,
+                    innerWidth,
+                    rowStyle);
+                if (!tags.empty() && tagsWidth <= innerWidth) {
+                    std::size_t tagX = 1U + innerWidth - tagsWidth;
+                    for (const auto& [tag, color] : tags) {
+                        const std::size_t tagWidth = Utf8DisplayWidth(tag);
+                        canvas.Text(
+                            tagX,
+                            contentTop + 1U + row,
+                            tag,
+                            tagWidth,
+                            selectedRow ? selectedStyle : Foreground(color));
+                        tagX += tagWidth;
+                    }
+                }
+            }
+
+            const app::ProgramEntry* selected = SelectedProgram();
+            if (selected != nullptr) {
+                std::array<TextStyle, 3U> fieldStyles;
+                for (std::size_t field = 0U; field < fieldStyles.size(); ++field) {
+                    fieldStyles[field] = Foreground(
+                        programsState_ == ProgramsState::Information
+                                && informationField_ == field
+                            ? colors_.focusProgramInformation
+                            : colors_.text);
+                }
+                const std::size_t informationX = leftWidth + 1U;
+                const std::size_t valueX = informationX + 10U;
+                const std::size_t valueWidth = rightWidth - 12U;
                 canvas.Text(
-                    valueX,
+                    informationX,
                     contentTop + 1U,
-                    prefix,
-                    valueWidth,
-                    targetStyle);
-                if (valueWidth > prefixWidth) {
+                    "Name:     ",
+                    10U,
+                    fieldStyles[0U]);
+                canvas.Text(
+                    informationX,
+                    contentTop + 2U,
+                    "Target:   ",
+                    10U,
+                    fieldStyles[1U]);
+                canvas.Text(
+                    informationX,
+                    contentTop + 3U,
+                    "Logging:  ",
+                    10U,
+                    fieldStyles[2U]);
+                if (mode_ == Mode::Rename) {
                     RenderLineEditor(
                         canvas,
                         editor_,
-                        valueX + prefixWidth,
+                        valueX,
                         contentTop + 1U,
-                        valueWidth - prefixWidth,
+                        valueWidth,
+                        cursorVisibleSince_,
                         colors_);
+                } else {
+                    canvas.Text(
+                        valueX,
+                        contentTop + 1U,
+                        selected->displayName,
+                        valueWidth,
+                        fieldStyles[0U]);
                 }
-            } else {
-                canvas.Text(
-                    valueX,
-                    contentTop + 1U,
-                    TargetText(selected->configuration),
-                    valueWidth,
-                    targetStyle);
+                if (mode_ == Mode::TargetSelect) {
+                    canvas.Text(
+                        valueX,
+                        contentTop + 2U,
+                        TargetModeText(static_cast<app::TargetMode>(choice_)),
+                        valueWidth,
+                        ActiveFieldStyle(colors_));
+                } else if (mode_ == Mode::ExecutableInput) {
+                    constexpr std::string_view prefix = "Executable -> ";
+                    const std::size_t prefixWidth = Utf8DisplayWidth(prefix);
+                    canvas.Text(
+                        valueX,
+                        contentTop + 2U,
+                        prefix,
+                        valueWidth,
+                        fieldStyles[1U]);
+                    if (valueWidth > prefixWidth) {
+                        RenderLineEditor(
+                            canvas,
+                            editor_,
+                            valueX + prefixWidth,
+                            contentTop + 2U,
+                            valueWidth - prefixWidth,
+                            cursorVisibleSince_,
+                            colors_);
+                    }
+                } else {
+                    canvas.Text(
+                        valueX,
+                        contentTop + 2U,
+                        TargetText(selected->configuration),
+                        valueWidth,
+                        fieldStyles[1U]);
+                }
+                if (mode_ == Mode::LoggingSelect) {
+                    canvas.Text(
+                        valueX,
+                        contentTop + 3U,
+                        LoggingText(static_cast<app::LoggingMode>(choice_)),
+                        valueWidth,
+                        ActiveFieldStyle(colors_));
+                } else {
+                    canvas.Text(
+                        valueX,
+                        contentTop + 3U,
+                        LoggingText(selected->configuration.logging),
+                        valueWidth,
+                        fieldStyles[2U]);
+                }
             }
-            if (mode_ == Mode::LoggingSelect) {
-                canvas.Text(
-                    valueX,
-                    contentTop + 2U,
-                    LoggingText(static_cast<app::LoggingMode>(choice_)),
-                    valueWidth,
-                    ActiveFieldStyle(colors_));
-            } else {
-                canvas.Text(
-                    valueX,
-                    contentTop + 2U,
-                    LoggingText(selected->configuration.logging),
-                    valueWidth,
-                    loggingStyle);
-            }
-        }
-        const std::size_t dumpWidth = rightWidth - 2U;
-        const std::size_t dumpVisible = contentHeight - 6U;
-        const std::vector<std::string> dumpLines = WrapUtf8(
-            dumpText_,
-            dumpWidth);
-        RenderViewportRows(
-            dumpViewport_,
-            dumpLines.size(),
-            dumpVisible,
-            [&](std::size_t row, std::size_t index) {
-                canvas.Text(
-                    leftWidth + 1U,
-                    contentTop + 5U + row,
-                    dumpLines[index],
-                    dumpWidth,
-                    Foreground(colors_.text));
-            });
 
-        const Rectangle nextRunBox{
-            0U,
-            contentTop + contentHeight,
-            width,
-            nextRunHeight};
-        canvas.Box(
-            nextRunBox,
-            "NEXT RUN",
-            colors_.unfocusedBorder,
-            colors_.text,
-            colors_.text);
-        RenderDistributedRows(
-            canvas,
-            1U,
-            contentTop + contentHeight + 1U,
-            width - 2U,
-            optionSegments,
-            optionRows,
-            3U,
-            1U);
+            const Rectangle documentBody{
+                leftWidth + 1U,
+                contentTop + 6U,
+                rightWidth - 2U,
+                contentHeight - 7U};
+            renderDocument(documentBody);
+        }
+        if (showNextRun) {
+            const Rectangle nextRunBox{
+                0U, height - nextRunHeight, width, nextRunHeight};
+            canvas.Box(
+                nextRunBox,
+                "NEXT RUN",
+                colors_.unfocusedBorder,
+                colors_.text,
+                colors_.text);
+            RenderDistributedRows(
+                canvas,
+                1U,
+                height - nextRunHeight + 1U,
+                width - 2U,
+                optionSegments,
+                optionRows,
+                3U,
+                1U);
+        }
     } else {
         const debug::DebugClientState* debugState = snapshot_.debugState.get();
         constexpr std::size_t healthRows = 4U;
@@ -1335,6 +1485,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 });
         }
 
+        const bool starting = pendingDebugRun_.has_value();
         const bool trusted = debugState != nullptr && debugState->captureTrusted;
         const bool recovering = debugState != nullptr
             && debugState->captureRequested && !debugState->capturing;
@@ -1343,11 +1494,15 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 || !debugState->runtimeIssues.empty());
         const RgbColor healthColor = hasProblem
             ? colors_.healthFault
-            : colors_.healthTrusted;
+            : starting || recovering
+                ? colors_.healthRecovering
+                : colors_.healthTrusted;
         std::string health1;
         std::string health2;
         if (debugState == nullptr) {
-            health1 = "Disconnected | Not capturing | Untrusted | PAUSE=unavailable";
+            health1 = starting
+                ? "Starting | Capture pending | Untrusted | PAUSE=unavailable"
+                : "Disconnected | Not capturing | Untrusted | PAUSE=unavailable";
             health2 = "Fault: None | Runtime issues: 0";
         } else {
             health1 += std::string{debugState->connected ? "Connected" : "Disconnected"}
@@ -1391,7 +1546,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
 
     const bool inlineInformationEdit = mode_ == Mode::TargetSelect
         || mode_ == Mode::ExecutableInput
-        || mode_ == Mode::LoggingSelect;
+        || mode_ == Mode::LoggingSelect
+        || mode_ == Mode::Rename;
     if (mode_ != Mode::None && mode_ != Mode::Move
         && !inlineInformationEdit) {
         const std::size_t modalWidth = (std::min)(
@@ -1405,11 +1561,14 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             modalHeight};
         std::string title;
         std::string prompt;
-        if (mode_ == Mode::AddPath) {
+        if (mode_ == Mode::AddSelect) {
             title = "ADD PROGRAM";
+            prompt = "Create or import a program:";
+        } else if (mode_ == Mode::AddPath) {
+            title = "IMPORT PROGRAM";
             prompt = "Path to one .weave file:";
-        } else if (mode_ == Mode::Rename) {
-            title = "RENAME PROGRAM";
+        } else if (mode_ == Mode::NewName) {
+            title = "NEW PROGRAM";
             prompt = "New unique name:";
         } else if (mode_ == Mode::DeleteConfirm) {
             title = "DELETE PROGRAM";
@@ -1437,10 +1596,24 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             prompt,
             modal.width - 4U,
             Foreground(colors_.text));
-        if (mode_ == Mode::ConflictSelect) {
+        if (mode_ == Mode::AddSelect || mode_ == Mode::ConflictSelect) {
+            const std::array addChoices{"New Blank", "Import .weave", "Cancel"};
             const std::array conflictChoices{"Overwrite", "Rename", "Cancel"};
+            constexpr std::size_t choiceGap = 3U;
+            std::array<std::string, 3U> labels;
+            std::array<std::size_t, 3U> labelWidths{};
+            std::size_t totalWidth = choiceGap * 2U;
             for (std::size_t index = 0U; index < 3U; ++index) {
-                const std::string_view choice = conflictChoices[index];
+                const std::string_view choice = mode_ == Mode::AddSelect
+                    ? addChoices[index]
+                    : conflictChoices[index];
+                labels[index] = std::string{index == choice_ ? "> " : "  "}
+                    + std::string{choice};
+                labelWidths[index] = Utf8DisplayWidth(labels[index]);
+                totalWidth += labelWidths[index];
+            }
+            std::size_t choiceX = modal.x + (modal.width - totalWidth) / 2U;
+            for (std::size_t index = 0U; index < 3U; ++index) {
                 const TextStyle style = index == choice_
                     ? TextStyle{
                         colors_.selectionActiveForeground,
@@ -1449,11 +1622,12 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                         false}
                     : Foreground(colors_.text);
                 canvas.Text(
-                    modal.x + 2U + index * 18U,
+                    choiceX,
                     modal.y + 4U,
-                    std::string{index == choice_ ? "> " : "  "} + choice.data(),
-                    17U,
+                    labels[index],
+                    labelWidths[index],
                     style);
+                choiceX += labelWidths[index] + choiceGap;
             }
         } else if (mode_ != Mode::DeleteConfirm) {
             const std::size_t inputWidth = modal.width - 4U;
@@ -1463,6 +1637,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 modal.x + 2U,
                 modal.y + 4U,
                 inputWidth,
+                cursorVisibleSince_,
                 colors_);
         }
         if (!statusMessage_.empty()) {

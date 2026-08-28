@@ -23,14 +23,27 @@ public:
         std::string_view right) const noexcept override;
     [[nodiscard]] app::OperationResult PublishImport(
         const app::ImportPublishRequest& request) override;
+    [[nodiscard]] app::OperationResult PublishNew(
+        const app::ProgramPublishRequest& request) override;
     [[nodiscard]] app::OperationResult SaveEntry(
         const app::ProgramEntry& entry) override;
     [[nodiscard]] app::OperationResult SaveOrder(
         std::span<const app::ProgramEntryId> order) override;
     [[nodiscard]] app::OperationResult DeleteEntry(
         app::ProgramEntryId id) override;
+    [[nodiscard]] app::SourceReadResult LoadSource(
+        app::ProgramEntryId id) const override;
     [[nodiscard]] std::string LoadDump(
         app::ProgramEntryId id) const override;
+    [[nodiscard]] app::OperationResult SaveSource(
+        app::ProgramEntryId id,
+        std::string_view source) override;
+    [[nodiscard]] app::SourceValidationResult ValidateSource(
+        const app::ProgramEntry& entry) override;
+    [[nodiscard]] app::OperationResult CompileProgram(
+        const app::ProgramEntry& entry) override;
+    [[nodiscard]] app::OperationResult GenerateDump(
+        const app::ProgramEntry& entry) override;
 
     [[nodiscard]] app::OperationResult LaunchExecutor(
         const app::LaunchRequest& request) override;

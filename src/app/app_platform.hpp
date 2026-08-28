@@ -22,6 +22,7 @@ struct ImportSourceInfo final {
     bool succeeded{};
     std::string normalizedPath;
     std::string defaultName;
+    std::uint64_t sourceHash{};
     std::string error;
 };
 
@@ -30,6 +31,11 @@ struct ImportPublishRequest final {
     ProgramEntry entry;
     std::vector<ProgramEntryId> order;
     bool overwrite{};
+};
+
+struct ProgramPublishRequest final {
+    ProgramEntry entry;
+    std::vector<ProgramEntryId> order;
 };
 
 struct LaunchRequest final {
@@ -64,12 +70,25 @@ public:
         std::string_view right) const noexcept = 0;
     [[nodiscard]] virtual OperationResult PublishImport(
         const ImportPublishRequest& request) = 0;
+    [[nodiscard]] virtual OperationResult PublishNew(
+        const ProgramPublishRequest& request) = 0;
     [[nodiscard]] virtual OperationResult SaveEntry(
         const ProgramEntry& entry) = 0;
     [[nodiscard]] virtual OperationResult SaveOrder(
         std::span<const ProgramEntryId> order) = 0;
     [[nodiscard]] virtual OperationResult DeleteEntry(ProgramEntryId id) = 0;
+    [[nodiscard]] virtual SourceReadResult LoadSource(
+        ProgramEntryId id) const = 0;
     [[nodiscard]] virtual std::string LoadDump(ProgramEntryId id) const = 0;
+    [[nodiscard]] virtual OperationResult SaveSource(
+        ProgramEntryId id,
+        std::string_view source) = 0;
+    [[nodiscard]] virtual SourceValidationResult ValidateSource(
+        const ProgramEntry& entry) = 0;
+    [[nodiscard]] virtual OperationResult CompileProgram(
+        const ProgramEntry& entry) = 0;
+    [[nodiscard]] virtual OperationResult GenerateDump(
+        const ProgramEntry& entry) = 0;
 
     [[nodiscard]] virtual OperationResult LaunchExecutor(
         const LaunchRequest& request) = 0;

@@ -230,37 +230,9 @@ void TestOriginsAndPressedState()
         protocolSequence);
     message.ruleMatched.executionMarker = marker;
     message.ruleMatched.triggerInputSequence = triggerInputSequence;
-    message.ruleMatched.eventTransition = inputweaver::EventTransition::Down;
-    message.ruleMatched.eventControl = {1U, 7U, 4U, 0U};
     message.ruleMatched.conditionText = "combat[on]";
     message.ruleMatched.actionText =
         "wait(10ms) wait(20ms) wait(30ms) wait(40ms)";
-    message.ruleMatched.conditionInstructions.push_back({
-        inputweaver::ExpressionOpcode::PushBoolean,
-        inputweaver::ExpressionType::Boolean,
-        1U,
-        0U});
-    for (std::uint32_t index = 0U; index < 5U; ++index) {
-        message.ruleMatched.actionInstructions.push_back({
-            index == 4U
-                ? inputweaver::ActionOpcode::End
-                : inputweaver::ActionOpcode::Wait,
-            index,
-            0U});
-    }
-    return message;
-}
-
-[[nodiscard]] inputweaver::debug::Message MakeAction(
-    std::uint64_t protocolSequence,
-    std::uint64_t marker,
-    std::uint32_t instructionIndex)
-{
-    auto message = MakeMessage(
-        inputweaver::debug::MessageKind::ActionStarted,
-        protocolSequence);
-    message.actionStarted.executionMarker = marker;
-    message.actionStarted.instructionIndex = instructionIndex;
     return message;
 }
 
@@ -298,39 +270,22 @@ void TestRuleCorrelationAndInterleaving()
             == inputweaver::debug::DebugReductionAction::None,
         "first RuleMatched waits for its input");
     Check(
-        reducer.Accept(MakeAction(3U, 11U, 0U))
-            == inputweaver::debug::DebugReductionAction::None,
-        "pending execution accepts ActionStarted");
-    Check(
-        reducer.Accept(MakeMatched(4U, 22U, 2U))
+        reducer.Accept(MakeMatched(3U, 22U, 2U))
             == inputweaver::debug::DebugReductionAction::None,
         "second marker interleaves");
     Check(
-        reducer.Accept(MakeAction(5U, 22U, 2U))
-            == inputweaver::debug::DebugReductionAction::None,
-        "second marker tracks its own step");
-    Check(
         reducer.ReadState()->ruleExecutions.empty(),
-        "pending current steps remain isolated until trigger association");
-    for (std::uint64_t sequence = 6U; sequence <= 9U; ++sequence) {
-        Check(
-            reducer.Accept(MakeAction(
-                sequence,
-                11U,
-                static_cast<std::uint32_t>(sequence - 5U)))
-                == inputweaver::debug::DebugReductionAction::None,
-            "first marker advances action");
-    }
+        "pending executions remain isolated until trigger association");
     Check(
         reducer.Accept(MakeEnded(
-            10U,
+            4U,
             11U,
             inputweaver::RuntimeExecutionResult::Completed))
             == inputweaver::debug::DebugReductionAction::None,
         "pending execution completes");
     Check(
         reducer.Accept(MakeEnded(
-            11U,
+            5U,
             22U,
             inputweaver::RuntimeExecutionResult::Failed))
             == inputweaver::debug::DebugReductionAction::None,
@@ -341,7 +296,7 @@ void TestRuleCorrelationAndInterleaving()
 
     Check(
         reducer.Accept(MakeInput(
-            12U,
+            6U,
             1U,
             65U,
             inputweaver::Transition::Down,
@@ -350,7 +305,7 @@ void TestRuleCorrelationAndInterleaving()
         "first trigger input materializes its execution");
     Check(
         reducer.Accept(MakeInput(
-            13U,
+            7U,
             2U,
             66U,
             inputweaver::Transition::Down,
@@ -361,46 +316,31 @@ void TestRuleCorrelationAndInterleaving()
     const auto* first = FindExecution(*state, 11U);
     const auto* second = FindExecution(*state, 22U);
     Check(
-        first != nullptr && first->program != nullptr
-            && first->matchedTimeNanoseconds == 2'000'000
+        first != nullptr
             && first->matchedUnixTimeMilliseconds == 1'725'000'000'001LL
-            && first->triggerInput.captureTimeNanoseconds == 12'000'000
+            && first->triggerInput.captureTimeNanoseconds == 6'000'000
             && first->triggerInput.captureUnixTimeMilliseconds
-                == 1'725'000'000'011LL
-            && first->program->conditionText == "combat[on]"
-            && first->program->actionText
-                == "wait(10ms) wait(20ms) wait(30ms) wait(40ms)"
-            && first->program->conditionInstructions.size() == 1U
-            && first->program->actionInstructions.size() == 5U,
+                == 1'725'000'000'005LL
+            && first->conditionText == "combat[on]"
+            && first->actionText
+                == "wait(10ms) wait(20ms) wait(30ms) wait(40ms)",
         "execution keeps display times and readable condition and action data");
     Check(
-        first != nullptr && !first->currentInstructionIndex.has_value()
-            && first->recentInstructionIndices
-                == std::vector<std::uint32_t>({2U, 3U, 4U})
-            && first->result
+        first != nullptr && first->result
                 == inputweaver::RuntimeExecutionResult::Completed,
-        "execution keeps the latest three steps and completed result");
+        "execution keeps its completed result");
     Check(
-        second != nullptr && !second->currentInstructionIndex.has_value()
-            && second->recentInstructionIndices
-                == std::vector<std::uint32_t>({2U})
+        second != nullptr
             && second->result == inputweaver::RuntimeExecutionResult::Failed,
         "interleaved marker keeps an independent failed result");
 
     Check(
-        reducer.Accept(MakeMatched(14U, 33U, 3U))
+        reducer.Accept(MakeMatched(8U, 33U, 3U))
             == inputweaver::debug::DebugReductionAction::None,
         "third execution waits for input");
     Check(
-        reducer.Accept(MakeAction(
-            15U,
-            33U,
-            1U))
-            == inputweaver::debug::DebugReductionAction::None,
-        "third execution records a current instruction");
-    Check(
         reducer.Accept(MakeInput(
-            16U,
+            9U,
             3U,
             67U,
             inputweaver::Transition::Down,
@@ -410,12 +350,11 @@ void TestRuleCorrelationAndInterleaving()
     state = reducer.ReadState();
     auto* third = FindExecution(*state, 33U);
     Check(
-        third != nullptr && third->currentInstructionIndex == 1U
-            && !third->result.has_value(),
-        "current instruction remains visible while execution is active");
+        third != nullptr && !third->result.has_value(),
+        "execution remains visible while active");
     Check(
         reducer.Accept(MakeEnded(
-            17U,
+            10U,
             33U,
             inputweaver::RuntimeExecutionResult::Cancelled))
             == inputweaver::debug::DebugReductionAction::None,
@@ -423,7 +362,7 @@ void TestRuleCorrelationAndInterleaving()
     state = reducer.ReadState();
     third = FindExecution(*state, 33U);
     Check(
-        third != nullptr && !third->currentInstructionIndex.has_value()
+        third != nullptr
             && third->result == inputweaver::RuntimeExecutionResult::Cancelled,
         "cancelled result is retained");
 }
@@ -529,7 +468,10 @@ void TestStrictValidationAndCapacity()
     inputweaver::debug::DebugStateReducer markerReducer;
     BeginCapture(markerReducer);
     Check(
-        markerReducer.Accept(MakeAction(2U, 999U, 0U))
+        markerReducer.Accept(MakeEnded(
+            2U,
+            999U,
+            inputweaver::RuntimeExecutionResult::Completed))
             == inputweaver::debug::DebugReductionAction::RestartCapture,
         "unknown marker requests restart");
     Check(

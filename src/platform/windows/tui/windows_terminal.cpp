@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -98,6 +99,23 @@ void AppendStyle(std::string& output, const ui::tui::TextStyle& style)
     }
 }
 
+[[nodiscard]] std::optional<ui::tui::Key> ControlKey(WORD key) noexcept
+{
+    using ui::tui::Key;
+    switch (key) {
+    case 'C':
+        return Key::Copy;
+    case 'X':
+        return Key::Cut;
+    case 'Z':
+        return Key::Undo;
+    case 'Y':
+        return Key::Redo;
+    default:
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 WindowsTerminal::~WindowsTerminal()
@@ -118,9 +136,10 @@ bool WindowsTerminal::Initialize(std::string& error)
     originalInputCodePage_ = GetConsoleCP();
     originalOutputCodePage_ = GetConsoleOutputCP();
     const DWORD inputMode = (originalInputMode_
-            | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_PROCESSED_INPUT)
+            | ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT)
         & ~static_cast<DWORD>(
-            ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_QUICK_EDIT_MODE);
+            ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT
+            | ENABLE_QUICK_EDIT_MODE);
     const DWORD outputMode = originalOutputMode_
         | ENABLE_VIRTUAL_TERMINAL_PROCESSING
         | DISABLE_NEWLINE_AUTO_RETURN;
@@ -186,9 +205,20 @@ bool WindowsTerminal::Poll(
             continue;
         }
         const KEY_EVENT_RECORD& key = record.Event.KeyEvent;
+        const bool shift = (key.dwControlKeyState & SHIFT_PRESSED) != 0U;
+        const bool control = (key.dwControlKeyState
+            & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0U;
+        if (control) {
+            const auto command = ControlKey(key.wVirtualKeyCode);
+            if (command.has_value()) {
+                pendingHighSurrogate_ = 0;
+                event = {*command, 0U, false};
+                return true;
+            }
+        }
         if (const auto mapped = VirtualKey(key.wVirtualKeyCode); mapped.has_value()) {
             pendingHighSurrogate_ = 0;
-            event = {*mapped, 0U};
+            event = {*mapped, 0U, shift};
             return true;
         }
         const wchar_t character = key.uChar.UnicodeChar;
@@ -208,9 +238,59 @@ bool WindowsTerminal::Poll(
         }
         pendingHighSurrogate_ = 0;
         if (codePoint >= 0x20U) {
-            event = {ui::tui::Key::Character, codePoint};
+            event = {ui::tui::Key::Character, codePoint, shift};
             return true;
         }
+    }
+}
+
+bool WindowsTerminal::CopyText(
+    std::string_view text,
+    std::string& error) noexcept
+{
+    try {
+        std::wstring wide;
+        if (!Utf8ToWide(text, wide)) {
+            error = "Cannot encode the selected text for the clipboard.";
+            return false;
+        }
+        if (OpenClipboard(nullptr) == FALSE) {
+            error = std::system_category().message(
+                static_cast<int>(GetLastError()));
+            return false;
+        }
+        if (EmptyClipboard() == FALSE) {
+            error = std::system_category().message(
+                static_cast<int>(GetLastError()));
+            CloseClipboard();
+            return false;
+        }
+        const SIZE_T bytes = (wide.size() + 1U) * sizeof(wchar_t);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        void* destination = memory == nullptr ? nullptr : GlobalLock(memory);
+        if (destination == nullptr) {
+            error = std::system_category().message(
+                static_cast<int>(GetLastError()));
+            if (memory != nullptr) {
+                GlobalFree(memory);
+            }
+            CloseClipboard();
+            return false;
+        }
+        std::memcpy(destination, wide.c_str(), bytes);
+        GlobalUnlock(memory);
+        if (SetClipboardData(CF_UNICODETEXT, memory) == nullptr) {
+            error = std::system_category().message(
+                static_cast<int>(GetLastError()));
+            GlobalFree(memory);
+            CloseClipboard();
+            return false;
+        }
+        CloseClipboard();
+        return true;
+    } catch (...) {
+        error = "Cannot copy the selected text to the clipboard.";
+        return false;
     }
 }
 

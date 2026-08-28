@@ -16,7 +16,6 @@ inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
 inline constexpr std::uint16_t kProtocolVersion = 3U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
-inline constexpr std::uint32_t kMaximumDebugInstructions = 262'144U;
 inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
 inline constexpr std::uint32_t kMaximumDebugTextBytes = 16U * 1024U * 1024U;
 
@@ -29,7 +28,6 @@ enum class MessageKind : std::uint16_t {
     CaptureStarted = 16U,
     InputEvent = 17U,
     RuleMatched = 18U,
-    ActionStarted = 19U,
     ExecutionEnded = 20U,
     RuntimeIssue = 21U,
     StateChanged = 22U,
@@ -99,17 +97,8 @@ struct InputEventPayload final {
 struct RuleMatchedPayload final {
     std::uint64_t executionMarker{};
     std::uint64_t triggerInputSequence{};
-    EventTransition eventTransition{EventTransition::Down};
-    ControlRef eventControl{};
     std::string conditionText;
     std::string actionText;
-    std::vector<ExpressionInstruction> conditionInstructions;
-    std::vector<ActionInstruction> actionInstructions;
-};
-
-struct ActionStartedPayload final {
-    std::uint64_t executionMarker{};
-    std::uint32_t instructionIndex{kInvalidProgramIndex};
 };
 
 struct ExecutionEndedPayload final {
@@ -135,7 +124,6 @@ struct Message final {
     CaptureStartedPayload captureStarted{};
     InputEventPayload inputEvent{};
     RuleMatchedPayload ruleMatched{};
-    ActionStartedPayload actionStarted{};
     ExecutionEndedPayload executionEnded{};
     RuntimeIssuePayload runtimeIssue{};
     StateChangedPayload stateChanged{};

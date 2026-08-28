@@ -274,6 +274,28 @@ enum class RuntimeDiagnosticKind : std::uint8_t {
     OutputRateExceeded,
 };
 
+[[nodiscard]] constexpr const char* RuntimeDiagnosticKindName(
+    RuntimeDiagnosticKind kind) noexcept
+{
+    switch (kind) {
+    case RuntimeDiagnosticKind::ActivationFailure: return "ActivationFailure";
+    case RuntimeDiagnosticKind::TransactionCapacity: return "TransactionCapacity";
+    case RuntimeDiagnosticKind::PredicateFault: return "PredicateFault";
+    case RuntimeDiagnosticKind::TaskExpressionFault: return "TaskExpressionFault";
+    case RuntimeDiagnosticKind::TaskActionFault: return "TaskActionFault";
+    case RuntimeDiagnosticKind::LaunchFailure: return "LaunchFailure";
+    case RuntimeDiagnosticKind::OutputFailure: return "OutputFailure";
+    case RuntimeDiagnosticKind::OwnershipChange: return "OwnershipChange";
+    case RuntimeDiagnosticKind::MappingChange: return "MappingChange";
+    case RuntimeDiagnosticKind::Cancellation: return "Cancellation";
+    case RuntimeDiagnosticKind::TargetEligibilityChange: return "TargetEligibilityChange";
+    case RuntimeDiagnosticKind::PhysicalStateSynchronization: return "PhysicalStateSynchronization";
+    case RuntimeDiagnosticKind::TaskBudgetExceeded: return "TaskBudgetExceeded";
+    case RuntimeDiagnosticKind::OutputRateExceeded: return "OutputRateExceeded";
+    }
+    return "Unknown";
+}
+
 struct RuntimeDiagnosticRecord final {
     RuntimeDiagnosticKind kind{};
     std::uint64_t programSerial{};
@@ -295,7 +317,6 @@ enum class RuntimeExecutionResult : std::uint8_t {
 
 enum class RuntimeDebugEventKind : std::uint8_t {
     RuleMatched,
-    ActionStarted,
     ExecutionEnded,
     RuntimeIssue,
     StateChanged,
@@ -324,9 +345,7 @@ struct RuntimeDebugEvent final {
     std::uint64_t captureEpoch{};
     std::uint64_t executionMarker{};
     std::uint64_t triggerInputSequence{};
-    EventKey eventKey{};
     std::uint32_t ruleIndex{kInvalidProgramIndex};
-    std::uint32_t instructionIndex{kInvalidProgramIndex};
     RuntimeExecutionResult result{RuntimeExecutionResult::Completed};
     RuntimeDebugIssue issue{};
     RuntimeDebugValue value{};

@@ -123,7 +123,6 @@ struct WorkItem final {
     ControlRefId control{};
     std::uint64_t debugCaptureEpoch{};
     std::uint64_t debugInputSequence{};
-    EventKey debugEventKey{};
     std::uint32_t debugRuleIndex{kInvalidProgramIndex};
 };
 
@@ -621,10 +620,6 @@ struct ProgramRuntime::Impl final {
     [[nodiscard]] std::uint64_t BeginDebugExecution(
         State& state,
         const WorkItem& item) noexcept;
-    void PublishDebugActionStarted(
-        std::uint64_t captureEpoch,
-        std::uint64_t executionMarker,
-        std::uint32_t instructionIndex) noexcept;
     void PublishDebugExecutionEnded(
         std::uint64_t captureEpoch,
         std::uint64_t executionMarker,
@@ -1145,25 +1140,8 @@ std::uint64_t ProgramRuntime::Impl::BeginDebugExecution(
     event.captureEpoch = item.debugCaptureEpoch;
     event.executionMarker = marker;
     event.triggerInputSequence = item.debugInputSequence;
-    event.eventKey = item.debugEventKey;
     event.ruleIndex = item.debugRuleIndex;
     return debugPort->Publish(event) ? marker : 0U;
-}
-
-void ProgramRuntime::Impl::PublishDebugActionStarted(
-    std::uint64_t captureEpoch,
-    std::uint64_t executionMarker,
-    std::uint32_t instructionIndex) noexcept
-{
-    if (debugPort == nullptr || captureEpoch == 0U || executionMarker == 0U) {
-        return;
-    }
-    RuntimeDebugEvent event{};
-    event.kind = RuntimeDebugEventKind::ActionStarted;
-    event.captureEpoch = captureEpoch;
-    event.executionMarker = executionMarker;
-    event.instructionIndex = instructionIndex;
-    (void)debugPort->Publish(event);
 }
 
 void ProgramRuntime::Impl::PublishDebugExecutionEnded(
@@ -1623,7 +1601,6 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                         mapping.target};
                     item.debugCaptureEpoch = debugCaptureEpoch;
                     item.debugInputSequence = debugInputSequence;
-                    item.debugEventKey = key;
                     item.debugRuleIndex = bucket->rules.begin
                         + static_cast<std::uint32_t>(ruleOffset);
                     mappingActivationSlot = mappingSlot;
@@ -1638,7 +1615,6 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                     rule.action};
                 item.debugCaptureEpoch = debugCaptureEpoch;
                 item.debugInputSequence = debugInputSequence;
-                item.debugEventKey = key;
                 item.debugRuleIndex = bucket->rules.begin
                     + static_cast<std::uint32_t>(ruleOffset);
             }
@@ -2141,7 +2117,6 @@ void ProgramRuntime::Impl::ProcessMappingWork(
             owner = {};
         }
         const std::uint64_t debugMarker = BeginDebugExecution(state, item);
-        PublishDebugActionStarted(item.debugCaptureEpoch, debugMarker, 0U);
         bool rateExceeded = false;
         if (AcquireGlobal(
                 state,
@@ -2664,16 +2639,6 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         ++task.instructionsWithoutSuspension;
         const ActionInstruction& instruction = code[position];
         const SourceSpan source = ActionSource(state, descriptor, position);
-        if (debugPort != nullptr
-            && task.debugCaptureEpoch != 0U
-            && task.debugExecutionMarker != 0U) {
-            RuntimeDebugEvent event{};
-            event.kind = RuntimeDebugEventKind::ActionStarted;
-            event.captureEpoch = task.debugCaptureEpoch;
-            event.executionMarker = task.debugExecutionMarker;
-            event.instructionIndex = position;
-            (void)debugPort->Publish(event);
-        }
         switch (instruction.opcode) {
         case ActionOpcode::Press:
             if (!AcquireTaskControl(state, task, ControlRefId{instruction.operand0})) {

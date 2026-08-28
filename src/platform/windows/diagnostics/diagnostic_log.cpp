@@ -84,40 +84,6 @@ const char* ExtraInfoName(ExtraInfoCategory value) noexcept {
     return "Unknown";
 }
 
-const char* RuntimeDiagnosticName(RuntimeDiagnosticKind value) noexcept {
-    switch (value) {
-        case RuntimeDiagnosticKind::ActivationFailure:
-            return "ActivationFailure";
-        case RuntimeDiagnosticKind::TransactionCapacity:
-            return "TransactionCapacity";
-        case RuntimeDiagnosticKind::PredicateFault:
-            return "PredicateFault";
-        case RuntimeDiagnosticKind::TaskExpressionFault:
-            return "TaskExpressionFault";
-        case RuntimeDiagnosticKind::TaskActionFault:
-            return "TaskActionFault";
-        case RuntimeDiagnosticKind::LaunchFailure:
-            return "LaunchFailure";
-        case RuntimeDiagnosticKind::OutputFailure:
-            return "OutputFailure";
-        case RuntimeDiagnosticKind::OwnershipChange:
-            return "OwnershipChange";
-        case RuntimeDiagnosticKind::MappingChange:
-            return "MappingChange";
-        case RuntimeDiagnosticKind::Cancellation:
-            return "Cancellation";
-        case RuntimeDiagnosticKind::TargetEligibilityChange:
-            return "TargetEligibilityChange";
-        case RuntimeDiagnosticKind::PhysicalStateSynchronization:
-            return "PhysicalStateSynchronization";
-        case RuntimeDiagnosticKind::TaskBudgetExceeded:
-            return "TaskBudgetExceeded";
-        case RuntimeDiagnosticKind::OutputRateExceeded:
-            return "OutputRateExceeded";
-    }
-    return "Unknown";
-}
-
 const char* RuntimeLaunchResultName(RuntimeLaunchResult value) noexcept {
     switch (value) {
         case RuntimeLaunchResult::Launched:
@@ -252,7 +218,7 @@ std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& recor
 
 std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record) {
     std::ostringstream stream;
-    stream << "{\"kind\":\"runtime\",\"event\":\"" << RuntimeDiagnosticName(record.kind)
+    stream << "{\"kind\":\"runtime\",\"event\":\"" << RuntimeDiagnosticKindName(record.kind)
            << "\",\"program_serial\":" << record.programSerial << ",\"generation\":" << record.generation
            << ",\"sequence\":" << record.sequence << ",\"source_begin\":" << record.source.beginByte
            << ",\"source_length\":" << record.source.byteLength << ",\"subject\":" << record.subject

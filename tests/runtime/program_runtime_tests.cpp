@@ -1822,9 +1822,9 @@ void TestRuntimeDebugEvents()
     clock.Advance(30'000'000);
     (void)runtime.Pump();
     Check(
-        debug.events.size() == 4U,
-        "accepted task emits match, two steps, and one terminal event");
-    if (debug.events.size() == 4U) {
+        debug.events.size() == 2U,
+        "accepted task emits one match and one terminal event");
+    if (debug.events.size() == 2U) {
         const std::uint64_t marker = debug.events[0].executionMarker;
         Check(
             debug.events[0].kind
@@ -1836,19 +1836,9 @@ void TestRuntimeDebugEvents()
             "rule match carries capture, input, rule, and marker correlation");
         Check(
             debug.events[1].kind
-                    == inputweaver::RuntimeDebugEventKind::ActionStarted
-                && debug.events[1].executionMarker == marker
-                && debug.events[1].instructionIndex == 0U
-                && debug.events[2].kind
-                    == inputweaver::RuntimeDebugEventKind::ActionStarted
-                && debug.events[2].executionMarker == marker
-                && debug.events[2].instructionIndex == 1U,
-            "every compiled action starts before execution");
-        Check(
-            debug.events[3].kind
                     == inputweaver::RuntimeDebugEventKind::ExecutionEnded
-                && debug.events[3].executionMarker == marker
-                && debug.events[3].result
+                && debug.events[1].executionMarker == marker
+                && debug.events[1].result
                     == inputweaver::RuntimeExecutionResult::Completed,
             "completed task emits one correlated terminal result");
     }
@@ -1885,16 +1875,14 @@ void TestRuntimeDebugEvents()
     (void)mappingRuntime.HandleInput(mappingUp);
     (void)mappingRuntime.Pump();
     Check(
-        mappingDebug.events.size() == 3U
+        mappingDebug.events.size() == 2U
             && mappingDebug.events[0].kind
                 == inputweaver::RuntimeDebugEventKind::RuleMatched
             && mappingDebug.events[0].captureEpoch == 7U
             && mappingDebug.events[0].triggerInputSequence == 3U
             && mappingDebug.events[1].kind
-                == inputweaver::RuntimeDebugEventKind::ActionStarted
-            && mappingDebug.events[2].kind
                 == inputweaver::RuntimeDebugEventKind::ExecutionEnded
-            && mappingDebug.events[2].result
+            && mappingDebug.events[1].result
                 == inputweaver::RuntimeExecutionResult::Completed,
         "mapping lifetime emits one correlated debug execution");
 
