@@ -21,6 +21,8 @@ bin\InputWeaverCompiler.exe compile path\to\config.weave path\to\config.weavec
 bin\InputWeaver.exe --program path\to\config.weavec
 ```
 
+使用 `--exclude-process <pid-or-exe-name-or-absolute-path>` 可以排除一个正在运行的进程。PID 直接指定实例；进程名或绝对路径必须解析为唯一实例，存在多个匹配项时只接受其中唯一的前台实例。
+
 包含 `exec` 动作的程序默认不能激活，必须在本次启动中显式授予进程启动权限：
 
 ```bat

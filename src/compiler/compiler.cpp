@@ -57,7 +57,7 @@ enum class RequestedProduct : std::uint8_t {
         return {{}, {}, std::move(diagnostics).Take()};
     }
 
-    FinalizeResult finalized = LowerProgram(std::move(*bound));
+    FinalizeResult finalized = LowerProgram(std::move(*bound), source.bytes);
     if (finalized.program == nullptr || !finalized.errors.empty()) {
         for (const ProgramValidationError& error : finalized.errors) {
             diagnostics.Add(

@@ -68,14 +68,28 @@ void TestCaptureStarted()
     message.header.kind = inputweaver::debug::MessageKind::CaptureStarted;
     message.header.captureTimeNanoseconds = 123'456'789;
     message.captureStarted.captureUnixTimeMilliseconds = 1'725'000'000'123LL;
+    message.captureStarted.values = {
+        {"PAUSE", {inputweaver::ValueType::State, true, 0.0, {}}},
+        {"count", {inputweaver::ValueType::Number, false, 2.5, {}}},
+        {"delay", {
+            inputweaver::ValueType::Duration,
+            false,
+            0.0,
+            {80'000'000}}},
+    };
 
     const auto decoded = RoundTrip(message);
     Check(
-        inputweaver::debug::kProtocolVersion == 2U
+        inputweaver::debug::kProtocolVersion == 3U
             && decoded.Succeeded()
             && decoded.message.captureStarted.captureUnixTimeMilliseconds
-                == 1'725'000'000'123LL,
-        "capture wall-clock anchor round trips in protocol version 2");
+                == 1'725'000'000'123LL
+            && decoded.message.captureStarted.values.size() == 3U
+            && decoded.message.captureStarted.values[0].value.stateValue
+            && decoded.message.captureStarted.values[1].value.numberValue == 2.5
+            && decoded.message.captureStarted.values[2].value.durationValue
+                    .nanoseconds == 80'000'000,
+        "capture wall-clock anchor and values round trip in protocol version 3");
 }
 
 void TestRuleMatched()
@@ -88,6 +102,8 @@ void TestRuleMatched()
     message.ruleMatched.triggerInputSequence = 5U;
     message.ruleMatched.eventTransition = inputweaver::EventTransition::Down;
     message.ruleMatched.eventControl = {1U, 7U, 4U, 0U};
+    message.ruleMatched.conditionText = "combat[on] and LCtrl[held]";
+    message.ruleMatched.actionText = "wait(80ms)";
     message.ruleMatched.conditionInstructions.push_back({
         inputweaver::ExpressionOpcode::PushBoolean,
         inputweaver::ExpressionType::Boolean,
@@ -121,6 +137,11 @@ void TestRuleMatched()
         decoded.message.ruleMatched.actionInstructions[0].opcode
             == inputweaver::ActionOpcode::Wait,
         "wait instruction remains visible");
+    Check(
+        decoded.message.ruleMatched.conditionText
+                == "combat[on] and LCtrl[held]"
+            && decoded.message.ruleMatched.actionText == "wait(80ms)",
+        "human-readable condition and action text round trip");
 }
 
 void TestTerminalAndIssueMessages()
@@ -159,6 +180,22 @@ void TestTerminalAndIssueMessages()
         decodedIssue.Succeeded()
             && decodedIssue.message.runtimeIssue.droppedRecords == 12U,
         "stream overflow issue round trips");
+
+    inputweaver::debug::Message changed{};
+    changed.header.kind = inputweaver::debug::MessageKind::StateChanged;
+    changed.stateChanged.valueIndex = 2U;
+    changed.stateChanged.value = {
+        inputweaver::ValueType::Duration,
+        false,
+        0.0,
+        {250'000'000}};
+    const auto decodedChanged = RoundTrip(changed);
+    Check(
+        decodedChanged.Succeeded()
+            && decodedChanged.message.stateChanged.valueIndex == 2U
+            && decodedChanged.message.stateChanged.value.durationValue.nanoseconds
+                == 250'000'000,
+        "state change payload round trips");
 }
 
 void TestMalformedFrame()

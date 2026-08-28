@@ -300,6 +300,10 @@ void TestController()
     inputweaver::app::Application application(platform);
     Check(application.Initialize().succeeded, "test application initializes");
     const auto colors = LoadColors();
+    Check(
+        colors.executionCompleted
+            == inputweaver::ui::tui::RgbColor{0x43U, 0xa0U, 0x47U},
+        "completed execution uses the darker configured green");
     inputweaver::ui::tui::TuiController controller(application, colors);
     platform.events = {
         {inputweaver::app::PlatformEventKind::Output,
@@ -393,6 +397,46 @@ void TestController()
         platform.imported.id == 2U
             && application.ReadSnapshot().programs.size() == 2U,
         "Add path input imports a new program");
+    auto debugState = std::make_shared<inputweaver::debug::DebugClientState>();
+    debugState->connected = true;
+    debugState->capturing = true;
+    debugState->captureTrusted = true;
+    debugState->captureEpoch = 3U;
+    debugState->values = {
+        {"PAUSE", {inputweaver::ValueType::State, true, 0.0, {}}},
+        {"combat", {inputweaver::ValueType::State, false, 0.0, {}}},
+        {"count", {inputweaver::ValueType::Number, false, 2.0, {}}},
+        {"delay", {
+            inputweaver::ValueType::Duration,
+            false,
+            0.0,
+            {80'000'000}}},
+    };
+    inputweaver::debug::DebugPressedControl pressed{};
+    pressed.control.virtualKey = 0xa2U;
+    debugState->pressedControls.push_back(pressed);
+    auto rule = std::make_shared<inputweaver::debug::DebugRuleProgram>();
+    rule->conditionText = "combat[on] and LCtrl[held]";
+    rule->actionInstructions = {
+        {inputweaver::ActionOpcode::Tap, 0U, 0U},
+        {inputweaver::ActionOpcode::Set, 0U, 0U},
+        {inputweaver::ActionOpcode::End, 0U, 0U},
+    };
+    rule->actionText = "tap(B) | set(count, count + 1)";
+    inputweaver::debug::DebugRuleExecution execution{};
+    execution.executionMarker = 17U;
+    execution.matchedUnixTimeMilliseconds = 1'725'000'000'123LL;
+    execution.triggerInput.captureUnixTimeMilliseconds = 1'725'000'000'120LL;
+    execution.triggerInput.control.virtualKey = 0xa2U;
+    execution.triggerInput.transition = inputweaver::Transition::Down;
+    execution.triggerInput.origin = inputweaver::InputOrigin::PhysicalCandidate;
+    execution.triggerInput.disposition =
+        inputweaver::debug::InputDisposition::Suppress;
+    execution.program = std::move(rule);
+    execution.result = inputweaver::RuntimeExecutionResult::Completed;
+    debugState->ruleExecutions.push_back(std::move(execution));
+    platform.debugState = debugState;
+    controller.Tick();
     controller.Handle({Key::Right, 0U});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
@@ -406,6 +450,79 @@ void TestController()
             && minimumDebug.Cells()[0U].style.foreground
                 == colors.focusEvents,
         "HEALTH remains boxed and healthy without a reported problem");
+    const std::string debugText = CanvasText(minimumDebug);
+    Check(
+        debugText.find("#17") != std::string::npos
+            && debugText.find("EVENT ") != std::string::npos
+            && debugText.find("MATCH ") != std::string::npos
+            && debugText.find("LCtrl down (DROP)") != std::string::npos
+            && debugText.find("LCtrl down PHY") == std::string::npos
+            && debugText.find("AS   combat[on] and LCtrl[held]")
+                != std::string::npos
+            && debugText.find("ACT  tap(B) | set(count, count + 1)")
+                != std::string::npos,
+        "Debug executions render readable event, AS, and ACT lines");
+    const auto findAscii = [&](std::string_view text) {
+        for (std::size_t row = 0U; row < minimumDebug.Height(); ++row) {
+            for (std::size_t column = 0U;
+                 column + text.size() <= minimumDebug.Width();
+                 ++column) {
+                bool matched = true;
+                for (std::size_t index = 0U; index < text.size(); ++index) {
+                    matched = matched
+                        && minimumDebug.Cells()[
+                                row * minimumDebug.Width() + column + index]
+                                .codePoint
+                            == static_cast<char32_t>(
+                                static_cast<unsigned char>(text[index]));
+                }
+                if (matched) {
+                    return row * minimumDebug.Width() + column;
+                }
+            }
+        }
+        return minimumDebug.Cells().size();
+    };
+    const std::size_t marker = findAscii("#17");
+    const std::size_t event = findAscii("EVENT ");
+    const std::size_t conditionLabel = findAscii(
+        "AS   combat[on] and LCtrl[held]");
+    const std::size_t condition = findAscii("combat[on]");
+    const std::size_t actionLabel = findAscii(
+        "ACT  tap(B) | set(count, count + 1)");
+    const std::size_t action = findAscii("tap(B)");
+    const std::size_t stateNumber = findAscii("count=2");
+    const std::size_t stateControl = findAscii("LCtrl PHY");
+    Check(
+        marker < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[marker].style.foreground == colors.mutedText
+            && event < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[event].style.foreground
+                == colors.executionCompleted
+            && conditionLabel < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[conditionLabel].style.foreground
+                == colors.mutedText
+            && condition < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[condition].style.foreground
+                == colors.executionCompleted
+            && actionLabel < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[actionLabel].style.foreground
+                == colors.mutedText
+            && action < minimumDebug.Cells().size()
+            && minimumDebug.Cells()[action].style.foreground
+                == colors.executionCompleted,
+        "execution labels are muted while entry content uses one status color");
+    Check(
+        debugText.find("PAUSE=on") != std::string::npos
+            && debugText.find("STATE") != std::string::npos
+            && debugText.find("combat=off") != std::string::npos
+            && debugText.find("count=2") != std::string::npos
+            && debugText.find("delay=80ms") != std::string::npos,
+        "HEALTH renders PAUSE and STATE renders all user value types");
+    Check(
+        stateNumber < stateControl
+            && stateControl < minimumDebug.Cells().size(),
+        "STATE keeps user values before pressed controls");
     controller.Handle({Key::Tab, 0U});
     const auto pressedDebug = controller.Render(80U, 24U);
     Check(

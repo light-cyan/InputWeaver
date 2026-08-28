@@ -179,6 +179,12 @@ struct VariableDebugRecord final {
     SourceSpan declaration{};
 };
 
+struct RuleDebugRecord final {
+    std::uint32_t sourceOrdinal{};
+    StringId conditionText{};
+    StringId actionText{};
+};
+
 enum class ExpressionOpcode : std::uint8_t {
     PushBoolean,
     PushState,
@@ -373,6 +379,7 @@ struct ProgramRequirements final {
 
 struct ProgramDebugInfo final {
     std::vector<VariableDebugRecord> variables;
+    std::vector<RuleDebugRecord> rules;
     std::vector<SourceSpan> expressionInstructionSpans;
     std::vector<SourceSpan> actionInstructionSpans;
 };

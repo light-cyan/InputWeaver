@@ -87,21 +87,35 @@ void TestExcludedProcessOption()
             options,
             error)
             && options.targetGlobal
-            && options.excludedProcessId == 4242U,
-        "global target accepts one excluded process PID");
+            && options.excludedProcessSelector
+                == std::filesystem::path{"4242"},
+        "global target accepts one excluded process selector");
 
-    for (const std::string_view invalid : {"", "0", "12x"}) {
-        arguments.back() = invalid;
+    for (const std::filesystem::path& selector : {
+             std::filesystem::path{"terminal.exe"},
+             std::filesystem::path{R"(C:\Tools\terminal.exe)"}}) {
+        arguments.back() = selector;
         options = {};
         error.clear();
         Check(
-            !inputweaver::ui::cli::ParseRuntimeCommandLine(
+            inputweaver::ui::cli::ParseRuntimeCommandLine(
                 std::span<const std::filesystem::path>{arguments},
                 options,
                 error)
-                && error.find("--exclude-process") != std::string::npos,
-            "invalid excluded process PID is rejected");
+                && options.excludedProcessSelector == selector,
+            "excluded process accepts executable name and absolute path selectors");
     }
+
+    arguments.pop_back();
+    options = {};
+    error.clear();
+    Check(
+        !inputweaver::ui::cli::ParseRuntimeCommandLine(
+            std::span<const std::filesystem::path>{arguments},
+            options,
+            error)
+            && error.find("--exclude-process") != std::string::npos,
+        "missing excluded process selector is rejected");
 }
 
 } // namespace

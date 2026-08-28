@@ -493,6 +493,18 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         WriteSpan(output, variable.declaration);
         output << '\n';
     }
+    output << "rule-debug " << program.DebugInfo().rules.size() << '\n';
+    for (std::size_t index = 0;
+         index < program.DebugInfo().rules.size();
+         ++index) {
+        const RuleDebugRecord& rule = program.DebugInfo().rules[index];
+        output << "  rd" << index << " ordinal=" << rule.sourceOrdinal
+               << " condition=";
+        WriteId(output, 's', rule.conditionText);
+        output << " action=";
+        WriteId(output, 's', rule.actionText);
+        output << '\n';
+    }
     return output.str();
 }
 

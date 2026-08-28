@@ -1712,6 +1712,27 @@ void ValidateDebugSpans(
                 "action instruction span is outside the source file");
         }
     }
+    std::set<std::uint32_t> debugOrdinals;
+    for (std::size_t index = 0;
+         index < storage.debugInfo.rules.size();
+         ++index) {
+        const RuleDebugRecord& rule = storage.debugInfo.rules[index];
+        if (!debugOrdinals.insert(rule.sourceOrdinal).second) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                At("debugInfo.rules", index),
+                "rule debug source ordinal is duplicated");
+        }
+        if ((rule.conditionText.IsValid()
+                && !ValidId(rule.conditionText, storage.strings.size()))
+            || (rule.actionText.IsValid()
+                && !ValidId(rule.actionText, storage.strings.size()))) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                At("debugInfo.rules", index),
+                "rule debug text is invalid");
+        }
+    }
 }
 
 [[nodiscard]] std::uint32_t ToCount(std::size_t value) noexcept
@@ -1905,6 +1926,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"eventBuckets", storage.eventBuckets.size()},
         {"rules", storage.rules.size()},
         {"debugInfo.variables", storage.debugInfo.variables.size()},
+        {"debugInfo.rules", storage.debugInfo.rules.size()},
         {"debugInfo.expressionInstructionSpans",
             storage.debugInfo.expressionInstructionSpans.size()},
         {"debugInfo.actionInstructionSpans",

@@ -20,7 +20,7 @@
     "status_dry_run": "#66BB6A",
     "status_exec_permission": "#CE93D8",
     "execution_running": "#26C6DA",
-    "execution_completed": "#66BB6A",
+    "execution_completed": "#43A047",
     "execution_failed": "#EF5350",
     "execution_cancelled": "#FFCA28",
     "instruction_recent_oldest": "#006064",

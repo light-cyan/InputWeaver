@@ -298,6 +298,15 @@ enum class RuntimeDebugEventKind : std::uint8_t {
     ActionStarted,
     ExecutionEnded,
     RuntimeIssue,
+    StateChanged,
+};
+
+struct RuntimeDebugValue final {
+    ValueRefId reference{};
+    ValueType type{ValueType::State};
+    bool stateValue{};
+    double numberValue{};
+    DurationValue durationValue{};
 };
 
 struct RuntimeDebugIssue final {
@@ -320,6 +329,7 @@ struct RuntimeDebugEvent final {
     std::uint32_t instructionIndex{kInvalidProgramIndex};
     RuntimeExecutionResult result{RuntimeExecutionResult::Completed};
     RuntimeDebugIssue issue{};
+    RuntimeDebugValue value{};
 };
 
 class RuntimeDebugEventPort {

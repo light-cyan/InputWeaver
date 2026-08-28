@@ -269,6 +269,57 @@ void TestParserAndRecovery()
         "complete parser grammar");
     Check(valid.Succeeded(), "adjacent and nested action syntax is accepted");
 
+    const CompileOutput orderedConditions = CompileGood(
+        "ordered-conditions.weave",
+        "TARGET = GLOBAL; number a = 5; "
+        "A:down when a < 5 ~> tap(B) ||||| set(a, a + 1); "
+        "A:down when a >= 5 ~> tap(C) ||||| set(a, a - 1);",
+        "ordered conditional stop rules");
+    const auto orderedProgram = DecodeGood(
+        orderedConditions,
+        "ordered conditional stop rules");
+    if (orderedProgram != nullptr) {
+        const auto hasBinaryOperator = [&](inputweaver::ExpressionId expression,
+                                           inputweaver::BinaryOperator operation) {
+            if (!expression.IsValid()
+                || expression.value >= orderedProgram->Expressions().size()) {
+                return false;
+            }
+            const inputweaver::ExpressionDescriptor& descriptor =
+                orderedProgram->Expressions()[expression.value];
+            const auto code = orderedProgram->ExpressionCode().subspan(
+                descriptor.code.begin,
+                descriptor.code.count);
+            return std::any_of(
+                code.begin(),
+                code.end(),
+                [operation](const inputweaver::ExpressionInstruction& instruction) {
+                    return instruction.opcode == inputweaver::ExpressionOpcode::Binary
+                        && instruction.operand0
+                            == static_cast<std::uint32_t>(operation);
+                });
+        };
+        Check(
+            orderedProgram->Rules().size() == 2U
+                && orderedProgram->EventBuckets().size() == 1U
+                && orderedProgram->EventBuckets()[0].rules.count == 2U
+                && orderedProgram->Rules()[0].delivery
+                    == inputweaver::Delivery::Observe
+                && orderedProgram->Rules()[0].flow
+                    == inputweaver::MatchFlow::Stop
+                && orderedProgram->Rules()[1].delivery
+                    == inputweaver::Delivery::Observe
+                && orderedProgram->Rules()[1].flow
+                    == inputweaver::MatchFlow::Stop
+                && hasBinaryOperator(
+                    orderedProgram->Rules()[0].condition,
+                    inputweaver::BinaryOperator::NumberLess)
+                && hasBinaryOperator(
+                    orderedProgram->Rules()[1].condition,
+                    inputweaver::BinaryOperator::NumberGreaterEqual),
+            "conditional stop rules retain source order and numeric comparisons");
+    }
+
     const CompileOutput pauseContinue = CompileSource(
         "pause.weave",
         "pause F1:down =>> toggle;");
@@ -701,22 +752,43 @@ void TestGoldenFixtureSemantics()
         CompiledProgramStorage storage;
     };
     std::vector<Fixture> fixtures;
+    CompiledProgramStorage tapStorage = test::MakeTapFixtureStorage();
+    tapStorage.strings.push_back("tap(F7)");
+    tapStorage.debugInfo.rules.push_back({
+        0U,
+        StringId{},
+        StringId{1U}});
     fixtures.push_back({
         "tap",
         "fixture.tap.weave",
         "TARGET = GLOBAL;\nF6:down => tap(F7);\n",
-        test::MakeTapFixtureStorage()});
+        std::move(tapStorage)});
+    CompiledProgramStorage mappingStorage = test::MakeMappingFixtureStorage();
+    mappingStorage.strings.push_back("F6 -> F7;");
+    mappingStorage.debugInfo.rules.push_back({
+        0U,
+        StringId{},
+        StringId{1U}});
     fixtures.push_back({
         "mapping",
         "fixture.mapping.weave",
         "TARGET = GLOBAL;\nF6 -> F7;\n",
-        test::MakeMappingFixtureStorage()});
+        std::move(mappingStorage)});
+    CompiledProgramStorage repeatStorage =
+        test::MakeConditionalRepeatFixtureStorage();
+    repeatStorage.strings.insert(
+        repeatStorage.strings.end(),
+        {"repeat 2 do tap(F7) | end", "enabled[on]"});
+    repeatStorage.debugInfo.rules.push_back({
+        0U,
+        StringId{3U},
+        StringId{2U}});
     fixtures.push_back({
         "conditional repeat",
         "fixture.conditional-repeat.weave",
         "TARGET = GLOBAL;\nstate enabled = on;\n"
         "F6:down when enabled[on] => repeat 2 do tap(F7) | end;\n",
-        test::MakeConditionalRepeatFixtureStorage()});
+        std::move(repeatStorage)});
     fixtures.push_back({
         "pause",
         "fixture.pause-control.weave",

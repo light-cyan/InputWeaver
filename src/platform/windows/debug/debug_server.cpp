@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -274,7 +276,41 @@ struct ProducerRecord final {
 [[nodiscard]] bool ProgramFitsProtocol(
     const CompiledProgram& program) noexcept
 {
+    const auto textBytes = [&program](StringId text) noexcept -> std::uint64_t {
+        return text.IsValid() && text.value < program.Strings().size()
+            ? program.Strings()[text.value].size()
+            : 0U;
+    };
+    if (program.DebugInfo().variables.size() + 1U
+        > debug::kMaximumDebugValues) {
+        return false;
+    }
+    std::uint64_t captureBytes = 8U + 4U + 4U + 5U + 2U;
+    for (const VariableDebugRecord& variable : program.DebugInfo().variables) {
+        const std::uint64_t nameBytes = textBytes(variable.name);
+        if (nameBytes > debug::kMaximumDebugTextBytes) {
+            return false;
+        }
+        captureBytes += 4U + nameBytes + 9U;
+    }
+    if (captureBytes > debug::kMaximumFramePayloadBytes) {
+        return false;
+    }
     for (const CompiledRule& rule : program.Rules()) {
+        const auto debugRule = std::find_if(
+            program.DebugInfo().rules.begin(),
+            program.DebugInfo().rules.end(),
+            [&rule](const RuleDebugRecord& candidate) noexcept {
+                return candidate.sourceOrdinal == rule.sourceOrdinal;
+            });
+        const std::uint64_t conditionTextBytes = debugRule
+                == program.DebugInfo().rules.end()
+            ? 6U
+            : textBytes(debugRule->conditionText);
+        const std::uint64_t actionTextBytes = debugRule
+                == program.DebugInfo().rules.end()
+            ? (rule.kind == RuleKind::MappingDown ? 7U : 0U)
+            : textBytes(debugRule->actionText);
         if (rule.condition.IsValid()
             && program.Expressions()[rule.condition.value].code.count
                 > debug::kMaximumDebugInstructions) {
@@ -285,8 +321,48 @@ struct ProducerRecord final {
                 > debug::kMaximumDebugInstructions) {
             return false;
         }
+        const std::uint64_t conditionCount = rule.condition.IsValid()
+            ? program.Expressions()[rule.condition.value].code.count
+            : 0U;
+        const std::uint64_t actionCount = rule.kind == RuleKind::MappingDown
+            ? 1U
+            : rule.action.IsValid()
+                ? program.ActionPrograms()[rule.action.value].code.count
+                : 0U;
+        std::uint64_t payloadBytes = 8U + 8U + 1U + 16U
+            + 4U + conditionTextBytes + 4U + actionTextBytes
+            + 4U + conditionCount * 10U
+            + 4U + actionCount * 9U;
+        if (conditionTextBytes > debug::kMaximumDebugTextBytes
+            || actionTextBytes > debug::kMaximumDebugTextBytes
+            || payloadBytes > debug::kMaximumFramePayloadBytes) {
+            return false;
+        }
     }
     return true;
+}
+
+[[nodiscard]] std::string NormalizeDebugText(std::string_view source)
+{
+    std::string text;
+    text.reserve(source.size());
+    bool pendingSpace = false;
+    for (const char byte : source) {
+        if (std::isspace(static_cast<unsigned char>(byte)) != 0) {
+            pendingSpace = !text.empty();
+            continue;
+        }
+        if (pendingSpace) {
+            text.push_back(' ');
+            pendingSpace = false;
+        }
+        text.push_back(byte);
+    }
+    while (!text.empty()
+        && (text.back() == ' ' || text.back() == ';')) {
+        text.pop_back();
+    }
+    return text;
 }
 
 [[nodiscard]] bool IsValidDebugSessionToken(std::wstring_view token) noexcept
@@ -311,6 +387,162 @@ struct ProducerRecord final {
 } // namespace
 
 struct WindowsDebugServer::Impl final {
+    struct StateDescriptor final {
+        std::string name;
+        ValueRefId reference{};
+        ValueType type{ValueType::State};
+    };
+
+    [[nodiscard]] static std::uint64_t EncodeStateBits(
+        const debug::DebugValue& value) noexcept
+    {
+        switch (value.type) {
+        case ValueType::State:
+            return value.stateValue ? 1U : 0U;
+        case ValueType::Number:
+            return std::bit_cast<std::uint64_t>(value.numberValue);
+        case ValueType::Duration:
+            return std::bit_cast<std::uint64_t>(
+                value.durationValue.nanoseconds);
+        }
+        return 0U;
+    }
+
+    [[nodiscard]] debug::DebugValue ReadStateValue(
+        std::size_t index) const noexcept
+    {
+        debug::DebugValue value{};
+        if (index >= stateDescriptors.size() || stateBits == nullptr) {
+            return value;
+        }
+        value.type = stateDescriptors[index].type;
+        const std::uint64_t bits = stateBits[index].load(
+            std::memory_order_acquire);
+        switch (value.type) {
+        case ValueType::State:
+            value.stateValue = bits != 0U;
+            break;
+        case ValueType::Number:
+            value.numberValue = std::bit_cast<double>(bits);
+            break;
+        case ValueType::Duration:
+            value.durationValue.nanoseconds = std::bit_cast<std::int64_t>(bits);
+            break;
+        }
+        return value;
+    }
+
+    [[nodiscard]] std::uint32_t StateIndex(
+        const RuntimeDebugValue& value) const noexcept
+    {
+        if (!value.reference.IsValid()) {
+            return value.type == ValueType::State ? 0U : kInvalidProgramIndex;
+        }
+        return value.reference.value < valueRefStateIndices.size()
+            ? valueRefStateIndices[value.reference.value]
+            : kInvalidProgramIndex;
+    }
+
+    [[nodiscard]] debug::DebugValue ProtocolValue(
+        const RuntimeDebugValue& source) const noexcept
+    {
+        debug::DebugValue value{};
+        value.type = source.type;
+        value.stateValue = source.stateValue;
+        value.numberValue = source.numberValue;
+        value.durationValue = source.durationValue;
+        return value;
+    }
+
+    [[nodiscard]] bool UpdateState(const RuntimeDebugValue& value) noexcept
+    {
+        const std::uint32_t index = StateIndex(value);
+        if (index == kInvalidProgramIndex
+            || index >= stateDescriptors.size()
+            || stateDescriptors[index].type != value.type
+            || stateBits == nullptr) {
+            return false;
+        }
+        stateBits[index].store(
+            EncodeStateBits(ProtocolValue(value)),
+            std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] bool InitializeState()
+    {
+        if (program == nullptr) {
+            return false;
+        }
+        stateDescriptors.clear();
+        valueRefStateIndices.assign(
+            program->ValueRefs().size(),
+            kInvalidProgramIndex);
+        stateDescriptors.push_back({"PAUSE", {}, ValueType::State});
+        for (const VariableDebugRecord& variable : program->DebugInfo().variables) {
+            if (!variable.name.IsValid()
+                || variable.name.value >= program->Strings().size()
+                || !variable.value.IsValid()
+                || variable.value.value >= program->ValueRefs().size()) {
+                return false;
+            }
+            const ValueRef& value = program->ValueRefs()[variable.value.value];
+            const std::uint32_t index = static_cast<std::uint32_t>(
+                stateDescriptors.size());
+            stateDescriptors.push_back({
+                program->Strings()[variable.name.value],
+                variable.value,
+                value.type});
+            valueRefStateIndices[variable.value.value] = index;
+        }
+        stateBits = std::make_unique<std::atomic<std::uint64_t>[]>(
+            stateDescriptors.size());
+        stateBits[0].store(1U, std::memory_order_relaxed);
+        for (std::size_t index = 1U; index < stateDescriptors.size(); ++index) {
+            const ValueRef& value = program->ValueRefs()[
+                stateDescriptors[index].reference.value];
+            debug::DebugValue initial{};
+            initial.type = value.type;
+            if (value.domain == ValueDomain::UserState
+                && value.index < program->UserValues().initialStates.size()) {
+                initial.stateValue =
+                    program->UserValues().initialStates[value.index] != 0U;
+            } else if (value.domain == ValueDomain::UserNumber
+                && value.index < program->UserValues().initialNumbers.size()) {
+                initial.numberValue =
+                    program->UserValues().initialNumbers[value.index];
+            } else if (value.domain == ValueDomain::UserDuration
+                && value.index < program->UserValues().initialDurations.size()) {
+                initial.durationValue =
+                    program->UserValues().initialDurations[value.index];
+            } else {
+                return false;
+            }
+            stateBits[index].store(
+                EncodeStateBits(initial),
+                std::memory_order_relaxed);
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool PopulateStateSnapshot(
+        std::vector<debug::DebugNamedValue>& values) const
+    {
+        try {
+            values.clear();
+            values.reserve(stateDescriptors.size());
+            for (std::size_t index = 0U; index < stateDescriptors.size(); ++index) {
+                values.push_back({
+                    stateDescriptors[index].name,
+                    ReadStateValue(index)});
+            }
+            return true;
+        } catch (...) {
+            values.clear();
+            return false;
+        }
+    }
+
     [[nodiscard]] std::int64_t CaptureTimeNanoseconds() const noexcept
     {
         LARGE_INTEGER counter{};
@@ -421,6 +653,27 @@ struct WindowsDebugServer::Impl final {
         payload.eventTransition = event.eventKey.transition;
         payload.eventControl = program->Controls()[event.eventKey.control.value];
         const CompiledRule& rule = program->Rules()[event.ruleIndex];
+        const auto debugRules = program->DebugInfo().rules;
+        const auto debugRule = std::find_if(
+            debugRules.begin(),
+            debugRules.end(),
+            [&rule](const RuleDebugRecord& candidate) noexcept {
+                return candidate.sourceOrdinal == rule.sourceOrdinal;
+            });
+        const auto readText = [this](StringId text) {
+            return text.IsValid() && text.value < program->Strings().size()
+                ? NormalizeDebugText(program->Strings()[text.value])
+                : std::string{};
+        };
+        payload.conditionText = debugRule != debugRules.end()
+            ? readText(debugRule->conditionText)
+            : std::string{};
+        if (payload.conditionText.empty()) {
+            payload.conditionText = "always";
+        }
+        payload.actionText = debugRule != debugRules.end()
+            ? readText(debugRule->actionText)
+            : std::string{};
         if (rule.condition.IsValid()) {
             if (rule.condition.value >= program->Expressions().size()) {
                 return false;
@@ -435,6 +688,16 @@ struct WindowsDebugServer::Impl final {
                 range.begin,
                 range.count);
             payload.conditionInstructions.assign(code.begin(), code.end());
+        }
+        if (rule.kind == RuleKind::MappingDown) {
+            payload.actionInstructions.push_back({
+                ActionOpcode::End,
+                0U,
+                0U});
+            if (payload.actionText.empty()) {
+                payload.actionText = "mapping";
+            }
+            return true;
         }
         if (!rule.action.IsValid()
             || rule.action.value >= program->ActionPrograms().size()) {
@@ -489,6 +752,20 @@ struct WindowsDebugServer::Impl final {
             message.executionEnded.result = event.result;
             return WriteMessage(pipe, message);
         }
+        if (event.kind == RuntimeDebugEventKind::StateChanged) {
+            const std::uint32_t valueIndex = StateIndex(event.value);
+            if (valueIndex == kInvalidProgramIndex) {
+                return false;
+            }
+            debug::Message message = MakeMessage(
+                debug::MessageKind::StateChanged,
+                record.captureEpoch,
+                record.captureTimeNanoseconds,
+                protocolSequence);
+            message.stateChanged.valueIndex = valueIndex;
+            message.stateChanged.value = ProtocolValue(event.value);
+            return WriteMessage(pipe, message);
+        }
         debug::Message message = MakeMessage(
             debug::MessageKind::RuntimeIssue,
             record.captureEpoch,
@@ -541,6 +818,9 @@ struct WindowsDebugServer::Impl final {
                 protocolSequence);
             message.captureStarted.captureUnixTimeMilliseconds =
                 record.captureUnixTimeMilliseconds;
+            if (!PopulateStateSnapshot(message.captureStarted.values)) {
+                return false;
+            }
             return WriteMessage(pipe, message);
         }
         if (record.captureEpoch != writerEpoch) {
@@ -709,6 +989,9 @@ struct WindowsDebugServer::Impl final {
 
     std::wstring pipeName;
     std::shared_ptr<const CompiledProgram> program;
+    std::vector<StateDescriptor> stateDescriptors;
+    std::vector<std::uint32_t> valueRefStateIndices;
+    std::unique_ptr<std::atomic<std::uint64_t>[]> stateBits;
     DebugServerCallbacks callbacks{};
     std::uint64_t targetSessionId{};
     std::int64_t performanceFrequency{1};
@@ -768,6 +1051,17 @@ bool WindowsDebugServer::Start(
     impl_->pipeName = MakeDebugPipeName(GetCurrentProcessId(), token);
     impl_->program = std::move(program);
     impl_->callbacks = callbacks;
+    try {
+        if (!impl_->InitializeState()) {
+            errorMessage = L"Cannot initialize input debug variable state.";
+            Stop();
+            return false;
+        }
+    } catch (...) {
+        errorMessage = L"Cannot allocate input debug variable state.";
+        Stop();
+        return false;
+    }
     LARGE_INTEGER frequency{};
     if (QueryPerformanceFrequency(&frequency) != FALSE
         && frequency.QuadPart > 0) {
@@ -847,6 +1141,9 @@ void WindowsDebugServer::Stop() noexcept
         impl_->connectionStopEvent = nullptr;
     }
     impl_->program.reset();
+    impl_->stateDescriptors.clear();
+    impl_->valueRefStateIndices.clear();
+    impl_->stateBits.reset();
 }
 
 DebugCaptureRequest WindowsDebugServer::TakeCaptureRequest() noexcept
@@ -963,13 +1260,19 @@ bool WindowsDebugServer::PublishInput(
 
 bool WindowsDebugServer::Publish(const RuntimeDebugEvent& event) noexcept
 {
+    if (event.kind == RuntimeDebugEventKind::StateChanged
+        && !impl_->UpdateState(event.value)) {
+        return false;
+    }
     if (!impl_->captureReady.load(std::memory_order_acquire)
         || !impl_->captureActive.load(std::memory_order_acquire)) {
-        return false;
+        return event.kind == RuntimeDebugEventKind::StateChanged;
     }
     const std::uint64_t activeEpoch = impl_->captureEpoch.load(
         std::memory_order_acquire);
-    const std::uint64_t eventEpoch = event.kind == RuntimeDebugEventKind::RuntimeIssue
+    const std::uint64_t eventEpoch =
+        (event.kind == RuntimeDebugEventKind::RuntimeIssue
+            || event.kind == RuntimeDebugEventKind::StateChanged)
         && event.captureEpoch == 0U
         ? activeEpoch
         : event.captureEpoch;

@@ -216,10 +216,45 @@ template <typename Predicate>
     return predicate();
 }
 
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeReadableTapStorage()
+{
+    inputweaver::CompiledProgramStorage storage =
+        inputweaver::test::MakeTapFixtureStorage();
+    storage.strings.push_back("tap(F7)");
+    storage.debugInfo.rules.push_back({
+        0U,
+        inputweaver::StringId{},
+        inputweaver::StringId{1U}});
+    return storage;
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeReadableMappingStorage()
+{
+    inputweaver::CompiledProgramStorage storage =
+        inputweaver::test::MakeMappingFixtureStorage();
+    storage.strings.push_back("F6 -> F7;");
+    storage.strings.push_back("combat");
+    storage.userValues.initialStates.push_back(0U);
+    storage.valueRefs.push_back({
+        inputweaver::ValueDomain::UserState,
+        inputweaver::ValueType::State,
+        0U});
+    storage.debugInfo.variables.push_back({
+        inputweaver::StringId{2U},
+        inputweaver::ValueRefId{0U},
+        {0U, 1U}});
+    storage.debugInfo.rules.push_back({
+        0U,
+        inputweaver::StringId{},
+        inputweaver::StringId{1U}});
+    storage.requirements.stateSlotCount = 1U;
+    return storage;
+}
+
 void TestPipeSession()
 {
     inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
-        inputweaver::test::MakeTapFixtureStorage());
+        MakeReadableTapStorage());
     Check(
         finalized.program != nullptr && finalized.errors.empty(),
         "debug server fixture finalizes");
@@ -350,8 +385,13 @@ void TestPipeSession()
             if (index == 0U) {
                 Check(
                     received.message.captureStarted
-                            .captureUnixTimeMilliseconds > 0,
-                    "capture start includes a wall-clock anchor");
+                            .captureUnixTimeMilliseconds > 0
+                        && received.message.captureStarted.values.size() == 1U
+                        && received.message.captureStarted.values[0].name
+                            == "PAUSE"
+                        && received.message.captureStarted.values[0].value
+                            .stateValue,
+                    "capture start includes wall-clock and PAUSE snapshots");
             }
             if (index == 1U) {
                 Check(
@@ -363,8 +403,11 @@ void TestPipeSession()
             }
             if (index == 2U) {
                 Check(
-                    received.message.ruleMatched.actionInstructions.size() == 2U,
-                    "pipe worker expands the complete compiled action program");
+                    received.message.ruleMatched.conditionText == "always"
+                        && received.message.ruleMatched.actionInstructions.size()
+                            == 2U
+                        && received.message.ruleMatched.actionText == "tap(F7)",
+                    "pipe worker expands readable condition and action data");
             }
             if (index == 4U) {
                 Check(
@@ -450,7 +493,7 @@ void TestPipeSession()
 void TestDebugClientIntegration()
 {
     inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
-        inputweaver::test::MakeTapFixtureStorage());
+        MakeReadableMappingStorage());
     Check(
         finalized.program != nullptr && finalized.errors.empty(),
         "debug client integration fixture finalizes");
@@ -503,9 +546,42 @@ void TestDebugClientIntegration()
             return state->capturing && state->captureTrusted
                 && state->pressedControls.size() == 1U
                 && state->pressedControls[0].origin
-                    == inputweaver::InputOrigin::InitialSample;
+                    == inputweaver::InputOrigin::InitialSample
+                && state->values.size() == 2U
+                && state->values[0].name == "PAUSE"
+                && state->values[0].value.stateValue
+                && state->values[1].name == "combat"
+                && !state->values[1].value.stateValue;
         }),
         "DebugClient derives INIT state from WindowsDebugServer");
+
+    inputweaver::RuntimeDebugEvent changed{};
+    changed.kind = inputweaver::RuntimeDebugEventKind::StateChanged;
+    changed.value.type = inputweaver::ValueType::State;
+    changed.value.stateValue = false;
+    Check(
+        server.Publish(changed),
+        "integration PAUSE update is published");
+    Check(
+        WaitUntil([&] {
+            const auto state = client.ReadState();
+            return state->values.size() == 2U
+                && !state->values[0].value.stateValue;
+        }),
+        "DebugClient applies the PAUSE value update");
+
+    changed.value.reference = inputweaver::ValueRefId{0U};
+    changed.value.stateValue = true;
+    Check(
+        server.Publish(changed),
+        "integration user state update is published");
+    Check(
+        WaitUntil([&] {
+            const auto state = client.ReadState();
+            return state->values.size() == 2U
+                && state->values[1].value.stateValue;
+        }),
+        "DebugClient applies the user state value update");
 
     const auto correlation = server.BeginInput();
     inputweaver::RuntimeDebugEvent matched{};
@@ -546,7 +622,9 @@ void TestDebugClientIntegration()
                     == inputweaver::RuntimeExecutionResult::Cancelled
                 && state->ruleExecutions[0].program != nullptr
                 && state->ruleExecutions[0].program->actionInstructions.size()
-                    == 2U;
+                    == 1U
+                && state->ruleExecutions[0].program->conditionText == "always"
+                && state->ruleExecutions[0].program->actionText == "F6 -> F7";
         }),
         "DebugClient correlates an early RuleMatched from WindowsDebugServer");
 

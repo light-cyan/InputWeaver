@@ -337,10 +337,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        18159453139710324528ULL,
-        11439670662014598197ULL,
-        8107066784753317881ULL,
-        8786148117674884653ULL,
+        11254232855236936778ULL,
+        2383582909433179149ULL,
+        400319365229262681ULL,
+        11912010901273324165ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -471,7 +471,7 @@ void TestWeavecRoundTrips()
         MakeOpcodeCoverageStorage(),
     };
     constexpr std::array<std::uint8_t, 8U> magic{
-        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x01U};
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x02U};
 
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto original = FinalizeFixture(storages[index], "weavec source fixture");
@@ -503,6 +503,21 @@ void TestWeavecRoundTrips()
                 "weavec round trip preserves the deterministic program dump");
             Check(EncodeWeavec(*decoded.program) == bytes,
                 "weavec round trip reproduces identical bytes");
+        }
+        if (index == 0U) {
+            std::vector<std::uint8_t> version1 = bytes;
+            version1.resize(version1.size() - 4U);
+            version1[7] = 0x01U;
+            WriteLittleEndianU64(
+                version1,
+                8U,
+                static_cast<std::uint64_t>(
+                    version1.size() - kWeavecHeaderSize));
+            const DecodeWeavecResult decodedVersion1 = DecodeWeavec(version1);
+            Check(
+                decodedVersion1.program != nullptr
+                    && !decodedVersion1.decodeError.has_value(),
+                "WEAVEC format 1 remains readable");
         }
     }
 }

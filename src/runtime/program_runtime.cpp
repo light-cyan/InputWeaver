@@ -109,6 +109,8 @@ struct MappingOwner final {
     std::uint64_t generation{};
     MappingId mapping{};
     ControlRefId target{};
+    std::uint64_t debugCaptureEpoch{};
+    std::uint64_t debugExecutionMarker{};
 };
 
 struct WorkItem final {
@@ -615,6 +617,18 @@ struct ProgramRuntime::Impl final {
         std::int64_t deadline = 0,
         std::uint32_t detail = 0U,
         std::uint32_t platformError = 0U) noexcept;
+    void PublishStateChanged(RuntimeDebugValue value) noexcept;
+    [[nodiscard]] std::uint64_t BeginDebugExecution(
+        State& state,
+        const WorkItem& item) noexcept;
+    void PublishDebugActionStarted(
+        std::uint64_t captureEpoch,
+        std::uint64_t executionMarker,
+        std::uint32_t instructionIndex) noexcept;
+    void PublishDebugExecutionEnded(
+        std::uint64_t captureEpoch,
+        std::uint64_t executionMarker,
+        RuntimeExecutionResult result) noexcept;
 
     void CleanupStale(State& state) noexcept;
     void CleanupAfterInvalidation(State& state) noexcept;
@@ -1101,6 +1115,73 @@ void ProgramRuntime::Impl::PublishDiagnostic(
     }
 }
 
+void ProgramRuntime::Impl::PublishStateChanged(RuntimeDebugValue value) noexcept
+{
+    if (debugPort == nullptr) {
+        return;
+    }
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::StateChanged;
+    event.value = value;
+    (void)debugPort->Publish(event);
+}
+
+std::uint64_t ProgramRuntime::Impl::BeginDebugExecution(
+    State& state,
+    const WorkItem& item) noexcept
+{
+    if (debugPort == nullptr
+        || item.debugCaptureEpoch == 0U
+        || item.debugInputSequence == 0U
+        || item.debugRuleIndex == kInvalidProgramIndex) {
+        return 0U;
+    }
+    const std::uint64_t marker = state.scheduler.nextDebugExecutionMarker++;
+    if (marker == 0U) {
+        return 0U;
+    }
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::RuleMatched;
+    event.captureEpoch = item.debugCaptureEpoch;
+    event.executionMarker = marker;
+    event.triggerInputSequence = item.debugInputSequence;
+    event.eventKey = item.debugEventKey;
+    event.ruleIndex = item.debugRuleIndex;
+    return debugPort->Publish(event) ? marker : 0U;
+}
+
+void ProgramRuntime::Impl::PublishDebugActionStarted(
+    std::uint64_t captureEpoch,
+    std::uint64_t executionMarker,
+    std::uint32_t instructionIndex) noexcept
+{
+    if (debugPort == nullptr || captureEpoch == 0U || executionMarker == 0U) {
+        return;
+    }
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::ActionStarted;
+    event.captureEpoch = captureEpoch;
+    event.executionMarker = executionMarker;
+    event.instructionIndex = instructionIndex;
+    (void)debugPort->Publish(event);
+}
+
+void ProgramRuntime::Impl::PublishDebugExecutionEnded(
+    std::uint64_t captureEpoch,
+    std::uint64_t executionMarker,
+    RuntimeExecutionResult result) noexcept
+{
+    if (debugPort == nullptr || captureEpoch == 0U || executionMarker == 0U) {
+        return;
+    }
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::ExecutionEnded;
+    event.captureEpoch = captureEpoch;
+    event.executionMarker = executionMarker;
+    event.result = result;
+    (void)debugPort->Publish(event);
+}
+
 void ProgramRuntime::Impl::Invalidate(
     State& state,
     RuntimeCancellationReason reason) noexcept
@@ -1320,6 +1401,10 @@ InputDecision ProgramRuntime::Impl::HandleInput(
                 state->mutableState.pauseOn = !state->mutableState.pauseOn;
             }
             if (before != state->mutableState.pauseOn) {
+                PublishStateChanged({
+                    {},
+                    ValueType::State,
+                    state->mutableState.pauseOn});
                 Invalidate(*state, RuntimeCancellationReason::Pause);
             }
             if (rule.delivery == Delivery::Consume) {
@@ -1526,7 +1611,9 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                 const std::uint32_t mappingSlot = mapping.slot.value;
                 if (state.dispatch.activeMappings[mappingSlot].load(
                         std::memory_order_acquire) == kInvalidProgramIndex) {
-                    state.dispatch.transactionScratch[scratchCount++] = {
+                    WorkItem& item =
+                        state.dispatch.transactionScratch[scratchCount++];
+                    item = {
                         WorkKind::MappingAcquire,
                         transactionGeneration,
                         kInvalidTaskSlot,
@@ -1534,6 +1621,11 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
                         rule.mapping,
                         mapping.slot,
                         mapping.target};
+                    item.debugCaptureEpoch = debugCaptureEpoch;
+                    item.debugInputSequence = debugInputSequence;
+                    item.debugEventKey = key;
+                    item.debugRuleIndex = bucket->rules.begin
+                        + static_cast<std::uint32_t>(ruleOffset);
                     mappingActivationSlot = mappingSlot;
                     mappingActivationId = rule.mapping.value;
                 }
@@ -2042,8 +2134,14 @@ void ProgramRuntime::Impl::ProcessMappingWork(
             if (!ReleaseGlobal(state, owner.target, 1U)) {
                 return;
             }
+            PublishDebugExecutionEnded(
+                owner.debugCaptureEpoch,
+                owner.debugExecutionMarker,
+                RuntimeExecutionResult::Cancelled);
             owner = {};
         }
+        const std::uint64_t debugMarker = BeginDebugExecution(state, item);
+        PublishDebugActionStarted(item.debugCaptureEpoch, debugMarker, 0U);
         bool rateExceeded = false;
         if (AcquireGlobal(
                 state,
@@ -2055,6 +2153,8 @@ void ProgramRuntime::Impl::ProcessMappingWork(
             owner.generation = item.generation;
             owner.mapping = item.mapping;
             owner.target = item.control;
+            owner.debugCaptureEpoch = item.debugCaptureEpoch;
+            owner.debugExecutionMarker = debugMarker;
         } else if (rateExceeded) {
             state.dispatch.activeMappings[item.mappingSlot.value].store(
                 kInvalidProgramIndex,
@@ -2067,6 +2167,15 @@ void ProgramRuntime::Impl::ProcessMappingWork(
                 0U,
                 0,
                 0U);
+            PublishDebugExecutionEnded(
+                item.debugCaptureEpoch,
+                debugMarker,
+                RuntimeExecutionResult::Failed);
+        } else {
+            PublishDebugExecutionEnded(
+                item.debugCaptureEpoch,
+                debugMarker,
+                RuntimeExecutionResult::Failed);
         }
         return;
     }
@@ -2085,6 +2194,10 @@ void ProgramRuntime::Impl::ProcessMappingWork(
                     kInvalidProgramIndex,
                     std::memory_order_release);
                 if (ReleaseGlobal(state, owner.target, 1U)) {
+                    PublishDebugExecutionEnded(
+                        owner.debugCaptureEpoch,
+                        owner.debugExecutionMarker,
+                        RuntimeExecutionResult::Cancelled);
                     owner = {};
                 }
                 PublishDiagnostic(
@@ -2101,7 +2214,18 @@ void ProgramRuntime::Impl::ProcessMappingWork(
     }
     if (item.kind == WorkKind::MappingRelease && owner.owned) {
         if (ReleaseGlobal(state, owner.target, 1U)) {
+            PublishDebugExecutionEnded(
+                owner.debugCaptureEpoch,
+                owner.debugExecutionMarker,
+                RuntimeExecutionResult::Completed);
             owner = {};
+        } else {
+            PublishDebugExecutionEnded(
+                owner.debugCaptureEpoch,
+                owner.debugExecutionMarker,
+                RuntimeExecutionResult::Failed);
+            owner.debugCaptureEpoch = 0U;
+            owner.debugExecutionMarker = 0U;
         }
     }
 }
@@ -2113,6 +2237,10 @@ void ProgramRuntime::Impl::CleanupMappingOwners(State& state) noexcept
             continue;
         }
         if (ReleaseGlobal(state, owner.target, 1U)) {
+            PublishDebugExecutionEnded(
+                owner.debugCaptureEpoch,
+                owner.debugExecutionMarker,
+                RuntimeExecutionResult::Cancelled);
             owner = {};
         }
     }
@@ -2209,6 +2337,10 @@ void ProgramRuntime::Impl::CleanupStale(State& state) noexcept
             continue;
         }
         if (ReleaseGlobal(state, owner.target, 1U)) {
+            PublishDebugExecutionEnded(
+                owner.debugCaptureEpoch,
+                owner.debugExecutionMarker,
+                RuntimeExecutionResult::Cancelled);
             owner = {};
         }
     }
@@ -2258,25 +2390,10 @@ void ProgramRuntime::Impl::DrainWork(State& state) noexcept
                     std::memory_order_relaxed);
                 continue;
             }
-            if (debugPort != nullptr
-                && item.debugCaptureEpoch != 0U
-                && item.debugInputSequence != 0U
-                && item.debugRuleIndex != kInvalidProgramIndex) {
-                const std::uint64_t marker =
-                    state.scheduler.nextDebugExecutionMarker++;
-                if (marker != 0U) {
-                    RuntimeDebugEvent event{};
-                    event.kind = RuntimeDebugEventKind::RuleMatched;
-                    event.captureEpoch = item.debugCaptureEpoch;
-                    event.executionMarker = marker;
-                    event.triggerInputSequence = item.debugInputSequence;
-                    event.eventKey = item.debugEventKey;
-                    event.ruleIndex = item.debugRuleIndex;
-                    if (debugPort->Publish(event)) {
-                        task.debugCaptureEpoch = item.debugCaptureEpoch;
-                        task.debugExecutionMarker = marker;
-                    }
-                }
+            const std::uint64_t marker = BeginDebugExecution(state, item);
+            if (marker != 0U) {
+                task.debugCaptureEpoch = item.debugCaptureEpoch;
+                task.debugExecutionMarker = marker;
             }
             task.readyOrder = state.scheduler.nextReadyOrder++;
             task.status.store(TaskStatus::Ready, std::memory_order_release);
@@ -2420,16 +2537,30 @@ bool ProgramRuntime::Impl::ExecuteSet(
     if (target.domain == ValueDomain::UserState
         && result.value.type == ExpressionType::State) {
         state.mutableState.userStates[target.index] = result.value.stateValue;
+        PublishStateChanged({
+            ValueRefId{instruction.operand0},
+            ValueType::State,
+            result.value.stateValue != 0U});
         return true;
     }
     if (target.domain == ValueDomain::UserNumber
         && result.value.type == ExpressionType::Number) {
         state.mutableState.userNumbers[target.index] = result.value.numberValue;
+        RuntimeDebugValue value{};
+        value.reference = ValueRefId{instruction.operand0};
+        value.type = ValueType::Number;
+        value.numberValue = result.value.numberValue;
+        PublishStateChanged(value);
         return true;
     }
     if (target.domain == ValueDomain::UserDuration
         && result.value.type == ExpressionType::Duration) {
         state.mutableState.userDurations[target.index] = result.value.durationValue;
+        RuntimeDebugValue value{};
+        value.reference = ValueRefId{instruction.operand0};
+        value.type = ValueType::Duration;
+        value.durationValue = result.value.durationValue;
+        PublishStateChanged(value);
         return true;
     }
     return false;
@@ -2453,6 +2584,10 @@ bool ProgramRuntime::Impl::ExecuteToggle(
     std::unique_lock variableLock(state.mutableState.variableMutex);
     std::uint8_t& value = state.mutableState.userStates[target.index];
     value = value == 0U ? 1U : 0U;
+    PublishStateChanged({
+        ValueRefId{instruction.operand0},
+        ValueType::State,
+        value != 0U});
     (void)instructionPosition;
     return true;
 }

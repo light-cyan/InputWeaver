@@ -232,6 +232,9 @@ void TestOriginsAndPressedState()
     message.ruleMatched.triggerInputSequence = triggerInputSequence;
     message.ruleMatched.eventTransition = inputweaver::EventTransition::Down;
     message.ruleMatched.eventControl = {1U, 7U, 4U, 0U};
+    message.ruleMatched.conditionText = "combat[on]";
+    message.ruleMatched.actionText =
+        "wait(10ms) wait(20ms) wait(30ms) wait(40ms)";
     message.ruleMatched.conditionInstructions.push_back({
         inputweaver::ExpressionOpcode::PushBoolean,
         inputweaver::ExpressionType::Boolean,
@@ -364,9 +367,12 @@ void TestRuleCorrelationAndInterleaving()
             && first->triggerInput.captureTimeNanoseconds == 12'000'000
             && first->triggerInput.captureUnixTimeMilliseconds
                 == 1'725'000'000'011LL
+            && first->program->conditionText == "combat[on]"
+            && first->program->actionText
+                == "wait(10ms) wait(20ms) wait(30ms) wait(40ms)"
             && first->program->conditionInstructions.size() == 1U
             && first->program->actionInstructions.size() == 5U,
-        "execution keeps display times, condition, and complete action program");
+        "execution keeps display times and readable condition and action data");
     Check(
         first != nullptr && !first->currentInstructionIndex.has_value()
             && first->recentInstructionIndices
@@ -569,6 +575,59 @@ void TestStrictValidationAndCapacity()
         "corrupt frame invalidates current state");
 }
 
+void TestValueState()
+{
+    inputweaver::debug::DebugStateReducer reducer;
+    reducer.Connected(17U);
+    reducer.CaptureRequested();
+    auto started = MakeMessage(
+        inputweaver::debug::MessageKind::CaptureStarted,
+        1U);
+    started.captureStarted.values = {
+        {"PAUSE", {inputweaver::ValueType::State, true, 0.0, {}}},
+        {"combat", {inputweaver::ValueType::State, false, 0.0, {}}},
+        {"count", {inputweaver::ValueType::Number, false, 1.0, {}}},
+    };
+    Check(
+        reducer.Accept(started)
+            == inputweaver::debug::DebugReductionAction::None,
+        "capture accepts its complete value snapshot");
+    auto state = reducer.ReadState();
+    Check(
+        state->values.size() == 3U
+            && state->values[0].name == "PAUSE"
+            && state->values[0].value.stateValue
+            && state->values[1].name == "combat"
+            && !state->values[1].value.stateValue
+            && state->values[2].value.numberValue == 1.0,
+        "value names, types, and initial values enter derived state");
+
+    auto changed = MakeMessage(
+        inputweaver::debug::MessageKind::StateChanged,
+        2U);
+    changed.stateChanged.valueIndex = 1U;
+    changed.stateChanged.value = {
+        inputweaver::ValueType::State,
+        true,
+        0.0,
+        {}};
+    Check(
+        reducer.Accept(changed)
+            == inputweaver::debug::DebugReductionAction::None,
+        "matching value update is accepted");
+    state = reducer.ReadState();
+    Check(
+        state->values[1].value.stateValue,
+        "value update is published in derived state");
+
+    changed.header.protocolSequence = 3U;
+    changed.stateChanged.value.type = inputweaver::ValueType::Number;
+    Check(
+        reducer.Accept(changed)
+            == inputweaver::debug::DebugReductionAction::RestartCapture,
+        "value type drift requests a fresh capture");
+}
+
 } // namespace
 
 int main()
@@ -577,6 +636,7 @@ int main()
     TestRuleCorrelationAndInterleaving();
     TestIssuesAndRecovery();
     TestStrictValidationAndCapacity();
+    TestValueState();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " debug client test(s) failed.\n";
         return 1;

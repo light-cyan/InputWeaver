@@ -1,31 +1,8 @@
 #include "runtime_cli.hpp"
 
-#include <charconv>
 #include <ostream>
-#include <system_error>
 
 namespace inputweaver::ui::cli {
-namespace {
-
-[[nodiscard]] bool ParseProcessId(
-    const std::filesystem::path& argument,
-    std::uint32_t& processId)
-{
-    const std::string text = argument.string();
-    std::uint32_t parsed{};
-    const auto result = std::from_chars(
-        text.data(),
-        text.data() + text.size(),
-        parsed);
-    if (result.ec != std::errc{} || result.ptr != text.data() + text.size()
-        || parsed == 0U) {
-        return false;
-    }
-    processId = parsed;
-    return true;
-}
-
-} // namespace
 
 void PrintRuntimeUsage(std::ostream& output) {
     output
@@ -34,7 +11,7 @@ void PrintRuntimeUsage(std::ostream& output) {
         << "Usage:\n"
         << "  InputWeaver --program <file.weavec>"
            " [--target <exe-name-or-absolute-path> | --target-global]"
-           " [--exclude-process <pid>]"
+           " [--exclude-process <pid-or-exe-name-or-absolute-path>]"
            " [--allow-exec] [--dry-run] [--log <jsonl-path>] [--trace-input]"
            " [--debug-session <opaque-token>]\n\n"
         << "The command-line target overrides the compiled TARGET declaration.\n"
@@ -62,13 +39,11 @@ bool ParseRuntimeCommandLine(
             options.targetGlobal = true;
         } else if (argument == std::filesystem::path{"--exclude-process"}) {
             ++index;
-            if (index >= arguments.size()
-                || !ParseProcessId(
-                    arguments[index],
-                    options.excludedProcessId)) {
-                errorMessage = "--exclude-process requires a nonzero decimal PID.";
+            if (index >= arguments.size() || arguments[index].empty()) {
+                errorMessage = "--exclude-process requires a PID, executable name, or absolute path.";
                 return false;
             }
+            options.excludedProcessSelector = arguments[index];
         } else if (argument == std::filesystem::path{"--program"}) {
             ++index;
             if (index >= arguments.size() || arguments[index].empty()) {

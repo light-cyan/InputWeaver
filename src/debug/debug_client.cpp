@@ -93,6 +93,7 @@ struct DebugStateReducer::Impl final {
         state.captureEpoch = 0U;
         state.recentInputEvents.clear();
         state.pressedControls.clear();
+        state.values.clear();
         state.ruleExecutions.clear();
         state.runtimeIssues.clear();
         pendingExecutions.clear();
@@ -310,7 +311,8 @@ struct DebugStateReducer::Impl final {
             return Recover(DebugClientFault::CaptureEpochMismatch);
         }
         if (message.header.captureTimeNanoseconds < 0
-            || message.captureStarted.captureUnixTimeMilliseconds <= 0) {
+            || message.captureStarted.captureUnixTimeMilliseconds <= 0
+            || message.captureStarted.values.size() > capacities.maximumValues) {
             return Recover(DebugClientFault::InconsistentState);
         }
         ClearCapture();
@@ -318,6 +320,10 @@ struct DebugStateReducer::Impl final {
         captureStartUnixTimeMilliseconds =
             message.captureStarted.captureUnixTimeMilliseconds;
         state.captureEpoch = message.header.captureEpoch;
+        state.values.reserve(message.captureStarted.values.size());
+        for (const DebugNamedValue& value : message.captureStarted.values) {
+            state.values.push_back({value.name, value.value});
+        }
         state.capturing = true;
         state.captureTrusted = true;
         state.lastFault = DebugClientFault::None;
@@ -447,6 +453,8 @@ struct DebugStateReducer::Impl final {
             program = std::make_shared<DebugRuleProgram>();
             program->eventTransition = matched.eventTransition;
             program->eventControl = matched.eventControl;
+            program->conditionText = matched.conditionText;
+            program->actionText = matched.actionText;
             program->conditionInstructions = matched.conditionInstructions;
             program->actionInstructions = matched.actionInstructions;
         } catch (...) {
@@ -577,6 +585,20 @@ struct DebugStateReducer::Impl final {
         return DebugReductionAction::None;
     }
 
+    [[nodiscard]] DebugReductionAction AcceptStateChanged(
+        const Message& message)
+    {
+        const StateChangedPayload& changed = message.stateChanged;
+        if (changed.valueIndex >= state.values.size()
+            || state.values[changed.valueIndex].value.type
+                != changed.value.type) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
+        state.values[changed.valueIndex].value = changed.value;
+        Publish();
+        return DebugReductionAction::None;
+    }
+
     [[nodiscard]] DebugReductionAction Accept(const Message& message)
     {
         if (!state.connected) {
@@ -630,6 +652,8 @@ struct DebugStateReducer::Impl final {
             return AcceptExecutionEnded(message);
         case MessageKind::RuntimeIssue:
             return AcceptRuntimeIssue(message);
+        case MessageKind::StateChanged:
+            return AcceptStateChanged(message);
         case MessageKind::Hello:
         case MessageKind::HelloAccepted:
         case MessageKind::StartCapture:

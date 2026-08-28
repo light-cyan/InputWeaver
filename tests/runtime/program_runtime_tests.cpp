@@ -986,6 +986,45 @@ void TestExpressionVm()
     return storage;
 }
 
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeConditionalArrowFixtureStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.strings.push_back("a");
+    storage.userValues.initialNumbers = {5.0};
+    storage.valueRefs = {{ValueDomain::UserNumber, ValueType::Number, 0U}};
+    storage.debugInfo.variables = {{StringId{1U}, ValueRefId{0U}, source}};
+    storage.numberConstants = {5.0};
+    AppendExpression(storage, ExpressionType::Boolean, 2U, {
+        {ExpressionOpcode::LoadValue, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::NumberLess), 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    AppendExpression(storage, ExpressionType::Boolean, 2U, {
+        {ExpressionOpcode::LoadValue, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::NumberGreaterEqual), 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    storage.debugInfo.expressionInstructionSpans.assign(
+        storage.expressionCode.size(), source);
+    storage.rules = {
+        {ExpressionId{1U}, ActionProgramId{}, MappingId{}, Delivery::Observe,
+            MatchFlow::Stop, RuleKind::Event, 0U, source},
+        {ExpressionId{2U}, ActionProgramId{0U}, MappingId{}, Delivery::Observe,
+            MatchFlow::Stop, RuleKind::Event, 1U, source},
+    };
+    storage.eventBuckets = {
+        {{ControlRefId{1U}, EventTransition::Down}, {0U, 2U}},
+    };
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
 void TestArrowFlowAndOverlappingOwnership()
 {
     RuntimeHarness harness;
@@ -1019,6 +1058,22 @@ void TestArrowFlowAndOverlappingOwnership()
     Check(
         harness.runtime.Metrics().startedTasks == 2U,
         "empty action rule does not allocate a task");
+
+    RuntimeHarness conditional;
+    const auto conditionalProgram = Finalize(MakeConditionalArrowFixtureStorage());
+    Check(
+        conditional.runtime.Activate(conditionalProgram).activated,
+        "conditional arrow fixture activates");
+    Check(
+        conditional.runtime.HandleInput(KeyboardEvent(
+            TriggerControl(*conditionalProgram), inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Forward,
+        "an observe-stop match forwards the event");
+    (void)conditional.runtime.Pump();
+    Check(
+        conditional.runtime.Metrics().startedTasks == 1U
+            && conditional.output.requests.size() == 1U,
+        "a false stop rule continues to the later greater-equal match");
 }
 
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeActionFixtureStorage()
@@ -1797,6 +1852,84 @@ void TestRuntimeDebugEvents()
                     == inputweaver::RuntimeExecutionResult::Completed,
             "completed task emits one correlated terminal result");
     }
+
+    FakeClock mappingClock;
+    FakeControlPort mappingControls;
+    FakeOutputPort mappingOutput;
+    FakeRoutePort mappingRoute;
+    FakeLauncher mappingLauncher;
+    FakeDebugPort mappingDebug;
+    inputweaver::ProgramRuntime mappingRuntime(
+        {},
+        mappingControls,
+        mappingOutput,
+        mappingRoute,
+        mappingLauncher,
+        mappingClock,
+        &mappingDebug);
+    const auto mappingProgram = Finalize(
+        inputweaver::test::MakeMappingFixtureStorage());
+    Check(
+        mappingRuntime.Activate(mappingProgram).activated,
+        "mapping debug event fixture activates");
+    inputweaver::RuntimeInputEvent mappingDown = KeyboardEvent(
+        TriggerControl(*mappingProgram),
+        inputweaver::Transition::Down);
+    mappingDown.debugCaptureEpoch = 7U;
+    mappingDown.debugInputSequence = 3U;
+    (void)mappingRuntime.HandleInput(mappingDown);
+    (void)mappingRuntime.Pump();
+    inputweaver::RuntimeInputEvent mappingUp = mappingDown;
+    mappingUp.transition = inputweaver::Transition::Up;
+    mappingUp.debugInputSequence = 4U;
+    (void)mappingRuntime.HandleInput(mappingUp);
+    (void)mappingRuntime.Pump();
+    Check(
+        mappingDebug.events.size() == 3U
+            && mappingDebug.events[0].kind
+                == inputweaver::RuntimeDebugEventKind::RuleMatched
+            && mappingDebug.events[0].captureEpoch == 7U
+            && mappingDebug.events[0].triggerInputSequence == 3U
+            && mappingDebug.events[1].kind
+                == inputweaver::RuntimeDebugEventKind::ActionStarted
+            && mappingDebug.events[2].kind
+                == inputweaver::RuntimeDebugEventKind::ExecutionEnded
+            && mappingDebug.events[2].result
+                == inputweaver::RuntimeExecutionResult::Completed,
+        "mapping lifetime emits one correlated debug execution");
+
+    FakeClock pauseClock;
+    FakeControlPort pauseControls;
+    FakeOutputPort pauseOutput;
+    FakeRoutePort pauseRoute;
+    FakeLauncher pauseLauncher;
+    FakeDebugPort pauseDebug;
+    inputweaver::ProgramRuntime pauseRuntime(
+        {},
+        pauseControls,
+        pauseOutput,
+        pauseRoute,
+        pauseLauncher,
+        pauseClock,
+        &pauseDebug);
+    const auto pauseProgram = Finalize(
+        inputweaver::test::MakePauseControlFixtureStorage());
+    Check(
+        pauseRuntime.Activate(pauseProgram).activated,
+        "pause debug event fixture activates");
+    inputweaver::RuntimeInputEvent pauseEvent = KeyboardEvent(
+        TriggerControl(*pauseProgram),
+        inputweaver::Transition::Down);
+    pauseEvent.debugCaptureEpoch = 8U;
+    (void)pauseRuntime.HandleInput(pauseEvent);
+    Check(
+        pauseDebug.events.size() == 1U
+            && pauseDebug.events[0].kind
+                == inputweaver::RuntimeDebugEventKind::StateChanged
+            && !pauseDebug.events[0].value.reference.IsValid()
+            && pauseDebug.events[0].value.type == inputweaver::ValueType::State
+            && !pauseDebug.events[0].value.stateValue,
+        "PAUSE changes publish the current state value");
 
     FakeClock failedClock;
     FakeControlPort failedControls;

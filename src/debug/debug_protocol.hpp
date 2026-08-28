@@ -7,15 +7,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 2U;
+inline constexpr std::uint16_t kProtocolVersion = 3U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugInstructions = 262'144U;
+inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
+inline constexpr std::uint32_t kMaximumDebugTextBytes = 16U * 1024U * 1024U;
 
 enum class MessageKind : std::uint16_t {
     Hello = 1U,
@@ -29,6 +32,7 @@ enum class MessageKind : std::uint16_t {
     ActionStarted = 19U,
     ExecutionEnded = 20U,
     RuntimeIssue = 21U,
+    StateChanged = 22U,
 };
 
 enum class InputDisposition : std::uint8_t {
@@ -61,8 +65,21 @@ struct HelloAcceptedPayload final {
     std::uint32_t processId{};
 };
 
+struct DebugValue final {
+    ValueType type{ValueType::State};
+    bool stateValue{};
+    double numberValue{};
+    DurationValue durationValue{};
+};
+
+struct DebugNamedValue final {
+    std::string name;
+    DebugValue value{};
+};
+
 struct CaptureStartedPayload final {
     std::int64_t captureUnixTimeMilliseconds{};
+    std::vector<DebugNamedValue> values;
 };
 
 struct InputEventPayload final {
@@ -84,6 +101,8 @@ struct RuleMatchedPayload final {
     std::uint64_t triggerInputSequence{};
     EventTransition eventTransition{EventTransition::Down};
     ControlRef eventControl{};
+    std::string conditionText;
+    std::string actionText;
     std::vector<ExpressionInstruction> conditionInstructions;
     std::vector<ActionInstruction> actionInstructions;
 };
@@ -104,6 +123,11 @@ struct RuntimeIssuePayload final {
     std::uint64_t droppedRecords{};
 };
 
+struct StateChangedPayload final {
+    std::uint32_t valueIndex{kInvalidProgramIndex};
+    DebugValue value{};
+};
+
 struct Message final {
     MessageHeader header{};
     HelloPayload hello{};
@@ -114,6 +138,7 @@ struct Message final {
     ActionStartedPayload actionStarted{};
     ExecutionEndedPayload executionEnded{};
     RuntimeIssuePayload runtimeIssue{};
+    StateChangedPayload stateChanged{};
 };
 
 enum class DecodeError : std::uint8_t {

@@ -250,10 +250,75 @@ void RenderLineEditor(
         disposition = "DROP";
         break;
     }
+    std::string transition;
+    switch (event.transition) {
+    case Transition::Down:
+        transition = "down";
+        break;
+    case Transition::Up:
+        transition = "up";
+        break;
+    case Transition::Move:
+        transition = "move";
+        break;
+    case Transition::VerticalWheel:
+        transition = "wheel-v";
+        break;
+    case Transition::HorizontalWheel:
+        transition = "wheel-h";
+        break;
+    }
     std::string text = FormatTime(event.captureUnixTimeMilliseconds) + "  "
         + FixedField(ControlName(event.control), 16U) + "  "
+        + FixedField(transition, 7U) + "  "
         + FixedField(debug::InputOriginLabel(event.origin), 4U) + "  "
         + FixedField(disposition, 4U);
+    if (event.repeatedDown) {
+        text += " REPEAT";
+    }
+    if (event.unmatchedUp) {
+        text += " NO-DOWN";
+    }
+    return text;
+}
+
+[[nodiscard]] std::string ExecutionEventText(
+    const debug::DebugInputEvent& event)
+{
+    std::string transition;
+    switch (event.transition) {
+    case Transition::Down:
+        transition = "down";
+        break;
+    case Transition::Up:
+        transition = "up";
+        break;
+    case Transition::Move:
+        transition = "move";
+        break;
+    case Transition::VerticalWheel:
+        transition = "wheel-v";
+        break;
+    case Transition::HorizontalWheel:
+        transition = "wheel-h";
+        break;
+    }
+    std::string disposition;
+    switch (event.disposition) {
+    case debug::InputDisposition::NotApplicable:
+        disposition = "-";
+        break;
+    case debug::InputDisposition::Forward:
+        disposition = "PASS";
+        break;
+    case debug::InputDisposition::Suppress:
+        disposition = "DROP";
+        break;
+    }
+    std::string text = ControlName(event.control) + ' ' + transition;
+    if (event.disposition != debug::InputDisposition::NotApplicable) {
+        text += " (" + disposition + ')';
+    }
     if (event.repeatedDown) {
         text += " REPEAT";
     }
@@ -333,62 +398,106 @@ void RenderLineEditor(
     return Foreground(colors.executionFailed);
 }
 
-[[nodiscard]] TextStyle InstructionStyle(
-    const debug::DebugRuleExecution& execution,
-    std::uint32_t instructionIndex,
-    const ColorScheme& colors) noexcept
-{
-    if (execution.currentInstructionIndex == instructionIndex) {
-        return Foreground(colors.instructionCurrent);
-    }
-    const auto found = std::find(
-        execution.recentInstructionIndices.begin(),
-        execution.recentInstructionIndices.end(),
-        instructionIndex);
-    if (found == execution.recentInstructionIndices.end()) {
-        return Foreground(colors.text);
-    }
-    const std::size_t position = static_cast<std::size_t>(
-        found - execution.recentInstructionIndices.begin());
-    return Foreground(
-        position == 0U && execution.recentInstructionIndices.size() == 3U
-            ? colors.instructionRecentOldest
-            : colors.instructionRecent);
-}
-
 void AppendInstructionLines(
     std::vector<StyledLine>& lines,
     const debug::DebugRuleExecution& execution,
     std::size_t width,
     const ColorScheme& colors)
 {
-    StyledLine line{{"     ", Foreground(colors.text)}};
-    std::size_t used = 5U;
+    constexpr std::string_view firstPrefix = "  ACT  ";
+    constexpr std::string_view continuationPrefix = "       ";
+    constexpr std::size_t prefixWidth = 7U;
+    const TextStyle executionStyle = ExecutionStyle(execution, colors);
+    StyledLine line{{std::string{firstPrefix}, Foreground(colors.mutedText)}};
+    std::size_t used = prefixWidth;
+    const auto startLine = [&]() {
+        line = {{
+            std::string{continuationPrefix},
+            Foreground(colors.mutedText)}};
+        used = prefixWidth;
+    };
     if (execution.program == nullptr) {
-        line.push_back({"<program unavailable>", Foreground(colors.mutedText)});
+        line.push_back({"<program unavailable>", executionStyle});
         lines.push_back(std::move(line));
         return;
     }
+    if (!execution.program->actionText.empty()) {
+        const std::vector<std::string> wrapped = WrapUtf8(
+            execution.program->actionText,
+            width - prefixWidth);
+        for (std::size_t index = 0U; index < wrapped.size(); ++index) {
+            lines.push_back({
+                {std::string{index == 0U ? firstPrefix : continuationPrefix},
+                 Foreground(colors.mutedText)},
+                {wrapped[index], executionStyle}});
+        }
+        return;
+    }
+    bool appended = false;
     for (std::size_t index = 0U;
          index < execution.program->actionInstructions.size();
          ++index) {
-        const std::string token = ActionText(
-            execution.program->actionInstructions[index]) + ' ';
+        const std::string sourceText = ActionText(
+            execution.program->actionInstructions[index]);
+        const std::string token = sourceText + "  ";
         const std::size_t tokenWidth = Utf8DisplayWidth(token);
-        if (used > 5U && used + tokenWidth > width) {
+        if (used > prefixWidth && used + tokenWidth > width) {
             lines.push_back(std::move(line));
-            line = {{"     ", Foreground(colors.text)}};
-            used = 5U;
+            startLine();
         }
-        line.push_back({
-            token,
-            InstructionStyle(
-                execution,
-                static_cast<std::uint32_t>(index),
-                colors)});
+        if (tokenWidth > width - prefixWidth) {
+            const std::vector<std::string> wrapped = WrapUtf8(
+                sourceText,
+                width - prefixWidth);
+            for (std::size_t part = 0U; part < wrapped.size(); ++part) {
+                if (used > prefixWidth) {
+                    lines.push_back(std::move(line));
+                    startLine();
+                }
+                line.push_back({wrapped[part], executionStyle});
+                used += Utf8DisplayWidth(wrapped[part]);
+                if (part + 1U < wrapped.size()) {
+                    lines.push_back(std::move(line));
+                    startLine();
+                }
+            }
+            appended = true;
+            continue;
+        }
+        line.push_back({token, executionStyle});
         used += tokenWidth;
+        appended = true;
+    }
+    if (!appended) {
+        line.push_back({"<none>", executionStyle});
     }
     lines.push_back(std::move(line));
+}
+
+void AppendConditionLines(
+    std::vector<StyledLine>& lines,
+    const debug::DebugRuleExecution& execution,
+    std::size_t width,
+    const ColorScheme& colors)
+{
+    constexpr std::string_view firstPrefix = "  AS   ";
+    constexpr std::string_view continuationPrefix = "       ";
+    constexpr std::size_t prefixWidth = 7U;
+    const std::string condition = execution.program == nullptr
+        ? "<program unavailable>"
+        : execution.program->conditionText.empty()
+            ? "always"
+            : execution.program->conditionText;
+    const std::vector<std::string> wrapped = WrapUtf8(
+        condition,
+        width - prefixWidth);
+    const TextStyle executionStyle = ExecutionStyle(execution, colors);
+    for (std::size_t index = 0U; index < wrapped.size(); ++index) {
+        lines.push_back({
+            {std::string{index == 0U ? firstPrefix : continuationPrefix},
+             Foreground(colors.mutedText)},
+            {wrapped[index], executionStyle}});
+    }
 }
 
 [[nodiscard]] std::vector<StyledLine> ExecutionLines(
@@ -398,17 +507,75 @@ void AppendInstructionLines(
 {
     std::vector<StyledLine> lines;
     for (const debug::DebugRuleExecution& execution : state.ruleExecutions) {
-        const std::string trigger = EventText(execution.triggerInput);
-        const std::string header = '#'
-            + std::to_string(execution.executionMarker) + "  "
-            + FormatTime(execution.matchedUnixTimeMilliseconds) + "  ["
-            + trigger + ']';
-        for (const std::string& wrapped : WrapUtf8(header, width, 5U)) {
-            lines.push_back({{wrapped, ExecutionStyle(execution, colors)}});
+        const std::string marker = '#'
+            + std::to_string(execution.executionMarker) + "  ";
+        const std::string header = "EVENT "
+            + FormatTime(execution.triggerInput.captureUnixTimeMilliseconds)
+            + "  MATCH "
+            + FormatTime(execution.matchedUnixTimeMilliseconds) + "  "
+            + ExecutionEventText(execution.triggerInput);
+        const std::size_t markerWidth = Utf8DisplayWidth(marker);
+        const std::vector<std::string> wrapped = WrapUtf8(
+            header,
+            width > markerWidth ? width - markerWidth : 1U);
+        for (std::size_t index = 0U; index < wrapped.size(); ++index) {
+            lines.push_back({
+                {index == 0U ? marker : std::string(markerWidth, ' '),
+                 Foreground(colors.mutedText)},
+                {wrapped[index], ExecutionStyle(execution, colors)}});
         }
+        AppendConditionLines(lines, execution, width, colors);
         AppendInstructionLines(lines, execution, width, colors);
     }
     return lines;
+}
+
+[[nodiscard]] std::string DebugValueText(const debug::DebugValue& value)
+{
+    switch (value.type) {
+    case ValueType::State:
+        return value.stateValue ? "on" : "off";
+    case ValueType::Number: {
+        std::ostringstream output;
+        output << std::setprecision(15) << value.numberValue;
+        return output.str();
+    }
+    case ValueType::Duration: {
+        constexpr std::int64_t nanosecondsPerMillisecond = 1'000'000LL;
+        constexpr std::int64_t nanosecondsPerSecond = 1'000LL
+            * nanosecondsPerMillisecond;
+        constexpr std::int64_t nanosecondsPerMinute = 60LL
+            * nanosecondsPerSecond;
+        const std::int64_t nanoseconds = value.durationValue.nanoseconds;
+        if (nanoseconds == 0) {
+            return "0ms";
+        }
+        if (nanoseconds % nanosecondsPerMinute == 0) {
+            return std::to_string(nanoseconds / nanosecondsPerMinute) + "min";
+        }
+        if (nanoseconds % nanosecondsPerSecond == 0) {
+            return std::to_string(nanoseconds / nanosecondsPerSecond) + 's';
+        }
+        if (nanoseconds % nanosecondsPerMillisecond == 0) {
+            return std::to_string(nanoseconds / nanosecondsPerMillisecond) + "ms";
+        }
+        return std::to_string(nanoseconds) + "ns";
+    }
+    }
+    return "?";
+}
+
+[[nodiscard]] std::string DebugPauseText(
+    const debug::DebugClientState* state)
+{
+    if (state != nullptr) {
+        for (const debug::DebugVariableState& value : state->values) {
+            if (value.name == "PAUSE" && value.value.type == ValueType::State) {
+                return DebugValueText(value.value);
+            }
+        }
+    }
+    return "unavailable";
 }
 
 void RenderStyledLine(
@@ -711,7 +878,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         }
         std::string focusKey = debugFocus_ == DebugFocus::Events
             ? "Event"
-            : debugFocus_ == DebugFocus::Pressed ? "Pressed Row" : "Execution";
+            : debugFocus_ == DebugFocus::Pressed ? "State Row" : "Execution";
         headerKeys = {
             "[↑]/[↓] " + focusKey,
             "[PgUp]/[PgDn] Page",
@@ -1045,7 +1212,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             3U,
             1U);
     } else {
-        const std::size_t healthRows = 4U;
+        const debug::DebugClientState* debugState = snapshot_.debugState.get();
+        constexpr std::size_t healthRows = 4U;
         const std::size_t healthY = height - healthRows;
         const std::size_t bodyTop = headerHeight;
         const std::size_t bodyHeight = healthY - bodyTop;
@@ -1075,7 +1243,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             colors_.text);
         canvas.Box(
             {leftWidth, bodyTop, width - leftWidth, topHeight},
-            "PRESSED",
+            "STATE",
             pressedBorder,
             pressedBorder,
             colors_.text);
@@ -1087,7 +1255,6 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             executionBorder,
             colors_.text);
 
-        const debug::DebugClientState* debugState = snapshot_.debugState.get();
         if (debugState != nullptr) {
             const std::size_t eventVisible = topHeight - 2U;
             RenderViewportRows(
@@ -1104,21 +1271,30 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 });
 
             const std::size_t pressedWidth = width - leftWidth - 2U;
-            std::vector<std::string> pressedCells;
+            std::vector<std::string> stateCells;
             std::size_t cellWidth = 1U;
+            for (const debug::DebugVariableState& value : debugState->values) {
+                if (value.name == "PAUSE") {
+                    continue;
+                }
+                std::string cell = '[' + value.name + '='
+                    + DebugValueText(value.value) + ']';
+                cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
+                stateCells.push_back(std::move(cell));
+            }
             for (const debug::DebugPressedControl& pressed
                  : debugState->pressedControls) {
                 std::string cell = '[' + ControlName(pressed.control) + ' '
                     + std::string{debug::InputOriginLabel(pressed.origin)} + ']';
                 cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
-                pressedCells.push_back(std::move(cell));
+                stateCells.push_back(std::move(cell));
             }
             const std::size_t columns = (std::max)(
                 static_cast<std::size_t>(1U),
                 pressedWidth / cellWidth);
-            const std::size_t pressedRows = pressedCells.empty()
+            const std::size_t pressedRows = stateCells.empty()
                 ? 0U
-                : (pressedCells.size() + columns - 1U) / columns;
+                : (stateCells.size() + columns - 1U) / columns;
             const std::size_t pressedVisible = topHeight - 2U;
             RenderViewportRows(
                 pressedViewport_,
@@ -1127,13 +1303,13 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 [&](std::size_t row, std::size_t sourceRow) {
                     for (std::size_t column = 0U; column < columns; ++column) {
                         const std::size_t index = sourceRow * columns + column;
-                        if (index >= pressedCells.size()) {
+                        if (index >= stateCells.size()) {
                             break;
                         }
                         canvas.Text(
                             leftWidth + 1U + column * cellWidth,
                             bodyTop + 1U + row,
-                            pressedCells[index],
+                            stateCells[index],
                             cellWidth,
                             Foreground(colors_.text));
                     }
@@ -1171,7 +1347,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         std::string health1;
         std::string health2;
         if (debugState == nullptr) {
-            health1 = "Disconnected | Not capturing | Untrusted";
+            health1 = "Disconnected | Not capturing | Untrusted | PAUSE=unavailable";
             health2 = "Fault: None | Runtime issues: 0";
         } else {
             health1 += std::string{debugState->connected ? "Connected" : "Disconnected"}
@@ -1184,6 +1360,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             if (debugExecutor != nullptr && debugExecutor->dryRun) {
                 health1 += " | Dry-run";
             }
+            health1 += " | PAUSE=" + DebugPauseText(debugState);
             health2 += "Fault: " + DebugFaultText(debugState->lastFault)
                 + " | Runtime issues: "
                 + std::to_string(debugState->runtimeIssues.size());

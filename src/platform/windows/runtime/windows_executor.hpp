@@ -12,6 +12,7 @@ struct WindowsExecutorOptions final {
     bool allowExec{};
     bool targetGlobal{};
     std::uint32_t excludedProcessId{};
+    std::wstring excludedProcessSelector;
     std::wstring targetSelector;
     std::wstring jsonlPath;
     std::wstring debugSessionToken;

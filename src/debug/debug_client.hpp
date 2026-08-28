@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -90,8 +91,15 @@ struct DebugPressedControl final {
 struct DebugRuleProgram final {
     EventTransition eventTransition{EventTransition::Down};
     ControlRef eventControl{};
+    std::string conditionText;
+    std::string actionText;
     std::vector<ExpressionInstruction> conditionInstructions;
     std::vector<ActionInstruction> actionInstructions;
+};
+
+struct DebugVariableState final {
+    std::string name;
+    DebugValue value{};
 };
 
 struct DebugRuleExecution final {
@@ -122,6 +130,7 @@ struct DebugClientState final {
     DebugClientFault lastFault{DebugClientFault::None};
     std::vector<DebugInputEvent> recentInputEvents;
     std::vector<DebugPressedControl> pressedControls;
+    std::vector<DebugVariableState> values;
     std::vector<DebugRuleExecution> ruleExecutions;
     std::vector<DebugRuntimeIssue> runtimeIssues;
 };
@@ -129,6 +138,7 @@ struct DebugClientState final {
 struct DebugClientCapacities final {
     std::size_t maximumInputEvents{512U};
     std::size_t maximumPressedControls{256U};
+    std::size_t maximumValues{kMaximumDebugValues};
     std::size_t maximumRuleExecutions{256U};
     std::size_t maximumPendingRuleExecutions{256U};
     std::size_t maximumRuntimeIssues{128U};

@@ -63,6 +63,10 @@ void CanonicalizeStrings(CompiledProgramStorage& storage)
     for (auto& variable : storage.debugInfo.variables) {
         RemapId(variable.name, remap);
     }
+    for (auto& rule : storage.debugInfo.rules) {
+        RemapId(rule.conditionText, remap);
+        RemapId(rule.actionText, remap);
+    }
     for (auto& instruction : storage.actionCode) {
         if (instruction.opcode == ActionOpcode::Exec
             && instruction.operand0 < remap.size()) {

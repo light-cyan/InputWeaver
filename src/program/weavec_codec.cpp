@@ -2,6 +2,7 @@
 
 #include "support/little_endian.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -18,7 +19,7 @@
 namespace inputweaver {
 namespace {
 
-constexpr std::array<std::uint8_t, 8U> kWeavecMagic{
+constexpr std::array<std::uint8_t, 8U> kWeavecMagicV1{
     0x57U,
     0x45U,
     0x41U,
@@ -27,6 +28,17 @@ constexpr std::array<std::uint8_t, 8U> kWeavecMagic{
     0x43U,
     0x00U,
     0x01U,
+};
+
+constexpr std::array<std::uint8_t, 8U> kWeavecMagicV2{
+    0x57U,
+    0x45U,
+    0x41U,
+    0x56U,
+    0x45U,
+    0x43U,
+    0x00U,
+    0x02U,
 };
 
 class ByteWriter final {
@@ -606,12 +618,21 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         [](ByteWriter& output, SourceSpan value) {
             WriteSpan(output, value);
         });
+    WriteVector(
+        writer,
+        program.DebugInfo().rules,
+        [](ByteWriter& output, const RuleDebugRecord& value) {
+            output.U32(value.sourceOrdinal);
+            WriteId(output, value.conditionText);
+            WriteId(output, value.actionText);
+        });
 }
 
 [[nodiscard]] bool DecodePayload(
     ByteReader& reader,
     const WeavecDecodeLimits& limits,
-    CompiledProgramStorage& storage)
+    CompiledProgramStorage& storage,
+    std::uint8_t formatVersion)
 {
     if (!ReadSource(reader, storage.source)
         || !ReadSettings(reader, storage.settings)
@@ -841,7 +862,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         return false;
     }
 
-    return ReadVector(
+    if (!ReadVector(
                reader,
                storage.debugInfo.variables,
                limits,
@@ -850,8 +871,8 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
                    return ReadId(input, value.name)
                        && ReadId(input, value.value)
                        && ReadSpan(input, value.declaration);
-               })
-        && ReadVector(
+            })
+        || !ReadVector(
             reader,
             storage.debugInfo.expressionInstructionSpans,
             limits,
@@ -859,14 +880,29 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             [](ByteReader& input, SourceSpan& value) {
                 return ReadSpan(input, value);
             })
-        && ReadVector(
+        || !ReadVector(
             reader,
             storage.debugInfo.actionInstructionSpans,
             limits,
             8U,
             [](ByteReader& input, SourceSpan& value) {
                 return ReadSpan(input, value);
-            });
+            })) {
+        return false;
+    }
+    if (formatVersion == 1U) {
+        return true;
+    }
+    return ReadVector(
+        reader,
+        storage.debugInfo.rules,
+        limits,
+        12U,
+        [](ByteReader& input, RuleDebugRecord& value) {
+            return input.U32(value.sourceOrdinal)
+                && ReadId(input, value.conditionText)
+                && ReadId(input, value.actionText);
+        });
 }
 
 [[nodiscard]] std::uint64_t ReadHeaderPayloadLength(
@@ -883,7 +919,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 std::vector<std::uint8_t> EncodeWeavec(const CompiledProgram& program)
 {
     ByteWriter writer;
-    writer.Raw(kWeavecMagic);
+    writer.Raw(kWeavecMagicV2);
     writer.U64(0U);
     EncodePayload(writer, program);
     const std::uint64_t payloadSize = static_cast<std::uint64_t>(
@@ -904,14 +940,25 @@ DecodeWeavecResult DecodeWeavec(
             "artifact is shorter than the 16-byte header"};
         return result;
     }
-    for (std::size_t index = 0; index < kWeavecMagic.size(); ++index) {
-        if (bytes[index] != kWeavecMagic[index]) {
+    std::uint8_t formatVersion{};
+    if (std::equal(kWeavecMagicV1.begin(), kWeavecMagicV1.end(), bytes.begin())) {
+        formatVersion = 1U;
+    } else if (std::equal(
+                   kWeavecMagicV2.begin(),
+                   kWeavecMagicV2.end(),
+                   bytes.begin())) {
+        formatVersion = 2U;
+    } else {
+        std::size_t mismatch = 0U;
+        while (mismatch < kWeavecMagicV2.size()
+            && bytes[mismatch] == kWeavecMagicV2[mismatch]) {
+            ++mismatch;
+        }
             result.decodeError = WeavecDecodeError{
                 WeavecDecodeErrorCode::InvalidHeader,
-                index,
-                "artifact magic or format version differs from WEAVEC format 1"};
+                mismatch,
+                "artifact magic or format version differs from supported WEAVEC formats"};
             return result;
-        }
     }
 
     const std::uint64_t payloadSize = ReadHeaderPayloadLength(bytes);
@@ -937,7 +984,7 @@ DecodeWeavecResult DecodeWeavec(
             bytes.subspan(kWeavecHeaderSize),
             kWeavecHeaderSize,
             result.decodeError);
-        if (!DecodePayload(reader, limits, storage)) {
+        if (!DecodePayload(reader, limits, storage, formatVersion)) {
             return result;
         }
         if (reader.Remaining() != 0U) {

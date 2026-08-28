@@ -2,7 +2,10 @@
 
 #include "support/little_endian.hpp"
 
+#include <bit>
+#include <cmath>
 #include <limits>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -41,9 +44,22 @@ public:
         U64(static_cast<std::uint64_t>(value));
     }
 
+    void Number(double value)
+    {
+        U64(std::bit_cast<std::uint64_t>(value));
+    }
+
     void Boolean(bool value)
     {
         U8(value ? 1U : 0U);
+    }
+
+    void String(std::string_view value)
+    {
+        U32(static_cast<std::uint32_t>(value.size()));
+        for (const char byte : value) {
+            U8(static_cast<std::uint8_t>(static_cast<unsigned char>(byte)));
+        }
     }
 
 private:
@@ -91,6 +107,16 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool Number(double& value) noexcept
+    {
+        std::uint64_t encoded{};
+        if (!U64(encoded)) {
+            return false;
+        }
+        value = std::bit_cast<double>(encoded);
+        return true;
+    }
+
     [[nodiscard]] bool Boolean(bool& value) noexcept
     {
         std::uint8_t encoded{};
@@ -98,6 +124,21 @@ public:
             return false;
         }
         value = encoded != 0U;
+        return true;
+    }
+
+    [[nodiscard]] bool String(std::string& value)
+    {
+        std::uint32_t size{};
+        if (!U32(size)
+            || size > kMaximumDebugTextBytes
+            || size > Remaining()) {
+            return false;
+        }
+        value.assign(
+            reinterpret_cast<const char*>(bytes_.data() + position_),
+            size);
+        position_ += size;
         return true;
     }
 
@@ -173,6 +214,47 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         && reader.U32(control.qualifier);
 }
 
+[[nodiscard]] bool WriteValue(ByteWriter& writer, const DebugValue& value)
+{
+    WriteEnum(writer, value.type);
+    switch (value.type) {
+    case ValueType::State:
+        writer.Boolean(value.stateValue);
+        return true;
+    case ValueType::Number:
+        if (!std::isfinite(value.numberValue)) {
+            return false;
+        }
+        writer.Number(value.numberValue);
+        return true;
+    case ValueType::Duration:
+        if (value.durationValue.nanoseconds < 0) {
+            return false;
+        }
+        writer.I64(value.durationValue.nanoseconds);
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ReadValue(ByteReader& reader, DebugValue& value)
+{
+    if (!ReadEnum(reader, value.type, static_cast<std::uint16_t>(ValueType::Duration))) {
+        return false;
+    }
+    switch (value.type) {
+    case ValueType::State:
+        return reader.Boolean(value.stateValue);
+    case ValueType::Number:
+        return reader.Number(value.numberValue)
+            && std::isfinite(value.numberValue);
+    case ValueType::Duration:
+        return reader.I64(value.durationValue.nanoseconds)
+            && value.durationValue.nanoseconds >= 0;
+    }
+    return false;
+}
+
 [[nodiscard]] bool EncodePayload(
     const Message& message,
     std::vector<std::uint8_t>& payload)
@@ -192,7 +274,21 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::RequestExecutorStop:
         return true;
     case MessageKind::CaptureStarted:
+        if (message.captureStarted.values.size() > kMaximumDebugValues) {
+            return false;
+        }
         writer.I64(message.captureStarted.captureUnixTimeMilliseconds);
+        writer.U32(static_cast<std::uint32_t>(
+            message.captureStarted.values.size()));
+        for (const DebugNamedValue& value : message.captureStarted.values) {
+            if (value.name.size() > kMaximumDebugTextBytes) {
+                return false;
+            }
+            writer.String(value.name);
+            if (!WriteValue(writer, value.value)) {
+                return false;
+            }
+        }
         return true;
     case MessageKind::InputEvent: {
         const InputEventPayload& input = message.inputEvent;
@@ -212,13 +308,17 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::RuleMatched: {
         const RuleMatchedPayload& matched = message.ruleMatched;
         if (matched.conditionInstructions.size() > kMaximumDebugInstructions
-            || matched.actionInstructions.size() > kMaximumDebugInstructions) {
+            || matched.actionInstructions.size() > kMaximumDebugInstructions
+            || matched.conditionText.size() > kMaximumDebugTextBytes
+            || matched.actionText.size() > kMaximumDebugTextBytes) {
             return false;
         }
         writer.U64(matched.executionMarker);
         writer.U64(matched.triggerInputSequence);
         WriteEnum(writer, matched.eventTransition);
         WriteControl(writer, matched.eventControl);
+        writer.String(matched.conditionText);
+        writer.String(matched.actionText);
         writer.U32(static_cast<std::uint32_t>(
             matched.conditionInstructions.size()));
         for (const ExpressionInstruction& instruction
@@ -256,6 +356,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         writer.U32(message.runtimeIssue.issue.platformError);
         writer.U64(message.runtimeIssue.droppedRecords);
         return true;
+    case MessageKind::StateChanged:
+        writer.U32(message.stateChanged.valueIndex);
+        return WriteValue(writer, message.stateChanged.value);
     }
     return false;
 }
@@ -273,9 +376,22 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
         return true;
-    case MessageKind::CaptureStarted:
-        return reader.I64(
-            message.captureStarted.captureUnixTimeMilliseconds);
+    case MessageKind::CaptureStarted: {
+        if (!reader.I64(message.captureStarted.captureUnixTimeMilliseconds)) {
+            return false;
+        }
+        std::uint32_t valueCount{};
+        if (!reader.U32(valueCount) || valueCount > kMaximumDebugValues) {
+            return false;
+        }
+        message.captureStarted.values.resize(valueCount);
+        for (DebugNamedValue& value : message.captureStarted.values) {
+            if (!reader.String(value.name) || !ReadValue(reader, value.value)) {
+                return false;
+            }
+        }
+        return true;
+    }
     case MessageKind::InputEvent: {
         InputEventPayload& input = message.inputEvent;
         return reader.U64(input.inputSequence)
@@ -295,7 +411,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         if (!reader.U64(matched.executionMarker)
             || !reader.U64(matched.triggerInputSequence)
             || !ReadEnum(reader, matched.eventTransition, 2U)
-            || !ReadControl(reader, matched.eventControl)) {
+            || !ReadControl(reader, matched.eventControl)
+            || !reader.String(matched.conditionText)
+            || !reader.String(matched.actionText)) {
             return false;
         }
         std::uint32_t conditionCount{};
@@ -346,6 +464,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
             && reader.U32(message.runtimeIssue.issue.detail)
             && reader.U32(message.runtimeIssue.issue.platformError)
             && reader.U64(message.runtimeIssue.droppedRecords);
+    case MessageKind::StateChanged:
+        return reader.U32(message.stateChanged.valueIndex)
+            && ReadValue(reader, message.stateChanged.value);
     }
     return false;
 }
@@ -364,6 +485,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::ActionStarted:
     case MessageKind::ExecutionEnded:
     case MessageKind::RuntimeIssue:
+    case MessageKind::StateChanged:
         return true;
     }
     return false;

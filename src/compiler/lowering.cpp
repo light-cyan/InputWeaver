@@ -27,7 +27,8 @@ template <typename Value>
 
 class Lowerer final {
 public:
-    explicit Lowerer(BoundProgram program) : program_(std::move(program)) {}
+    Lowerer(BoundProgram program, std::string_view sourceText)
+        : program_(std::move(program)), sourceText_(sourceText) {}
 
     [[nodiscard]] FinalizeResult Run()
     {
@@ -50,6 +51,17 @@ private:
         std::set<std::uint32_t> acquiredControls;
         std::uint32_t repeatFrameCount{};
     };
+
+    [[nodiscard]] StringId InternSourceText(SourceSpan span)
+    {
+        const std::uint64_t end = static_cast<std::uint64_t>(span.beginByte)
+            + span.byteLength;
+        if (end > sourceText_.size()) {
+            return {};
+        }
+        return InternString(std::string{
+            sourceText_.substr(span.beginByte, span.byteLength)});
+    }
 
     void InitializeStorage()
     {
@@ -375,7 +387,12 @@ private:
                     action.span);
                 break;
             case BoundAction::Kind::Gap:
-                EmitAction(code, ActionOpcode::Gap, 0U, 0U, action.span);
+                EmitAction(
+                    code,
+                    ActionOpcode::Gap,
+                    0U,
+                    0U,
+                    action.span);
                 break;
             case BoundAction::Kind::Set:
                 EmitAction(
@@ -521,6 +538,7 @@ private:
 
     void LowerRules()
     {
+        CompiledProgramStorage& storage = builder_.Storage();
         for (const BoundRule& rule : program_.rules) {
             ExpressionId condition{};
             if (rule.condition != nullptr) {
@@ -545,7 +563,12 @@ private:
                 continue;
             }
             if (rule.kind == BoundRule::Kind::Mapping) {
-                CompiledProgramStorage& storage = builder_.Storage();
+                storage.debugInfo.rules.push_back({
+                    rule.sourceOrdinal,
+                    rule.condition != nullptr
+                        ? InternSourceText(rule.condition->span)
+                        : StringId{},
+                    InternSourceText(rule.sourceSpan)});
                 const MappingSlotId slot = InternMappingSlot(source);
                 const MappingId mapping{AppendIndex(storage.mappings, {
                     slot,
@@ -566,6 +589,12 @@ private:
             if (!rule.actions.empty()) {
                 action = LowerActionProgram(rule.actions, rule.actionFlowSpan);
             }
+            storage.debugInfo.rules.push_back({
+                rule.sourceOrdinal,
+                rule.condition != nullptr
+                    ? InternSourceText(rule.condition->span)
+                    : StringId{},
+                InternSourceText(rule.actionFlowSpan)});
             eventRules_[key].push_back({
                 condition,
                 action,
@@ -577,7 +606,6 @@ private:
                 rule.sourceSpan});
         }
 
-        CompiledProgramStorage& storage = builder_.Storage();
         for (auto& [key, rules] : exitRules_) {
             const std::uint32_t begin = static_cast<std::uint32_t>(
                 storage.exitControlRules.size());
@@ -656,6 +684,7 @@ private:
     }
 
     BoundProgram program_;
+    std::string_view sourceText_;
     CompiledProgramBuilder builder_;
     std::map<std::string, std::uint32_t, std::less<>> strings_;
     std::map<ControlRef, std::uint32_t> controls_;
@@ -670,9 +699,9 @@ private:
 
 } // namespace
 
-FinalizeResult LowerProgram(BoundProgram program)
+FinalizeResult LowerProgram(BoundProgram program, std::string_view sourceText)
 {
-    return Lowerer(std::move(program)).Run();
+    return Lowerer(std::move(program), sourceText).Run();
 }
 
 } // namespace inputweaver::compiler
