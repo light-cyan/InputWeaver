@@ -402,7 +402,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     [[nodiscard]] bool RequiresTargetEligibilityNotifications() const noexcept override
     {
-        return targetContext != nullptr;
+        return targetContext != nullptr || options.excludedProcessId != 0U;
     }
 
     [[nodiscard]] bool HasCapturedInputs() const noexcept override
@@ -626,7 +626,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         try {
             controlCatalog = std::make_unique<win32::WindowsControlCatalog>();
             routePort = std::make_unique<win32::WindowsRuntimeRoutePort>(
-                targetContext);
+                targetContext,
+                options.excludedProcessId);
             processLauncher = std::make_unique<win32::WindowsProcessLauncher>(
                 options.permitProcessLaunch,
                 options.dryRun);
@@ -655,6 +656,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 options.selfTag,
                 *this,
                 targetContext,
+                options.excludedProcessId,
                 stopRequest,
                 shutdownRequested,
                 shutdownEvent,
@@ -734,7 +736,11 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             record.cancelledForGeneration = true;
         } else if (!release && !TargetRouteAllows(item)) {
             record.cancelledForTarget = true;
-            if (targetContext != nullptr && !targetContext->IsTargetAlive()) {
+            if (options.excludedProcessId != 0U
+                && IsProcessForeground(options.excludedProcessId)) {
+                SetTargetEligible(false);
+            } else if (targetContext != nullptr
+                && !targetContext->IsTargetAlive()) {
                 NotifyTargetLostFromOutput();
                 SignalStopOnly();
             } else if (targetContext != nullptr
@@ -756,6 +762,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     [[nodiscard]] bool TargetRouteAllows(
         const WindowsOutputItem& item) const noexcept
     {
+        if (options.excludedProcessId != 0U
+            && IsProcessForeground(options.excludedProcessId)) {
+            return false;
+        }
         if (targetContext == nullptr) {
             return true;
         }

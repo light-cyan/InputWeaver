@@ -115,6 +115,7 @@ LowLevelHooks::LowLevelHooks(
     WindowsSelfTag selfTag,
     LowLevelInputSink& sink,
     TargetProcessContext* targetContext,
+    WindowsProcessId excludedProcessId,
     StopRequest stopRequest,
     std::atomic<bool>& shutdownRequested,
     HANDLE shutdownEvent,
@@ -122,6 +123,7 @@ LowLevelHooks::LowLevelHooks(
     : selfTag_(selfTag),
       sink_(sink),
       targetContext_(targetContext),
+      excludedProcessId_(excludedProcessId),
       stopRequest_(stopRequest),
       shutdownRequested_(shutdownRequested),
       shutdownEvent_(shutdownEvent),
@@ -277,7 +279,9 @@ LRESULT LowLevelHooks::HandleMouseHook(int code, WPARAM wParam, LPARAM lParam) n
 void LowLevelHooks::HandleForegroundChange() noexcept
 {
     sink_.SetTargetEligible(
-        targetContext_ == nullptr || targetContext_->IsTargetForeground());
+        (targetContext_ == nullptr || targetContext_->IsTargetForeground())
+        && (excludedProcessId_ == 0U
+            || !IsProcessForeground(excludedProcessId_)));
 }
 
 void LowLevelHooks::ThreadMain() noexcept {
@@ -309,7 +313,6 @@ void LowLevelHooks::ThreadMain() noexcept {
     }
 
     if (startupError_.load(std::memory_order_acquire) == ERROR_SUCCESS
-        && targetContext_ != nullptr
         && sink_.RequiresTargetEligibilityNotifications()) {
         foregroundHook_ = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,

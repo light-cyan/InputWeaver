@@ -11,6 +11,7 @@ echo [1/2] Building InputWeaverCompiler.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "src\platform\windows\cli\compiler_main.cpp" ^
     "src\platform\windows\compiler\artifact_file.cpp" ^
+    "src\platform\windows\support\atomic_file.cpp" ^
     "src\ui\cli\compiler_cli.cpp" ^
     "src\compiler\compiler.cpp" ^
     "src\compiler\source.cpp" ^
@@ -31,6 +32,7 @@ echo [2/2] Building CompilerTests.exe...
     "tests\compiler\compiler_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
     "src\platform\windows\compiler\artifact_file.cpp" ^
+    "src\platform\windows\support\atomic_file.cpp" ^
     "src\compiler\compiler.cpp" ^
     "src\compiler\source.cpp" ^
     "src\compiler\frontend.cpp" ^

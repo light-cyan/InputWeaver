@@ -29,15 +29,14 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 
 ## Agent Coordination
 
-- `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise pointers to current development work.
+- `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise product-status pointers.
 - `docs/language/` owns Weave source-language definitions.
 - Chinese product operation guides live directly under `docs/`, outside `docs/language/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
-- `development/` outside `development/legacy/` owns current designs, handoff material, research, and open design issues.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
 - `validation/` is the tracked location for validation assets.
-- Read the relevant language specification, shared program contract in `src/program/`, current operational documentation, and open-issue register before changing an owned subsystem.
-- Record a new decision in its owning document instead of duplicating phase history or handoff logs in `AGENTS.md`.
+- Read the relevant language specification, shared program contract in `src/program/`, and current operational documentation before changing an owned subsystem.
+- Record a new decision in its owning current document instead of duplicating archived phase history in `AGENTS.md`.
 
 ## Dependency Model
 
@@ -48,6 +47,7 @@ Control flow:
 
 InputWeaverCompiler.exe -> Windows compiler entry -> compiler CLI -> compiler
 InputWeaver.exe         -> Windows runtime entry -> runtime CLI -> Windows executor -> runtime + Windows hooks and injection
+InputWeaverTUI.exe      -> Windows TUI entry -> TUI controller -> application -> Windows application adapter -> compiler, executor, and DebugClient
 
 Program data:
 
@@ -58,15 +58,19 @@ Code dependencies:
 compiler -> program
 runtime  -> program + input
 debug -> runtime + program + input
+app -> debug
 program  -> standard library
 ui/cli/compiler_cli -> compiler
 ui/cli/runtime_cli -> standard library
+ui/tui -> app + debug
 platform/windows/cli/compiler_main -> ui/cli/compiler_cli
 platform/windows/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
-platform/windows/compiler -> compiler artifact-file interface
+platform/windows/compiler -> compiler artifact-file interface + platform/windows/support
+platform/windows/app -> app + debug + platform/windows/debug + platform/windows/support
 platform/windows/diagnostics -> input + runtime diagnostic types
 platform/windows/debug -> debug + runtime + program + input + platform/windows/support
 platform/windows/support -> Windows API
+platform/windows/tui -> ui/tui + app + platform/windows/app + platform/windows/support
 platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics + platform/windows/support
 all modules -> support only for domain-independent primitives
 ```
@@ -80,32 +84,35 @@ all modules -> support only for domain-independent primitives
 - `src/input/` owns platform-independent live input and output types, transitions, origins, and decisions; platform-native raw events and injection recipes belong under `src/platform/<platform>/`.
 - `src/runtime/` owns platform-independent program activation, physical state, variable and `PAUSE` state, dispatch, expression evaluation, mappings, action execution, task scheduling, cancellation, output ownership, and runtime port interfaces.
 - `src/debug/` owns the platform-independent input-debug protocol values, explicit binary frame codec, client interface, event reduction, and immutable derived state.
+- `src/app/` owns platform-independent program catalog state, import decisions, executor policy, console history, and debug-session orchestration through an abstract platform port.
 - `src/ui/cli/` owns platform-independent command-line option models, parsing, help output, and compiler command presentation.
+- `src/ui/tui/` owns platform-independent page state, keyboard intents, viewport behavior, text layout, color-scheme parsing, and cell-based rendering.
 - `src/platform/<platform>/<module>/` is the required layout for platform-specific code.
 - `src/platform/windows/cli/` owns only the Windows command-line entry points, native argument adaptation, and invocation of the platform-independent CLI or Windows executor interface.
+- `src/platform/windows/app/` owns the Windows program library, compiler and executor child processes, redirected output, and `WindowsDebugClient` lifecycle used by the application port.
 - `src/platform/windows/compiler/` owns Windows sibling-temporary naming and atomic destination replacement for compiled artifacts.
 - `src/platform/windows/diagnostics/` owns bounded Windows diagnostic records, privacy redaction, JSONL formatting, transport, and file output.
 - `src/platform/windows/debug/` owns the local same-user named-pipe server and client, capture commands, process and endpoint validation, cancellable pipe I/O, and bounded debug event transport.
 - `src/platform/windows/support/` owns Windows resource and API primitives that are independent of compiler, runtime, debug, diagnostics, and application policy.
 - `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the CLI module.
+- `src/platform/windows/tui/` owns the TUI executable entry point, Windows console input, virtual-terminal output, resize handling, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
-- `tests/program/`, `tests/compiler/`, `tests/debug/`, and `tests/runtime/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/language/` contains Weave language definitions; direct files under `docs/` contain Chinese product operation guides; `validation/` is the tracked location for validation assets; `development/` contains current engineering documents; `development/legacy/` contains archived engineering material.
+- `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
+- `docs/language/` contains Weave language definitions; direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
 - `script/` contains canonical build, test, and run commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
-## Current Development
+## Product Status
 
 - Phase 6: Declarative Runtime Controls is complete and archived under `development/legacy/phase-6-declarative-runtime-controls/`.
 - Phase 7: Input Debug Producer is complete and archived under `development/legacy/phase-7-input-debug-producer/`.
 - Phase 8: Debug Client is complete and archived under `development/legacy/phase-8-debug-client/`.
-- The current App and TUI product design is under `development/InputWeaverAppDesign/`; `development/phase-9-app/Proposal.md` and `development/phase-10-tui/Proposal.md` are phase entry points.
-- `development/InputDebugRoadmap.md` owns the input-debug phase boundaries; the active design uses `InputWeaver.exe`, an in-process `DebugClient`, and `InputWeaverTUI.exe`.
-- The delivered baseline is the compiler and runtime command-line interface with declarative runtime controls.
+- The initial product is complete. Its final App and TUI design, phase entry proposals, input-debug roadmap, and design-issue record are archived under `development/legacy/`.
+- The delivered application is `InputWeaverTUI.exe`, backed by the independent compiler and executor command-line artifacts and the existing `DebugClient` protocol.
 - The implemented command-line workflow is `.weave -> InputWeaverCompiler.exe -> .weavec -> InputWeaver.exe`.
 - `InputWeaverCompiler.exe` provides `compile`, `validate`, and `dump`; `InputWeaver.exe` loads and executes one compiled `.weavec` program.
-- `docs/safety-guide.md` and `docs/runtime-boundaries.md` define the current Chinese safety guidance and fixed execution boundaries.
-- Completed Phase 2 through Phase 8 records are archived under `development/legacy/`.
-- Use `development/OpenDesignIssues.md` for design decisions that remain active and `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
+- `docs/tui-guide.md`, `docs/safety-guide.md`, and `docs/runtime-boundaries.md` define the current operation, safety, and execution-boundary guidance.
+- Completed phase and initial-product records are archived under `development/legacy/`.
+- Use `script/verify_project.bat` for the current combined build, test, static-analysis, dependency, and diff gate.
 
 ## Repository Practices
 

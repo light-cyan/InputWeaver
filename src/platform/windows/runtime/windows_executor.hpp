@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -10,6 +11,7 @@ struct WindowsExecutorOptions final {
     bool dryRun{};
     bool allowExec{};
     bool targetGlobal{};
+    std::uint32_t excludedProcessId{};
     std::wstring targetSelector;
     std::wstring jsonlPath;
     std::wstring debugSessionToken;

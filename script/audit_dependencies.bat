@@ -32,9 +32,21 @@ if not errorlevel 1 (
     exit /b 1
 )
 
+findstr /s /i /r /c:"#.*include.*app[/\]" "src\support\*.cpp" "src\support\*.hpp" >nul 2>nul
+if not errorlevel 1 (
+    echo Platform-independent support depends on the App module.
+    exit /b 1
+)
+
 findstr /s /i /r /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*diagnostics[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
 if not errorlevel 1 (
     echo Windows support depends on a product module.
+    exit /b 1
+)
+
+findstr /s /i /r /c:"#.*include.*app[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
+if not errorlevel 1 (
+    echo Windows support depends on the App module.
     exit /b 1
 )
 
@@ -70,6 +82,12 @@ if exist "src\ui" (
     )
 )
 
+findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" /c:"#.*include.*platform[/\]" /c:"#.*include.*ui[/\]" "src\app\*.cpp" "src\app\*.hpp" >nul 2>nul
+if not errorlevel 1 (
+    echo App code contains a platform or UI dependency.
+    exit /b 1
+)
+
 del /q "%INPUTWEAVER_DEPENDENCIES%" >nul 2>nul
 echo Dependency audit completed successfully for !INPUTWEAVER_AUDITED! source implementations.
 exit /b 0
@@ -81,14 +99,19 @@ if /i "!INPUTWEAVER_FILE:~0,12!"=="src/program/" set "INPUTWEAVER_OWNER=program"
 if /i "!INPUTWEAVER_FILE:~0,13!"=="src/compiler/" set "INPUTWEAVER_OWNER=compiler"
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/runtime/" set "INPUTWEAVER_OWNER=runtime"
 if /i "!INPUTWEAVER_FILE:~0,10!"=="src/debug/" set "INPUTWEAVER_OWNER=debug"
+if /i "!INPUTWEAVER_FILE:~0,8!"=="src/app/" set "INPUTWEAVER_OWNER=app"
 if /i "!INPUTWEAVER_FILE!"=="src/ui/cli/compiler_cli.cpp" set "INPUTWEAVER_OWNER=compiler_cli"
 if /i "!INPUTWEAVER_FILE!"=="src/ui/cli/runtime_cli.cpp" set "INPUTWEAVER_OWNER=runtime_cli"
+if /i "!INPUTWEAVER_FILE:~0,11!"=="src/ui/tui/" set "INPUTWEAVER_OWNER=ui_tui"
 if /i "!INPUTWEAVER_FILE!"=="src/platform/windows/cli/compiler_main.cpp" set "INPUTWEAVER_OWNER=windows_compiler_cli"
 if /i "!INPUTWEAVER_FILE!"=="src/platform/windows/cli/runtime_main.cpp" set "INPUTWEAVER_OWNER=windows_runtime_cli"
 if /i "!INPUTWEAVER_FILE:~0,30!"=="src/platform/windows/compiler/" set "INPUTWEAVER_OWNER=windows_compiler"
 if /i "!INPUTWEAVER_FILE:~0,33!"=="src/platform/windows/diagnostics/" set "INPUTWEAVER_OWNER=windows_diagnostics"
 if /i "!INPUTWEAVER_FILE:~0,27!"=="src/platform/windows/debug/" set "INPUTWEAVER_OWNER=windows_debug"
 if /i "!INPUTWEAVER_FILE:~0,29!"=="src/platform/windows/runtime/" set "INPUTWEAVER_OWNER=windows_runtime"
+if /i "!INPUTWEAVER_FILE:~0,25!"=="src/platform/windows/app/" set "INPUTWEAVER_OWNER=windows_app"
+if /i "!INPUTWEAVER_FILE:~0,25!"=="src/platform/windows/tui/" set "INPUTWEAVER_OWNER=windows_tui"
+if /i "!INPUTWEAVER_FILE:~0,29!"=="src/platform/windows/support/" set "INPUTWEAVER_OWNER=windows_support"
 if not defined INPUTWEAVER_OWNER (
     echo Unclassified tracked implementation: !INPUTWEAVER_FILE!
     exit /b 1
@@ -142,6 +165,56 @@ if errorlevel 1 exit /b 1
 findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
 if not errorlevel 1 (
     echo Debug protocol dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_app
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo App dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_ui_tui
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo TUI dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_windows_support
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\app" /c:"src/app" /c:"src\compiler" /c:"src/compiler" /c:"src\debug" /c:"src/debug" /c:"src\input" /c:"src/input" /c:"src\program" /c:"src/program" /c:"src\runtime" /c:"src/runtime" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo Windows support dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_windows_app
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo Windows App dependency boundary failed for %~1.
+    exit /b 1
+)
+exit /b 0
+
+:check_windows_tui
+call :generate "%~1"
+if errorlevel 1 exit /b 1
+findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" "%INPUTWEAVER_DEPENDENCIES%" >nul
+if not errorlevel 1 (
+    echo Windows TUI dependency boundary failed for %~1.
     exit /b 1
 )
 exit /b 0

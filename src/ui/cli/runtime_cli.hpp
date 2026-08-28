@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iosfwd>
+#include <cstdint>
 #include <span>
 #include <string>
 
@@ -13,6 +14,7 @@ struct RuntimeCliOptions final {
     bool dryRun{};
     bool allowExec{};
     bool targetGlobal{};
+    std::uint32_t excludedProcessId{};
     std::filesystem::path targetSelector;
     std::filesystem::path jsonlPath;
     std::filesystem::path debugSessionToken;

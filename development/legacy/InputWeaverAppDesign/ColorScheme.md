@@ -41,7 +41,7 @@
     "instruction_current": "#84FFFF",
     "health_trusted": "#66BB6A",
     "health_recovering": "#FFCA28",
-    "health_fault": "#EF5350"
+    "health_fault": "#FF4D2E"
   }
 }
 ```

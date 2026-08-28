@@ -170,6 +170,7 @@ int RunCompiledInstance(
             options.allowExec,
             selfTag,
             effectiveTargetKind,
+            options.excludedProcessId,
             options.debugSessionToken,
             {nullptr, &RequestExecutorStopFromDebug}},
         targetContext,

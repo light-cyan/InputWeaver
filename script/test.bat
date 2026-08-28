@@ -18,5 +18,8 @@ if errorlevel 1 exit /b %errorlevel%
 "bin\CompiledProgramTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
+call script\test_app.bat
+if errorlevel 1 exit /b %errorlevel%
+
 call script\test_runtime.bat
 exit /b %errorlevel%

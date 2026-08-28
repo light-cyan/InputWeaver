@@ -36,6 +36,7 @@ int wmain(int argumentCount, wchar_t** arguments) {
     executor.dryRun = options.dryRun;
     executor.allowExec = options.allowExec;
     executor.targetGlobal = options.targetGlobal;
+    executor.excludedProcessId = options.excludedProcessId;
     executor.targetSelector = options.targetSelector.wstring();
     executor.jsonlPath = options.jsonlPath.wstring();
     executor.debugSessionToken = options.debugSessionToken.wstring();
