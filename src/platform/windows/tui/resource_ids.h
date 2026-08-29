@@ -1,0 +1,3 @@
+#pragma once
+
+#define INPUTWEAVER_TUI_ICON_RESOURCE_ID 101

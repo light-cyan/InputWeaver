@@ -105,6 +105,17 @@ bool TuiController::Running() const noexcept
     return running_;
 }
 
+bool TuiController::RequestExit()
+{
+    if (!FlushSource()) {
+        return false;
+    }
+    pendingDebugRun_.reset();
+    running_ = false;
+    application_.Shutdown();
+    return true;
+}
+
 Page TuiController::CurrentPage() const noexcept
 {
     return page_;
@@ -115,6 +126,11 @@ std::optional<std::string> TuiController::TakeClipboardText()
     std::optional<std::string> text = std::move(clipboardText_);
     clipboardText_.reset();
     return text;
+}
+
+bool TuiController::TakeBackgroundRequest() noexcept
+{
+    return std::exchange(backgroundRequested_, false);
 }
 
 const app::ProgramEntry* TuiController::SelectedProgram() const
@@ -643,10 +659,9 @@ void TuiController::HandlePrograms(const KeyEvent& event)
         if (programsState_ == ProgramsState::Fullscreen) {
             programsState_ = ProgramsState::Source;
         } else if (programsState_ == ProgramsState::Programs) {
-            (void)FlushSource();
-            pendingDebugRun_.reset();
-            running_ = false;
-            application_.Shutdown();
+            if (FlushSource()) {
+                backgroundRequested_ = true;
+            }
         } else {
             programsState_ = ProgramsState::Programs;
         }

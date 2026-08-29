@@ -8,12 +8,9 @@
 #include "runtime/artifact_loader.hpp"
 #include "support/bit_mix.hpp"
 
-#include <cerrno>
 #include <cstdint>
-#include <cwchar>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <memory>
 #include <string>
 
@@ -135,69 +132,6 @@ void PrintArtifactReadError(
     }
 }
 
-bool SelectLocatedProcess(
-    const inputweaver::win32::LocateResult& located,
-    inputweaver::win32::LocatedProcess& selected) noexcept {
-    if (const inputweaver::win32::LocatedProcess* unique = located.UniqueMatch()) {
-        selected = *unique;
-        return true;
-    }
-
-    const inputweaver::win32::LocatedProcess* foreground = nullptr;
-    for (const auto& candidate : located.matches) {
-        if (inputweaver::IsProcessForeground(candidate.processId)) {
-            if (foreground != nullptr) {
-                return false;
-            }
-            foreground = &candidate;
-        }
-    }
-    if (foreground == nullptr) {
-        return false;
-    }
-    selected = *foreground;
-    return true;
-}
-
-bool ResolveExcludedProcess(
-    const std::wstring& selector,
-    inputweaver::WindowsProcessId& processId)
-{
-    if (selector.empty()) {
-        return true;
-    }
-    processId = 0U;
-    wchar_t* end = nullptr;
-    errno = 0;
-    const unsigned long parsed = std::wcstoul(selector.c_str(), &end, 10);
-    if (selector.front() >= L'0' && selector.front() <= L'9'
-        && end == selector.c_str() + selector.size()) {
-        if (errno == ERANGE || parsed == 0UL
-            || parsed > (std::numeric_limits<inputweaver::WindowsProcessId>::max)()) {
-            std::wcerr << L"Error: excluded process PID must be a nonzero 32-bit value.\n";
-            return false;
-        }
-        processId = static_cast<inputweaver::WindowsProcessId>(parsed);
-        return true;
-    }
-
-    const inputweaver::win32::LocateResult located =
-        inputweaver::win32::LocateExecutable(selector);
-    if (located.status == inputweaver::win32::LocateStatus::Error) {
-        std::wcerr << L"Error: excluded process search failed with Win32 error "
-                   << located.win32Error << L".\n";
-        return false;
-    }
-    inputweaver::win32::LocatedProcess selected{};
-    if (!SelectLocatedProcess(located, selected)) {
-        std::wcerr << L"Error: excluded process selector does not identify one running process: "
-                   << selector << L".\n";
-        return false;
-    }
-    processId = selected.processId;
-    return true;
-}
-
 int RunCompiledInstance(
     const WindowsExecutorOptions& options,
     inputweaver::WindowsSelfTag selfTag,
@@ -212,7 +146,7 @@ int RunCompiledInstance(
             options.allowExec,
             selfTag,
             effectiveTargetKind,
-            options.excludedProcessId,
+            options.excludedProcessSelector,
             options.debugSessionToken,
             {nullptr, &RequestExecutorStopFromDebug}},
         targetContext,
@@ -289,7 +223,7 @@ int RunCompiledProgram(
         }
 
         inputweaver::win32::LocatedProcess selected{};
-        if (!SelectLocatedProcess(located, selected)) {
+        if (!inputweaver::win32::SelectLocatedProcess(located, selected)) {
             if (!ambiguousMessagePrinted) {
                 std::wcout << L"Multiple target processes match; focus the intended instance:\n";
                 for (const auto& candidate : located.matches) {
@@ -368,13 +302,6 @@ int inputweaver::win32::RunWindowsExecutor(const WindowsExecutorOptions& options
         std::wcerr << L"Error: " << errorMessage << L"\n";
         return 10;
     }
-    WindowsExecutorOptions resolvedOptions = options;
-    if (!ResolveExcludedProcess(
-            options.excludedProcessSelector,
-            resolvedOptions.excludedProcessId)) {
-        return 3;
-    }
-
     inputweaver::DiagnosticLog diagnosticLog;
     if (!diagnosticLog.Start(options.jsonlPath, errorMessage)) {
         std::wcerr << L"Error: " << errorMessage << L"\n";
@@ -400,7 +327,7 @@ int inputweaver::win32::RunWindowsExecutor(const WindowsExecutorOptions& options
 
     const inputweaver::WindowsSelfTag selfTag = GenerateSelfTag();
     const int result = RunCompiledProgram(
-        resolvedOptions,
+        options,
         selfTag,
         diagnosticLog,
         compiledProgram,

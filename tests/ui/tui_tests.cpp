@@ -631,7 +631,7 @@ void TestController()
     Check(
         minimumPrograms.Cells()[20U * 80U].codePoint == U'┌'
             && minimumPrograms.Cells()[23U * 80U].codePoint == U'└',
-        "NEXT RUN remains boxed at the minimum terminal size");
+        "NEXT RUN remains boxed at the minimum viewport size");
     Check(
         CanvasText(minimumPrograms).find("[E] Edit") == std::string::npos
             && CanvasText(minimumPrograms).find("[Z] Fullscreen")
@@ -1017,7 +1017,7 @@ void TestSourceEditorPage()
         "A creates a named blank program without an import path");
 }
 
-void TestQuitNavigation()
+void TestBackgroundAndExitNavigation()
 {
     using inputweaver::ui::tui::Key;
     using inputweaver::ui::tui::Page;
@@ -1043,10 +1043,25 @@ void TestQuitNavigation()
     Check(
         controller.Running(),
         "Escape returns a secondary Programs focus to the program list");
+    platform.executors.push_back({
+        1U,
+        inputweaver::app::ExecutorMode::Run,
+        false,
+        false,
+        {}});
     controller.Handle({Key::Escape, 0U});
     Check(
-        !controller.Running(),
-        "Escape exits only from the Programs list focus");
+        controller.Running()
+            && controller.TakeBackgroundRequest()
+            && platform.executors.size() == 1U,
+        "Escape backgrounds the TUI without stopping managed executors");
+    Check(
+        !controller.TakeBackgroundRequest(),
+        "the background request is consumed once");
+    Check(controller.RequestExit(), "an explicit exit request succeeds");
+    Check(
+        !controller.Running() && platform.executors.empty(),
+        "an explicit exit request stops the TUI and managed executors");
 }
 
 } // namespace
@@ -1056,7 +1071,7 @@ int main()
     TestSupport();
     TestController();
     TestSourceEditorPage();
-    TestQuitNavigation();
+    TestBackgroundAndExitNavigation();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " TUI test(s) failed.\n";
         return 1;

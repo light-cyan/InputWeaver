@@ -1,14 +1,14 @@
 # InputWeaver TUI 使用指南
 
-`InputWeaverTUI.exe` 是程序库、源码编辑、运行配置、执行器控制和输入调试的统一界面。它仍然通过独立的 `InputWeaverCompiler.exe` 生成 `.weavec`，再启动独立的 `InputWeaver.exe`；TUI 不把源码直接交给运行时，也不在内存中把编译程序传给执行器。
+`InputWeaverHost.exe` 是程序库、源码编辑、运行配置、执行器控制和输入调试的统一入口。它仍然通过独立的 `InputWeaverCompiler.exe` 生成 `.weavec`，再启动独立的 `InputWeaver.exe`；TUI 不把源码直接交给运行时，也不在内存中把编译程序传给执行器。无控制台托盘宿主持有应用状态，随附的 `InputWeaverTUI.exe` 只提供可关闭和重新创建的原生 Windows 界面。
 
 当前 Weave 语法、类型、规则匹配和动作语义统一定义在发行包的 `docs\grammar.md`。
 
 ## 启动与页面
 
-Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip`，进入其中的 `InputWeaver` 文件夹并运行 `InputWeaverTUI.exe`。不要在 ZIP 内直接运行，也不要拆散同目录中的三个 EXE 和 `res` 文件夹；发行版已静态链接 MinGW 的 GCC 与 C++ 运行库，不要求目标电脑安装 MinGW。源码仓库的维护者可以运行 `script\package_release.bat`，在 `bin\release\` 中重新生成同样的目录和 ZIP。
+Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip`，进入其中的 `InputWeaver` 文件夹并运行 `InputWeaverHost.exe`。不要在 ZIP 内直接运行，也不要拆散同目录中的四个 EXE 和 `res` 文件夹；发行版已静态链接 MinGW 的 GCC 与 C++ 运行库，不要求目标电脑安装 MinGW。源码仓库的维护者可以运行 `script\package_release.bat`，在 `bin\release\` 中重新生成同样的目录和 ZIP。
 
-终端至少需要 `80x24` 个字符。程序启动后进入 Programs 页；Programs、Console 和 Debug 是三个顶层页面。顶部边框显示当前页面、当前程序或当前文档模式，边框颜色表示当前焦点区域；普通模式下，可用按键说明显示在顶部边框内。
+前端窗口至少保留 `80x24` 个文本单元格。程序启动后进入 Programs 页；Programs、Console 和 Debug 是三个顶层页面。顶部边框显示当前页面、当前程序或当前文档模式，边框颜色表示当前焦点区域；普通模式下，可用按键说明显示在顶部边框内。
 
 顶层页面之间的移动如下：
 
@@ -19,7 +19,15 @@ Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip
 | Console | `[Right]` 或 `[Esc]` | 返回 Programs |
 | Debug | `[Left]` 或 `[Esc]` | 返回 Programs |
 
-`[Esc]` 同时承担逐层退出：源码编辑时先退出编辑，文档全屏时再退出全屏，Program Information 或 Source 获得焦点时返回程序列表，最后从 Programs 的程序列表退出应用。退出应用会请求停止由本次 TUI 管理的全部执行器。
+`[Esc]` 同时承担逐层退出：源码编辑时先退出编辑，文档全屏时再退出全屏，Program Information 或 Source 获得焦点时返回程序列表，最后从 Programs 的程序列表进入后台并隐藏到系统托盘。进入后台不停止正在运行的执行器。
+
+## 系统托盘与后台运行
+
+托盘宿主启动后会在 Windows 系统通知区注册 InputWeaver 图标，并启动一个拥有自身 Win32 窗口的独立前端。前端进程直接拥有窗口和任务栏按钮，两处都使用 InputWeaver 图标；在 Programs 程序列表按 `[Esc]`，关闭或最小化前端窗口，都会结束这个前端并使其从任务栏消失；托盘宿主、应用状态和已启动执行器保持运行。
+
+单击或双击托盘图标会聚焦正常响应的前端，或回收失联前端并创建新的前端以恢复原有 TUI 状态。右击托盘图标可以选择 `Show TUI` 或 `Hide TUI`；选择 `Exit InputWeaver` 才会真正退出托盘宿主，并请求停止本次 TUI 管理的全部执行器。运行中的前端故障通过托盘通知报告，不会用模态对话框阻塞托盘操作；源码保存失败时，前端保持打开，以便查看错误。
+
+请始终启动 `InputWeaverHost.exe`。`InputWeaverTUI.exe` 是由托盘宿主按需启动的内部前端，只能继承宿主明确提供的两条进程间通信管道，不作为独立入口使用。
 
 ## Programs 页
 
@@ -39,7 +47,7 @@ Programs 页的分栏布局由左侧 PROGRAMS、右上 PROGRAM INFORMATION、右
 | `[M]` | 进入排序模式 |
 | `[Enter]` | 进入 Program Information |
 
-Add Program 使用 `[Left]` / `[Right]` 选择 `New Blank`、`Import .weave` 或 `Cancel`，再按 `[Enter]` 确认。新建空白程序会创建一个空白的可编辑 `.weave` 副本，不会预先编译。导入只接受一个现有 `.weave` 文件，路径输入支持正常键入、终端粘贴以及终端拖放产生的路径文本。
+Add Program 使用 `[Left]` / `[Right]` 选择 `New Blank`、`Import .weave` 或 `Cancel`，再按 `[Enter]` 确认。新建空白程序会创建一个空白的可编辑 `.weave` 副本，不会预先编译。导入只接受一个现有 `.weave` 文件，路径输入支持正常键入、`[Ctrl+V]` 粘贴以及向前端窗口拖放文件。
 
 导入时，TUI 会复制源码到程序库，调用编译器生成 `.weavec`，并保存可查看的 Dump。导入编译失败时不会新增或覆盖程序，界面会切换到 Console 显示编译器诊断。程序名取自源文件名；名称冲突时可以覆盖原条目、换名导入或取消。覆盖保留原条目的 ID、位置和运行配置。
 
@@ -83,7 +91,7 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 
 `[V]` 在 Source 和 Compiled Dump 之间切换。没有已保存的 Dump 时，切换会立即调用编译器生成；生成失败会进入 Console。源码一旦保存，旧 Dump 会被移除，原 `.weavec` 文件可以暂时保留，但它的源码摘要不再匹配，因此不会被下一次运行复用。
 
-`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAMS、PROGRAM INFORMATION 和 NEXT RUN，不改变终端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览。
+`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAMS、PROGRAM INFORMATION 和 NEXT RUN，不改变前端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览。
 
 ### 源码编辑
 
@@ -132,7 +140,7 @@ TUI 没有独立的编译按键。按 `[Space]` 运行时，如果 `.weavec` 不
 
 ## 程序库
 
-程序库位于 `InputWeaverTUI.exe` 同目录的 `programs\`：
+程序库位于 `InputWeaverHost.exe` 同目录的 `programs\`：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -198,10 +206,10 @@ HEALTH 显示连接、捕获、信任状态、捕获代次、Dry-run、`PAUSE`�
 
 ## TUI 按键保护
 
-TUI 启动每个 `InputWeaver.exe` 时都会附加 `--exclude-process`，并传入启动时交互终端前台宿主的 PID。该 PID 位于前台时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的按下和重复输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
+宿主启动每个 `InputWeaver.exe` 时都会附加 `--exclude InputWeaverTUI.exe`。Exclude 使用与 Target 相同的进程定位器，并随前台窗口变化重新定位；前端关闭并重新创建后保护继续生效。排除选择命中前台进程时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的按下和重复输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
 
 该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
 
 ## 配色
 
-TUI 启动时读取其 EXE 同目录下的 `res\InputWeaverTUI.colors.json`。所有颜色使用 `#RRGGBB`；修改后需要重新启动 TUI。文件缺失、版本错误、字段缺失、字段重复、包含未知字段或颜色值无效时，TUI 会报告错误并停止启动。
+托盘宿主启动时读取 `InputWeaverHost.exe` 同目录下的 `res\InputWeaverTUI.colors.json`。所有颜色使用 `#RRGGBB`；修改后需要重新启动 InputWeaver。文件缺失、版本错误、字段缺失、字段重复、包含未知字段或颜色值无效时，托盘宿主会报告错误并停止启动。

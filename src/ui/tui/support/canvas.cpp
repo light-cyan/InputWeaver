@@ -13,21 +13,6 @@ Canvas::Canvas(std::size_t width, std::size_t height, TextStyle baseStyle)
 {
 }
 
-std::size_t Canvas::Width() const noexcept
-{
-    return width_;
-}
-
-std::size_t Canvas::Height() const noexcept
-{
-    return height_;
-}
-
-std::span<const Cell> Canvas::Cells() const noexcept
-{
-    return cells_;
-}
-
 void Canvas::Clear(TextStyle style)
 {
     std::fill(cells_.begin(), cells_.end(), Cell{U' ', style, false});

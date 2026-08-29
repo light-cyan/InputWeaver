@@ -11,8 +11,10 @@ set "INPUTWEAVER_GENERATE=%INPUTWEAVER_CXX% %INPUTWEAVER_CPP%"
 set /a INPUTWEAVER_AUDITED=0
 
 for /f "delims=" %%F in ('git ls-files --cached --others --exclude-standard "src/*.cpp"') do (
-    call :classify_and_check "%%F"
-    if errorlevel 1 exit /b 1
+    if exist "%%F" (
+        call :classify_and_check "%%F"
+        if errorlevel 1 exit /b 1
+    )
 )
 
 if !INPUTWEAVER_AUDITED! equ 0 (

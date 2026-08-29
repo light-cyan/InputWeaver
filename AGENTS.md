@@ -8,6 +8,8 @@ InputWeaver is a C++ context-aware input mapping and macro engine. Weave source 
 
 The compiler and executor are independent command-line programs. `InputWeaverCompiler.exe` transforms `.weave` source into a persistent `.weavec` file, and `InputWeaver.exe` loads and executes that file without reparsing source or receiving an in-memory compiled program from the compiler.
 
+The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and its internal native-window frontend `InputWeaverTUI.exe`. The tray host owns application and executor state, while the frontend can exit and be recreated without stopping the host.
+
 ## Environment
 
 - Platform: Windows.
@@ -22,9 +24,11 @@ The compiler and executor are independent command-line programs. `InputWeaverCom
 - Place generated executables and other build output under `bin/` and keep them out of version control.
 - Compile with `g++` and verify a successful build after changing C++ source code.
 - Use `docs/grammar.md` for current Weave syntax, binding, type, matching, action, and execution behavior.
-- For compiler, compiler CLI, or Windows compiler-backend changes, use `script/build_compiler_tests.bat` followed by `script/test_compiler.bat`.
+- Use `script/build_products.bat` to build release products without tests, `script/build_tests.bat` to build all test executables, and `script/build.bat` to build both groups.
+- Use `script/test.bat` to run all test suites; focused test suites use matching `script/build_<area>_tests.bat` and `script/test_<area>.bat` commands.
+- For compiler, compiler CLI, or Windows compiler-backend changes, build `script/build_compiler.bat` and `script/build_compiler_tests.bat`, then run `script/test_compiler.bat`.
 - For platform-independent runtime or Windows runtime-adapter changes, use `script/build_runtime_tests.bat` followed by `script/test_runtime.bat`.
-- For shared-program, Windows executor, hook, injection, or diagnostic changes, use `script/build.bat` followed by `script/test.bat`.
+- For shared-program, Windows executor, hook, injection, or diagnostic changes, build `script/build_executor.bat` and `script/build_executor_tests.bat`, then run `script/test_executor.bat`.
 - Use `script/verify_project.bat` for cross-cutting code verification, and run the relevant analyzer and dependency audit when a changed boundary warrants them.
 
 ## Agent Coordination
@@ -47,7 +51,8 @@ Control flow:
 
 InputWeaverCompiler.exe -> Windows compiler entry -> compiler CLI -> compiler
 InputWeaver.exe         -> Windows runtime entry -> runtime CLI -> Windows executor -> runtime + Windows hooks and injection
-InputWeaverTUI.exe      -> Windows TUI entry -> TUI controller -> application -> Windows application adapter -> compiler, executor, and DebugClient
+InputWeaverHost.exe     -> Windows tray host -> TUI controller -> application -> Windows application adapter -> compiler, executor, and DebugClient
+InputWeaverTUI.exe      -> Windows native frontend -> restricted inherited IPC -> Windows tray host
 
 Program data:
 
@@ -95,7 +100,7 @@ all modules -> support only for domain-independent primitives
 - `src/platform/windows/debug/` owns the local same-user named-pipe server and client, capture commands, process and endpoint validation, cancellable pipe I/O, and bounded debug event transport.
 - `src/platform/windows/support/` owns Windows resource and API primitives that are independent of compiler, runtime, debug, diagnostics, and application policy.
 - `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the CLI module.
-- `src/platform/windows/tui/` owns the TUI executable entry point, Windows console input, virtual-terminal output, resize handling, and color-resource loading.
+- `src/platform/windows/tui/` owns the tray-host and native-frontend entry points, their inherited-pipe IPC, the Win32 TUI window, GDI cell rendering, keyboard and clipboard input, resize handling, notification icon, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
 - `docs/grammar.md` contains the current Weave language definition; the other direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.

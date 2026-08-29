@@ -6,13 +6,35 @@ if not exist "bin" mkdir "bin"
 if not exist "bin\res" mkdir "bin\res"
 
 set "INPUTWEAVER_CXX=g++"
+set "INPUTWEAVER_RC=windres"
 set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
 set "INPUTWEAVER_PRODUCT_LINK=-static-libgcc -static-libstdc++"
 
-echo [1/2] Building InputWeaverTUI.exe...
-%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
-    "src\platform\windows\tui\tui_main.cpp" ^
-    "src\platform\windows\tui\windows_terminal.cpp" ^
+echo [1/4] Compiling the InputWeaver TUI resources...
+%INPUTWEAVER_RC% -Isrc -Ires -O coff ^
+    "res\InputWeaverTUI.rc" ^
+    -o "bin\InputWeaverTUIResource.o"
+if errorlevel 1 exit /b %errorlevel%
+
+echo [2/4] Building InputWeaverTUI.exe...
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -mwindows -municode ^
+    "src\platform\windows\tui\tui_frontend_main.cpp" ^
+    "src\platform\windows\tui\tui_ipc.cpp" ^
+    "src\platform\windows\tui\windows_tui_window.cpp" ^
+    "bin\InputWeaverTUIResource.o" ^
+    -o "bin\InputWeaverTUI.exe" ^
+    %INPUTWEAVER_PRODUCT_LINK% ^
+    -lgdi32 -lshell32 -luser32
+if errorlevel 1 exit /b %errorlevel%
+
+echo [3/4] Building InputWeaverHost.exe...
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -mwindows -municode ^
+    "src\platform\windows\tui\host_main.cpp" ^
+    "src\platform\windows\tui\windows_tray.cpp" ^
+    "src\platform\windows\tui\tui_frontend_session.cpp" ^
+    "src\platform\windows\tui\tui_ipc.cpp" ^
+    "src\platform\windows\tui\tui_resources.cpp" ^
+    "src\platform\windows\tui\windows_clipboard.cpp" ^
     "src\platform\windows\app\windows_app_platform.cpp" ^
     "src\platform\windows\app\program_library.cpp" ^
     "src\platform\windows\app\child_process.cpp" ^
@@ -32,12 +54,13 @@ echo [1/2] Building InputWeaverTUI.exe...
     "src\ui\tui\support\text_layout.cpp" ^
     "src\debug\debug_client.cpp" ^
     "src\debug\debug_protocol.cpp" ^
-    -o "bin\InputWeaverTUI.exe" ^
+    "bin\InputWeaverTUIResource.o" ^
+    -o "bin\InputWeaverHost.exe" ^
     %INPUTWEAVER_PRODUCT_LINK% ^
-    -ladvapi32
+    -ladvapi32 -lshell32 -luser32
 if errorlevel 1 exit /b %errorlevel%
 
-echo [2/2] Copying the TUI color scheme...
+echo [4/4] Copying the TUI color scheme...
 copy /y "res\InputWeaverTUI.colors.json" "bin\res\InputWeaverTUI.colors.json" >nul
 if errorlevel 1 exit /b %errorlevel%
 

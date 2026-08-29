@@ -108,11 +108,12 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     Impl(
         WindowsProgramRuntimeSessionOptions sessionOptions,
         TargetProcessContext* sessionTargetContext,
-        DiagnosticLog& sessionDiagnosticLog) noexcept
-        : options(sessionOptions),
+        DiagnosticLog& sessionDiagnosticLog)
+        : options(std::move(sessionOptions)),
           targetContext(sessionTargetContext),
           diagnosticLog(sessionDiagnosticLog),
-          injector(sessionOptions.selfTag, &::SendInput, sessionOptions.dryRun),
+          processExclusion(options.excludedProcessSelector),
+          injector(options.selfTag, &::SendInput, options.dryRun),
           injectionCircuitBreaker(3U)
     {
         LARGE_INTEGER frequency{};
@@ -402,7 +403,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     [[nodiscard]] bool RequiresTargetEligibilityNotifications() const noexcept override
     {
-        return targetContext != nullptr || options.excludedProcessId != 0U;
+        return targetContext != nullptr || processExclusion.Enabled();
     }
 
     [[nodiscard]] bool HasCapturedInputs() const noexcept override
@@ -627,7 +628,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             controlCatalog = std::make_unique<win32::WindowsControlCatalog>();
             routePort = std::make_unique<win32::WindowsRuntimeRoutePort>(
                 targetContext,
-                options.excludedProcessId);
+                &processExclusion);
             processLauncher = std::make_unique<win32::WindowsProcessLauncher>(
                 options.permitProcessLaunch,
                 options.dryRun);
@@ -656,7 +657,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 options.selfTag,
                 *this,
                 targetContext,
-                options.excludedProcessId,
+                &processExclusion,
                 stopRequest,
                 shutdownRequested,
                 shutdownEvent,
@@ -736,8 +737,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             record.cancelledForGeneration = true;
         } else if (!release && !TargetRouteAllows(item)) {
             record.cancelledForTarget = true;
-            if (options.excludedProcessId != 0U
-                && IsProcessForeground(options.excludedProcessId)) {
+            if (processExclusion.IsForegroundExcluded()) {
                 SetTargetEligible(false);
             } else if (targetContext != nullptr
                 && !targetContext->IsTargetAlive()) {
@@ -762,8 +762,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     [[nodiscard]] bool TargetRouteAllows(
         const WindowsOutputItem& item) const noexcept
     {
-        if (options.excludedProcessId != 0U
-            && IsProcessForeground(options.excludedProcessId)) {
+        if (processExclusion.IsForegroundExcluded()) {
             return false;
         }
         if (targetContext == nullptr) {
@@ -859,6 +858,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     WindowsProgramRuntimeSessionOptions options;
     TargetProcessContext* targetContext;
     DiagnosticLog& diagnosticLog;
+    ForegroundProcessExclusion processExclusion;
     HANDLE shutdownEvent{};
     HANDLE hookProducerDoneEvent{};
     HANDLE outputWakeEvent{};
@@ -901,7 +901,10 @@ WindowsProgramRuntimeSession::WindowsProgramRuntimeSession(
     WindowsProgramRuntimeSessionOptions options,
     TargetProcessContext* targetContext,
     DiagnosticLog& diagnosticLog)
-    : impl_(std::make_unique<Impl>(options, targetContext, diagnosticLog))
+    : impl_(std::make_unique<Impl>(
+          std::move(options),
+          targetContext,
+          diagnosticLog))
 {
 }
 

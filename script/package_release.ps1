@@ -20,11 +20,14 @@ Assert-ChildPath $archivePath $releaseRoot
 $executables = @(
     'InputWeaver.exe',
     'InputWeaverCompiler.exe',
+    'InputWeaverHost.exe',
     'InputWeaverTUI.exe'
 )
 $allowedSystemDlls = @(
     'ADVAPI32.dll',
+    'GDI32.dll',
     'KERNEL32.dll',
+    'SHELL32.dll',
     'USER32.dll'
 )
 

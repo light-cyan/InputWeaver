@@ -28,7 +28,7 @@ struct WindowsProgramRuntimeSessionOptions final {
     bool permitProcessLaunch{};
     WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};
-    WindowsProcessId excludedProcessId{};
+    std::wstring excludedProcessSelector;
     std::wstring debugSessionToken;
     StopRequest executorStopRequest{};
 };

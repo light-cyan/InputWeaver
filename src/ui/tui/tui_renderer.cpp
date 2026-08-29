@@ -875,7 +875,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     "[Tab] Focus",
                     "[←] Console",
                     "[→] Debug",
-                    "[Esc] Quit"};
+                    "[Esc] Background"};
                 break;
             case ProgramsState::Information:
                 headerKeys = {

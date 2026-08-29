@@ -4,9 +4,9 @@ namespace inputweaver::win32 {
 
 WindowsRuntimeRoutePort::WindowsRuntimeRoutePort(
     TargetProcessContext* targetContext,
-    WindowsProcessId excludedProcessId) noexcept
+    const ForegroundProcessExclusion* processExclusion) noexcept
     : targetContext_(targetContext),
-      excludedProcessId_(excludedProcessId)
+      processExclusion_(processExclusion)
 {
 }
 
@@ -38,7 +38,8 @@ bool WindowsRuntimeRoutePort::CanDispatch(
     TargetSelectorKind kind,
     const RuntimeInputEvent& event) noexcept
 {
-    if (ExcludedProcessForeground()) {
+    if (processExclusion_ != nullptr
+        && processExclusion_->IsForegroundExcluded()) {
         return false;
     }
     if (kind == TargetSelectorKind::Global) {
@@ -55,7 +56,8 @@ bool WindowsRuntimeRoutePort::CanInject(
     TargetSelectorKind kind,
     const ActivatedControl& control) noexcept
 {
-    if (ExcludedProcessForeground()) {
+    if (processExclusion_ != nullptr
+        && processExclusion_->IsForegroundExcluded()) {
         return false;
     }
     if (kind == TargetSelectorKind::Global) {
@@ -66,12 +68,6 @@ bool WindowsRuntimeRoutePort::CanInject(
     }
     return !control.requiresPointerTarget
         || targetContext_->IsTargetPointerTargetAtCursor();
-}
-
-bool WindowsRuntimeRoutePort::ExcludedProcessForeground() const noexcept
-{
-    return excludedProcessId_ != 0U
-        && IsProcessForeground(excludedProcessId_);
 }
 
 } // namespace inputweaver::win32

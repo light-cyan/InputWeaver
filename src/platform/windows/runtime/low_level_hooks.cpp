@@ -115,7 +115,7 @@ LowLevelHooks::LowLevelHooks(
     WindowsSelfTag selfTag,
     LowLevelInputSink& sink,
     TargetProcessContext* targetContext,
-    WindowsProcessId excludedProcessId,
+    const ForegroundProcessExclusion* processExclusion,
     StopRequest stopRequest,
     std::atomic<bool>& shutdownRequested,
     HANDLE shutdownEvent,
@@ -123,7 +123,7 @@ LowLevelHooks::LowLevelHooks(
     : selfTag_(selfTag),
       sink_(sink),
       targetContext_(targetContext),
-      excludedProcessId_(excludedProcessId),
+      processExclusion_(processExclusion),
       stopRequest_(stopRequest),
       shutdownRequested_(shutdownRequested),
       shutdownEvent_(shutdownEvent),
@@ -278,10 +278,11 @@ LRESULT LowLevelHooks::HandleMouseHook(int code, WPARAM wParam, LPARAM lParam) n
 
 void LowLevelHooks::HandleForegroundChange() noexcept
 {
+    const bool excluded = processExclusion_ != nullptr
+        && processExclusion_->IsForegroundExcluded();
     sink_.SetTargetEligible(
-        (targetContext_ == nullptr || targetContext_->IsTargetForeground())
-        && (excludedProcessId_ == 0U
-            || !IsProcessForeground(excludedProcessId_)));
+        !excluded
+        && (targetContext_ == nullptr || targetContext_->IsTargetForeground()));
 }
 
 void LowLevelHooks::ThreadMain() noexcept {

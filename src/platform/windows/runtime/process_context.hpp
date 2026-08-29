@@ -10,6 +10,9 @@
 
 #include "windows_input_types.hpp"
 
+#include <atomic>
+#include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace inputweaver {
@@ -46,6 +49,19 @@ struct ProcessContextResult {
     DWORD targetIntegrityRid) noexcept;
 
 [[nodiscard]] bool IsProcessForeground(WindowsProcessId processId) noexcept;
+
+class ForegroundProcessExclusion final {
+public:
+    explicit ForegroundProcessExclusion(std::wstring executableSelector = {});
+
+    [[nodiscard]] bool Enabled() const noexcept;
+    [[nodiscard]] bool IsForegroundExcluded() const noexcept;
+
+private:
+    std::wstring executableSelector_;
+    mutable std::atomic<std::uint64_t> cachedResult_{0U};
+    mutable std::atomic<std::uintptr_t> cachedWindow_{0U};
+};
 
 class TargetProcessContext final {
 public:

@@ -11,7 +11,6 @@ struct WindowsExecutorOptions final {
     bool dryRun{};
     bool allowExec{};
     bool targetGlobal{};
-    std::uint32_t excludedProcessId{};
     std::wstring excludedProcessSelector;
     std::wstring targetSelector;
     std::wstring jsonlPath;

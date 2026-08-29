@@ -9,7 +9,7 @@ class WindowsRuntimeRoutePort final : public RuntimeRoutePort {
 public:
     explicit WindowsRuntimeRoutePort(
         TargetProcessContext* targetContext,
-        WindowsProcessId excludedProcessId = 0U) noexcept;
+        const ForegroundProcessExclusion* processExclusion = nullptr) noexcept;
 
     [[nodiscard]] bool ValidateTarget(
         TargetSelectorKind kind) noexcept override;
@@ -23,10 +23,8 @@ public:
         const ActivatedControl& control) noexcept override;
 
 private:
-    [[nodiscard]] bool ExcludedProcessForeground() const noexcept;
-
     TargetProcessContext* targetContext_;
-    WindowsProcessId excludedProcessId_;
+    const ForegroundProcessExclusion* processExclusion_;
 };
 
 } // namespace inputweaver::win32

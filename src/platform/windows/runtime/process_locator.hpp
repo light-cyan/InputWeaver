@@ -45,4 +45,8 @@ struct LocateResult {
 [[nodiscard]] LocateResult LocateExecutable(
     std::wstring_view selector) noexcept;
 
+[[nodiscard]] bool SelectLocatedProcess(
+    const LocateResult& located,
+    LocatedProcess& selected) noexcept;
+
 }  // namespace inputweaver::win32

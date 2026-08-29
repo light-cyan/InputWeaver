@@ -93,16 +93,6 @@ inline constexpr DWORD kExecutorStopTimeoutMilliseconds = 5'000U;
         + std::to_string(sequence.fetch_add(1U, std::memory_order_relaxed));
 }
 
-[[nodiscard]] DWORD InteractiveHostProcessId() noexcept
-{
-    DWORD processId{};
-    const HWND foreground = GetForegroundWindow();
-    if (foreground != nullptr) {
-        (void)GetWindowThreadProcessId(foreground, &processId);
-    }
-    return processId == 0U ? GetCurrentProcessId() : processId;
-}
-
 void RemoveTemporary(const std::filesystem::path& path) noexcept
 {
     std::error_code ignored;
@@ -601,8 +591,8 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
     std::vector<std::wstring> arguments{
         L"--program",
         impl_->library.ArtifactPath(request.entry.id).wstring(),
-        L"--exclude-process",
-        std::to_wstring(InteractiveHostProcessId())};
+        L"--exclude",
+        L"InputWeaverTUI.exe"};
     if (request.entry.configuration.target == app::TargetMode::Executable) {
         std::wstring selector;
         if (!Utf8ToWide(

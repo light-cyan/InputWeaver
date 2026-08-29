@@ -2,24 +2,21 @@
 setlocal
 cd /d "%~dp0.."
 
-if not exist "bin\WindowsPlatformTests.exe" (
-    echo WindowsPlatformTests.exe is missing. Run script\build.bat first.
-    exit /b 2
-)
-
-if not exist "bin\CompiledProgramTests.exe" (
-    echo CompiledProgramTests.exe is missing. Run script\build.bat first.
-    exit /b 2
-)
-
-"bin\WindowsPlatformTests.exe"
+echo [1/4] Running executor and program tests...
+call script\test_executor.bat
 if errorlevel 1 exit /b %errorlevel%
 
-"bin\CompiledProgramTests.exe"
+echo [2/4] Running compiler tests...
+call script\test_compiler.bat
 if errorlevel 1 exit /b %errorlevel%
 
+echo [3/4] Running application and TUI tests...
 call script\test_app.bat
 if errorlevel 1 exit /b %errorlevel%
 
+echo [4/4] Running runtime and debug tests...
 call script\test_runtime.bat
-exit /b %errorlevel%
+if errorlevel 1 exit /b %errorlevel%
+
+echo All tests completed successfully.
+exit /b 0

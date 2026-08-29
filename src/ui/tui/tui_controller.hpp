@@ -5,6 +5,7 @@
 #include "support/color_scheme.hpp"
 #include "support/interaction.hpp"
 #include "support/source_editor.hpp"
+#include "tui_input.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -14,33 +15,6 @@
 #include <vector>
 
 namespace inputweaver::ui::tui {
-
-enum class Key : std::uint8_t {
-    Character,
-    Enter,
-    Escape,
-    Tab,
-    Up,
-    Down,
-    Left,
-    Right,
-    PageUp,
-    PageDown,
-    Home,
-    End,
-    Backspace,
-    Delete,
-    Copy,
-    Cut,
-    Undo,
-    Redo,
-};
-
-struct KeyEvent final {
-    Key key{Key::Character};
-    char32_t character{};
-    bool shift{};
-};
 
 enum class Page : std::uint8_t {
     Console,
@@ -60,8 +34,10 @@ public:
 
     void Tick();
     void Handle(const KeyEvent& event);
+    [[nodiscard]] bool RequestExit();
     [[nodiscard]] Canvas Render(std::size_t width, std::size_t height);
     [[nodiscard]] std::optional<std::string> TakeClipboardText();
+    [[nodiscard]] bool TakeBackgroundRequest() noexcept;
 
     [[nodiscard]] bool Running() const noexcept;
     [[nodiscard]] Page CurrentPage() const noexcept;
@@ -170,6 +146,7 @@ private:
     bool sourceDirty_{};
     std::optional<PendingDebugRun> pendingDebugRun_;
     std::optional<std::string> clipboardText_;
+    bool backgroundRequested_{};
     bool running_{true};
 };
 

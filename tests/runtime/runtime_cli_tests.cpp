@@ -70,52 +70,43 @@ void TestDryRunOption()
         "dry-run composes with explicit process-launch permission");
 }
 
-void TestExcludedProcessOption()
+void TestExcludeOption()
 {
-    std::vector<std::filesystem::path> arguments = {
+    const std::vector<std::filesystem::path> basenameArguments = {
         "InputWeaver",
         "--program",
         "test.weavec",
         "--target-global",
-        "--exclude-process",
-        "4242"};
+        "--exclude",
+        "InputWeaverTUI.exe"};
     inputweaver::ui::cli::RuntimeCliOptions options{};
     std::string error;
     Check(
         inputweaver::ui::cli::ParseRuntimeCommandLine(
-            std::span<const std::filesystem::path>{arguments},
+            std::span<const std::filesystem::path>{basenameArguments},
             options,
             error)
             && options.targetGlobal
             && options.excludedProcessSelector
-                == std::filesystem::path{"4242"},
-        "global target accepts one excluded process selector");
+                == std::filesystem::path{"InputWeaverTUI.exe"},
+        "exclude accepts the same executable basename selector as target");
 
-    for (const std::filesystem::path& selector : {
-             std::filesystem::path{"terminal.exe"},
-             std::filesystem::path{R"(C:\Tools\terminal.exe)"}}) {
-        arguments.back() = selector;
-        options = {};
-        error.clear();
-        Check(
-            inputweaver::ui::cli::ParseRuntimeCommandLine(
-                std::span<const std::filesystem::path>{arguments},
-                options,
-                error)
-                && options.excludedProcessSelector == selector,
-            "excluded process accepts executable name and absolute path selectors");
-    }
-
-    arguments.pop_back();
+    const std::vector<std::filesystem::path> pathArguments = {
+        "InputWeaver",
+        "--program",
+        "test.weavec",
+        "--exclude",
+        R"(C:\Tools\InputWeaverTUI.exe)"};
     options = {};
     error.clear();
     Check(
-        !inputweaver::ui::cli::ParseRuntimeCommandLine(
-            std::span<const std::filesystem::path>{arguments},
+        inputweaver::ui::cli::ParseRuntimeCommandLine(
+            std::span<const std::filesystem::path>{pathArguments},
             options,
             error)
-            && error.find("--exclude-process") != std::string::npos,
-        "missing excluded process selector is rejected");
+            && options.excludedProcessSelector
+                == std::filesystem::path{R"(C:\Tools\InputWeaverTUI.exe)"},
+        "exclude accepts the same absolute-path selector as target");
 }
 
 } // namespace
@@ -124,7 +115,7 @@ int main()
 {
     TestDebugSessionOption();
     TestDryRunOption();
-    TestExcludedProcessOption();
+    TestExcludeOption();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " runtime CLI test(s) failed.\n";
         return 1;

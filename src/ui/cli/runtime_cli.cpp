@@ -11,7 +11,7 @@ void PrintRuntimeUsage(std::ostream& output) {
         << "Usage:\n"
         << "  InputWeaver --program <file.weavec>"
            " [--target <exe-name-or-absolute-path> | --target-global]"
-           " [--exclude-process <pid-or-exe-name-or-absolute-path>]"
+           " [--exclude <exe-name-or-absolute-path>]"
            " [--allow-exec] [--dry-run] [--log <jsonl-path>] [--trace-input]"
            " [--debug-session <opaque-token>]\n\n"
         << "The command-line target overrides the compiled TARGET declaration.\n"
@@ -37,10 +37,10 @@ bool ParseRuntimeCommandLine(
             options.allowExec = true;
         } else if (argument == std::filesystem::path{"--target-global"}) {
             options.targetGlobal = true;
-        } else if (argument == std::filesystem::path{"--exclude-process"}) {
+        } else if (argument == std::filesystem::path{"--exclude"}) {
             ++index;
             if (index >= arguments.size() || arguments[index].empty()) {
-                errorMessage = "--exclude-process requires a PID, executable name, or absolute path.";
+                errorMessage = "--exclude requires an executable name or absolute path.";
                 return false;
             }
             options.excludedProcessSelector = arguments[index];

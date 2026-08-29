@@ -33,9 +33,20 @@ class Canvas final {
 public:
     Canvas(std::size_t width, std::size_t height, TextStyle baseStyle);
 
-    [[nodiscard]] std::size_t Width() const noexcept;
-    [[nodiscard]] std::size_t Height() const noexcept;
-    [[nodiscard]] std::span<const Cell> Cells() const noexcept;
+    [[nodiscard]] std::size_t Width() const noexcept
+    {
+        return width_;
+    }
+
+    [[nodiscard]] std::size_t Height() const noexcept
+    {
+        return height_;
+    }
+
+    [[nodiscard]] std::span<const Cell> Cells() const noexcept
+    {
+        return cells_;
+    }
 
     void Clear(TextStyle style);
     void Put(

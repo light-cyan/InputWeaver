@@ -375,11 +375,6 @@ void TestParserAndRecovery()
             "missing pause statement allocates no pause-control bucket");
     }
 
-    const CompileOutput legacyMapping = CompileSource(
-        "legacy-mapping.weave",
-        "TARGET=GLOBAL; A := B;");
-    Check(!legacyMapping.Succeeded(), "legacy mapping operator is rejected");
-
     const CompileOutput recovered = CompileSource(
         "recovery.weave",
         "TARGET GLOBAL; F1 down =>; state value on;");

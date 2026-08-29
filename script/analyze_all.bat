@@ -7,8 +7,10 @@ set "INPUTWEAVER_ANALYZE=-std=c++20 -O0 -Wall -Wextra -Wpedantic -Wconversion -W
 set /a INPUTWEAVER_ANALYZED=0
 
 for /f "delims=" %%F in ('git ls-files --cached --others --exclude-standard "src/*.cpp"') do (
-    call :analyze "%%F"
-    if errorlevel 1 exit /b 1
+    if exist "%%F" (
+        call :analyze "%%F"
+        if errorlevel 1 exit /b 1
+    )
 )
 
 if !INPUTWEAVER_ANALYZED! equ 0 (

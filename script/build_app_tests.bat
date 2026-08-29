@@ -7,7 +7,7 @@ if not exist "bin" mkdir "bin"
 set "INPUTWEAVER_CXX=g++"
 set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
 
-echo [1/3] Building ApplicationTests.exe...
+echo [1/4] Building ApplicationTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\app\application_tests.cpp" ^
     "src\app\application.cpp" ^
@@ -15,7 +15,7 @@ echo [1/3] Building ApplicationTests.exe...
     -o "bin\ApplicationTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
-echo [2/3] Building TuiTests.exe...
+echo [2/4] Building TuiTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\ui\tui_tests.cpp" ^
     "src\app\application.cpp" ^
@@ -32,7 +32,7 @@ echo [2/3] Building TuiTests.exe...
     -o "bin\TuiTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
-echo [3/3] Building WindowsAppPlatformTests.exe...
+echo [3/4] Building WindowsAppPlatformTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\app\windows_app_platform_tests.cpp" ^
     "src\platform\windows\app\program_library.cpp" ^
@@ -41,6 +41,15 @@ echo [3/3] Building WindowsAppPlatformTests.exe...
     "src\platform\windows\support\text_encoding.cpp" ^
     "src\app\entry_codec.cpp" ^
     -o "bin\WindowsAppPlatformTests.exe"
+if errorlevel 1 exit /b %errorlevel%
+
+echo [4/4] Building WindowsTuiIpcTests.exe...
+%INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
+    "tests\ui\windows_tui_ipc_tests.cpp" ^
+    "src\platform\windows\tui\tui_ipc.cpp" ^
+    "src\ui\tui\support\canvas.cpp" ^
+    "src\ui\tui\support\text_layout.cpp" ^
+    -o "bin\WindowsTuiIpcTests.exe"
 if errorlevel 1 exit /b %errorlevel%
 
 echo App and TUI test build completed successfully.

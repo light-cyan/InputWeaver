@@ -338,4 +338,29 @@ LocateResult LocateExecutable(std::wstring_view selector) noexcept {
     }
 }
 
+bool SelectLocatedProcess(
+    const LocateResult& located,
+    LocatedProcess& selected) noexcept {
+    if (const LocatedProcess* unique = located.UniqueMatch()) {
+        selected = *unique;
+        return true;
+    }
+
+    DWORD foregroundProcessId{};
+    const HWND foregroundWindow = GetForegroundWindow();
+    if (foregroundWindow == nullptr
+        || GetWindowThreadProcessId(
+            foregroundWindow,
+            &foregroundProcessId) == 0U) {
+        return false;
+    }
+    for (const LocatedProcess& candidate : located.matches) {
+        if (candidate.processId == foregroundProcessId) {
+            selected = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace inputweaver::win32

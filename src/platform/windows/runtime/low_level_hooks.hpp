@@ -85,7 +85,7 @@ public:
         WindowsSelfTag selfTag,
         LowLevelInputSink& sink,
         TargetProcessContext* targetContext,
-        WindowsProcessId excludedProcessId,
+        const ForegroundProcessExclusion* processExclusion,
         StopRequest stopRequest,
         std::atomic<bool>& shutdownRequested,
         HANDLE shutdownEvent,
@@ -123,7 +123,7 @@ private:
     WindowsSelfTag selfTag_;
     LowLevelInputSink& sink_;
     TargetProcessContext* targetContext_;
-    WindowsProcessId excludedProcessId_;
+    const ForegroundProcessExclusion* processExclusion_;
     StopRequest stopRequest_;
     std::atomic<bool>& shutdownRequested_;
     HANDLE shutdownEvent_;

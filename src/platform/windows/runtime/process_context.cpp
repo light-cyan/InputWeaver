@@ -2,6 +2,7 @@
 
 #include "platform/windows/support/ordinal_string.hpp"
 #include "platform/windows/support/unique_handle.hpp"
+#include "process_locator.hpp"
 
 #include <array>
 #include <cstddef>
@@ -163,6 +164,56 @@ bool IsProcessForeground(WindowsProcessId processId) noexcept {
     DWORD foregroundProcessId = 0;
     GetWindowThreadProcessId(foregroundWindow, &foregroundProcessId);
     return foregroundProcessId == processId;
+}
+
+ForegroundProcessExclusion::ForegroundProcessExclusion(
+    std::wstring executableSelector)
+    : executableSelector_(std::move(executableSelector))
+{
+}
+
+bool ForegroundProcessExclusion::Enabled() const noexcept
+{
+    return !executableSelector_.empty();
+}
+
+bool ForegroundProcessExclusion::IsForegroundExcluded() const noexcept
+{
+    if (!Enabled()) {
+        return false;
+    }
+    const HWND foregroundWindow = GetForegroundWindow();
+    if (foregroundWindow == nullptr) {
+        return false;
+    }
+    DWORD foregroundProcessId = 0U;
+    if (GetWindowThreadProcessId(
+            foregroundWindow,
+            &foregroundProcessId) == 0U
+        || foregroundProcessId == 0U) {
+        return false;
+    }
+
+    const std::uint64_t cached = cachedResult_.load(std::memory_order_acquire);
+    const std::uintptr_t windowIdentity = reinterpret_cast<std::uintptr_t>(
+        foregroundWindow);
+    if (cachedWindow_.load(std::memory_order_acquire) == windowIdentity
+        && static_cast<DWORD>(cached >> 1U) == foregroundProcessId) {
+        return (cached & 1U) != 0U;
+    }
+
+    const win32::LocateResult located = win32::LocateExecutable(
+        executableSelector_);
+    win32::LocatedProcess selected{};
+    const bool matches = located.status == win32::LocateStatus::Error
+        || (win32::SelectLocatedProcess(located, selected)
+            && selected.processId == foregroundProcessId);
+    const std::uint64_t updated =
+        (static_cast<std::uint64_t>(foregroundProcessId) << 1U)
+        | static_cast<std::uint64_t>(matches);
+    cachedResult_.store(updated, std::memory_order_release);
+    cachedWindow_.store(windowIdentity, std::memory_order_release);
+    return matches;
 }
 
 [[nodiscard]] static bool IsProcessPointerTarget(
