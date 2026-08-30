@@ -54,7 +54,7 @@ Line comments begin with `//` and end before the next line break or at end of fi
 
 Names are case-sensitive. Identifiers begin with an ASCII letter and continue with ASCII letters, decimal digits, or `_`.
 
-The reserved words and intrinsic names are `TARGET`, `TAP_DURATION`, `ACTION_GAP`, `PAUSE`, `GLOBAL`, `state`, `number`, `duration`, `exit`, `pause`, `when`, `on`, `off`, `held`, `idle`, `toggle`, `down`, `repeat`, `up`, `and`, `or`, `not`, `press`, `release`, `tap`, `wait`, `gap`, `set`, `append`, `pop`, `clear`, `length`, `exec`, `if`, `then`, `else`, `end`, `do`, `while`, `E0`, and `E1`.
+The reserved words and intrinsic names are `TARGET`, `TAP_DURATION`, `ACTION_GAP`, `PAUSE`, `GLOBAL`, `state`, `number`, `duration`, `exit`, `pause`, `when`, `on`, `off`, `held`, `idle`, `toggle`, `down`, `again`, `up`, `and`, `or`, `not`, `press`, `release`, `tap`, `wait`, `gap`, `set`, `append`, `pop`, `clear`, `length`, `exec`, `if`, `then`, `else`, `end`, `do`, `while`, `repeat`, `E0`, and `E1`.
 
 User variable and array names cannot use a reserved word, intrinsic name, scan-prefix name, or unprefixed named control name. Binding therefore distinguishes a declared storage identifier from a control reference without introducing a separate source spelling.
 
@@ -118,7 +118,7 @@ pause-effect = "on" | "off" | "toggle" ;
 
 event-rule       = event, [ condition ], rule-arrow, action-flow, ";" ;
 event            = control-reference, ":", event-transition ;
-event-transition = "down" | "repeat" | "up" ;
+event-transition = "down" | "again" | "up" ;
 condition        = "when", expression ;
 rule-arrow       = "=>" | "=>>" | "~>" | "~>>" ;
 
@@ -329,13 +329,13 @@ Platform-specific named controls are `Windows.Keyboard.IMEOn`, `Linux.Keyboard.C
 
 Raw controls use the established fixed storage ranges for HID usages, Windows virtual keys and scan codes, Linux keys, and macOS key codes. The compiler validates control identity and numeric range; program activation validates backend observation, query, and injection capabilities.
 
-An event transition is `down`, `repeat`, or `up`. Runtime physical state is updated before event conditions are evaluated, so the event control is already `held` during its `down` condition and already `idle` during its `up` condition.
+An event transition is `down`, `again`, or `up`. Runtime physical state is updated before event conditions are evaluated, so the event control is already `held` during its `down` condition and already `idle` during its `up` condition.
 
 Injected input is excluded from user-rule matching and physical-state updates. Input is forwarded without user-rule dispatch while the selected target is ineligible.
 
 ## Mappings and Rules
 
-`source -> target;` maps the complete press, repeat, and release lifecycle. Its optional condition is evaluated on the source `down` edge. The first matching mapping is latched until release.
+`source -> target;` maps the complete down, again, and up lifecycle. Its optional condition is evaluated on the source `down` edge. The first matching mapping is latched until release.
 
 Event-rule arrows retain their delivery and scan behavior:
 

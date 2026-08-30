@@ -195,6 +195,9 @@ namespace {
         case ExpressionType::State:
             equal = left.stateValue == right.stateValue;
             break;
+        case ExpressionType::ControlState:
+            equal = left.controlStateValue == right.controlStateValue;
+            break;
         case ExpressionType::Number:
             equal = left.numberValue == right.numberValue;
             break;
@@ -329,6 +332,15 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
             }
             ++position;
             break;
+        case ExpressionOpcode::PushControlState:
+            value.type = ExpressionType::ControlState;
+            value.controlStateValue = static_cast<ControlState>(
+                instruction.operand0);
+            if (!push(value)) {
+                return Fault(RuntimeEvaluationFault::StackOverflow, position);
+            }
+            ++position;
+            break;
         case ExpressionOpcode::PushNumber:
             if (instruction.operand0 >= program.NumberConstants().size()) {
                 return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
@@ -400,18 +412,74 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
             ++position;
             break;
         }
-        case ExpressionOpcode::ReadControlHeld:
+        case ExpressionOpcode::ReadControlState:
             if (instruction.operand0 >= state.physicalHeld.size()) {
                 return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
             }
-            value.type = ExpressionType::Boolean;
-            value.booleanValue = state.physicalHeld[instruction.operand0].load(
-                std::memory_order_acquire) != 0U;
+            if (instruction.type == ExpressionType::Boolean) {
+                value.type = ExpressionType::Boolean;
+                value.booleanValue = state.physicalHeld[instruction.operand0].load(
+                    std::memory_order_acquire) != 0U;
+            } else if (instruction.type == ExpressionType::ControlState) {
+                value.type = ExpressionType::ControlState;
+                value.controlStateValue = state.physicalHeld[instruction.operand0].load(
+                    std::memory_order_acquire) != 0U
+                    ? ControlState::Held
+                    : ControlState::Idle;
+            } else {
+                return Fault(RuntimeEvaluationFault::TypeMismatch, position);
+            }
             if (!push(value)) {
                 return Fault(RuntimeEvaluationFault::StackOverflow, position);
             }
             ++position;
             break;
+        case ExpressionOpcode::LoadArrayLength:
+            if (instruction.operand0 >= state.arrays.size()) {
+                return Fault(RuntimeEvaluationFault::InvalidArray, position);
+            }
+            value.type = ExpressionType::Number;
+            value.numberValue = static_cast<double>(
+                state.arrays[instruction.operand0].Size());
+            if (!push(value)) {
+                return Fault(RuntimeEvaluationFault::StackOverflow, position);
+            }
+            ++position;
+            break;
+        case ExpressionOpcode::LoadArrayElement: {
+            RuntimeValue indexValue{};
+            if (!pop(indexValue)) {
+                return Fault(RuntimeEvaluationFault::StackUnderflow, position);
+            }
+            if (indexValue.type != ExpressionType::Number) {
+                return Fault(RuntimeEvaluationFault::TypeMismatch, position);
+            }
+            if (instruction.operand0 >= state.arrays.size()) {
+                return Fault(RuntimeEvaluationFault::InvalidArray, position);
+            }
+            const RuntimeArrayStorage& array = state.arrays[instruction.operand0];
+            const NormalizedArrayIndex index = NormalizeArrayIndex(
+                indexValue.numberValue,
+                array.Size());
+            if (!index.Valid()) {
+                return Fault(
+                    index.status == ArrayIndexStatus::OutOfBounds
+                        ? RuntimeEvaluationFault::ArrayBounds
+                        : RuntimeEvaluationFault::InvalidArrayIndex,
+                    position);
+            }
+            if (!array.Read(index.value, value)) {
+                return Fault(RuntimeEvaluationFault::ArrayBounds, position);
+            }
+            if (value.type != instruction.type) {
+                return Fault(RuntimeEvaluationFault::TypeMismatch, position);
+            }
+            if (!push(value)) {
+                return Fault(RuntimeEvaluationFault::StackOverflow, position);
+            }
+            ++position;
+            break;
+        }
         case ExpressionOpcode::Unary: {
             RuntimeValue operand{};
             if (!pop(operand)) {

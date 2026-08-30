@@ -2,6 +2,7 @@
 #include "program/program_validator.hpp"
 #include "program/weavec_codec.hpp"
 #include "runtime/artifact_loader.hpp"
+#include "runtime/array_storage.hpp"
 #include "runtime/program_runtime.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 
@@ -53,7 +54,7 @@ private:
 
 class FakeControlPort final : public inputweaver::RuntimeControlPort {
 public:
-    bool rejectRepeat{};
+    bool rejectAgain{};
     bool rejectPhysicalState{};
     bool rejectAll{};
 
@@ -74,10 +75,10 @@ public:
                          : inputweaver::ToControlUseBits(
                                inputweaver::ControlUse::PhysicalState))
                   | inputweaver::ToControlUseBits(inputweaver::ControlUse::OutputDownUp)
-                  | (rejectRepeat
+            | (rejectAgain
                          ? 0U
                          : inputweaver::ToControlUseBits(
-                               inputweaver::ControlUse::OutputRepeat)));
+                    inputweaver::ControlUse::OutputAgain)));
         activated.device = inputweaver::DeviceKind::Keyboard;
         activated.initialStateQueryable = !rejectPhysicalState;
         if (rejectAll) {
@@ -94,7 +95,7 @@ public:
     std::vector<inputweaver::RuntimeOutputRequest> requests;
     inputweaver::RuntimeOutputResult nextResult{
         inputweaver::RuntimeOutputResult::Accepted};
-    inputweaver::RuntimeOutputResult repeatedFailure{
+    inputweaver::RuntimeOutputResult againFailure{
         inputweaver::RuntimeOutputResult::Failed};
     std::size_t failuresRemaining{};
 
@@ -108,7 +109,7 @@ public:
         }
         if (failuresRemaining != 0U) {
             --failuresRemaining;
-            return repeatedFailure;
+        return againFailure;
         }
         const inputweaver::RuntimeOutputResult result = nextResult;
         nextResult = inputweaver::RuntimeOutputResult::Accepted;
@@ -195,10 +196,15 @@ public:
 class FakeDebugPort final : public inputweaver::RuntimeDebugEventPort {
 public:
     std::vector<inputweaver::RuntimeDebugEvent> events;
+    std::atomic<bool>* executionStarted{};
 
     [[nodiscard]] bool Publish(
         const inputweaver::RuntimeDebugEvent& event) noexcept override
     {
+        if (executionStarted != nullptr
+            && event.kind == inputweaver::RuntimeDebugEventKind::RuleMatched) {
+            executionStarted->store(true, std::memory_order_release);
+        }
         try {
             events.push_back(event);
             return true;
@@ -214,10 +220,11 @@ struct RuntimeHarness final {
     FakeOutputPort output;
     FakeRoutePort route;
     FakeLauncher launcher;
+    FakeDebugPort debug;
     inputweaver::ProgramRuntime runtime;
 
     explicit RuntimeHarness(inputweaver::RuntimeCapacities capacities = {})
-        : runtime(capacities, controls, output, route, launcher, clock)
+        : runtime(capacities, controls, output, route, launcher, clock, &debug)
     {
     }
 };
@@ -233,7 +240,7 @@ void RebuildControlRequirements(inputweaver::CompiledProgramStorage& storage)
         }
     };
     for (const ExpressionInstruction& instruction : storage.expressionCode) {
-        if (instruction.opcode == ExpressionOpcode::ReadControlHeld) {
+        if (instruction.opcode == ExpressionOpcode::ReadControlState) {
             add(ControlRefId{instruction.operand0}, ControlUse::PhysicalState);
         }
     }
@@ -258,7 +265,7 @@ void RebuildControlRequirements(inputweaver::CompiledProgramStorage& storage)
     }
     for (const MappingDescriptor& mapping : storage.mappings) {
         add(mapping.target, ControlUse::OutputDownUp);
-        add(mapping.target, ControlUse::OutputRepeat);
+        add(mapping.target, ControlUse::OutputAgain);
     }
     storage.controlRequirements.clear();
     for (std::size_t index = 0U; index < uses.size(); ++index) {
@@ -297,6 +304,83 @@ void RebuildControlRequirements(inputweaver::CompiledProgramStorage& storage)
     }
     Check(result.program != nullptr, "test fixture finalizes");
     return std::move(result.program);
+}
+
+void TestArrayStorage()
+{
+    using namespace inputweaver;
+    Check(NormalizeArrayIndex(3.9, 4U).value == 3U,
+        "fractional array indexes use floor normalization");
+    Check(NormalizeArrayIndex(-0.1, 4U).status == ArrayIndexStatus::Negative,
+        "negative array indexes are rejected before conversion");
+    Check(NormalizeArrayIndex(
+            (std::numeric_limits<double>::infinity)(),
+            4U).status == ArrayIndexStatus::NonFinite,
+        "non-finite array indexes are rejected");
+    Check(NormalizeArrayIndex(
+            (std::numeric_limits<double>::max)(),
+            4U).status == ArrayIndexStatus::TooLarge,
+        "array indexes outside the host range are rejected");
+    Check(NormalizeArrayIndex(4.0, 4U).status == ArrayIndexStatus::OutOfBounds,
+        "array indexes are checked against logical length");
+
+    std::vector<std::uint8_t> initial(256U, 0U);
+    initial.back() = 1U;
+    RuntimeArrayStorage array(
+        ArrayElementType::State,
+        initial,
+        std::span<const double>{});
+    const std::size_t initialBytes = array.AllocatedBytes();
+    const auto growthPlan = array.PlanAppend();
+    auto growth = growthPlan
+        ? array.PrepareAppend(*growthPlan)
+        : std::nullopt;
+    RuntimeValue on{};
+    on.type = ExpressionType::State;
+    on.stateValue = 1U;
+    Check(growthPlan.has_value()
+            && growth.has_value()
+            && growthPlan->projectedBytes > initialBytes
+            && array.Append(on, *growthPlan, std::move(*growth))
+            && array.Size() == 257U,
+        "page-boundary append prepares page and directory growth before commit");
+    RuntimeValue read{};
+    Check(array.Read(256U, read)
+            && read.type == ExpressionType::State
+            && read.stateValue == 1U,
+        "a newly committed page is immediately addressable");
+    RuntimeValue popped{};
+    Check(array.Pop(popped)
+            && popped.type == ExpressionType::State
+            && popped.stateValue == 1U,
+        "pop returns the final typed array element");
+    const std::size_t retainedBytes = array.AllocatedBytes();
+    array.Clear();
+    const auto reusePlan = array.PlanAppend();
+    auto reused = reusePlan
+        ? array.PrepareAppend(*reusePlan)
+        : std::nullopt;
+    Check(array.Size() == 0U
+            && retainedBytes > initialBytes
+            && array.AllocatedBytes() == retainedBytes
+            && reusePlan.has_value()
+            && reused.has_value()
+            && reusePlan->projectedBytes == retainedBytes
+            && array.Append(on, *reusePlan, std::move(*reused))
+            && array.Size() == 1U,
+        "clear retains and reuses allocated pages without another growth charge");
+    RuntimeValue wrongType{};
+    wrongType.type = ExpressionType::Number;
+    wrongType.numberValue = 1.0;
+    const auto unusedPlan = array.PlanAppend();
+    auto unused = unusedPlan
+        ? array.PrepareAppend(*unusedPlan)
+        : std::nullopt;
+    Check(unusedPlan.has_value()
+            && unused.has_value()
+            && !array.Append(wrongType, *unusedPlan, std::move(*unused))
+            && array.Size() == 1U,
+        "typed array storage rejects mismatched append values without mutation");
 }
 
 void SelectExecutableTarget(inputweaver::CompiledProgramStorage& storage)
@@ -486,13 +570,13 @@ void TestMappingFixture()
     Check(
         harness.runtime.HandleInput(KeyboardEvent(trigger, inputweaver::Transition::Down))
             == inputweaver::InputDecision::Suppress,
-        "active mapping repeat is consumed before ordinary rules");
+        "active mapping again is consumed before ordinary rules");
     (void)harness.runtime.Pump();
     Check(
         harness.output.requests.size() == 2U
             && harness.output.requests.back().transition
-                == inputweaver::RuntimeOutputTransition::Repeat,
-        "mapping forwards repeat lifecycle output");
+            == inputweaver::RuntimeOutputTransition::Again,
+        "mapping forwards again lifecycle output");
     Check(
         harness.runtime.HandleInput(KeyboardEvent(trigger, inputweaver::Transition::Up))
             == inputweaver::InputDecision::Suppress,
@@ -510,8 +594,9 @@ void TestMappingFixture()
 void TestConditionalRepeatFixture()
 {
     RuntimeHarness harness;
-    const auto program = Finalize(
-        inputweaver::test::MakeConditionalRepeatFixtureStorage());
+    auto repeatStorage = inputweaver::test::MakeConditionalRepeatFixtureStorage();
+    repeatStorage.numberConstants[0] = 2.5;
+    const auto program = Finalize(std::move(repeatStorage));
     const std::uint32_t trigger = TriggerControl(*program);
     Check(harness.runtime.Activate(program).activated, "repeat fixture activates");
     Check(
@@ -527,7 +612,7 @@ void TestConditionalRepeatFixture()
     (void)harness.runtime.Pump();
     harness.clock.Advance(10'000'000);
     (void)harness.runtime.Pump();
-    Check(harness.output.requests.size() == 4U, "repeat fixture taps twice");
+    Check(harness.output.requests.size() == 4U, "fractional repeat limit floors to two taps");
     Check(
         harness.output.requests[0].transition
                 == inputweaver::RuntimeOutputTransition::Down
@@ -602,7 +687,7 @@ void TestPauseFixtureAndCancellation()
     };
     storage.pauseControlBuckets = {
         {{ControlRefId{0U}, EventTransition::Down}, {0U, 2U}},
-        {{ControlRefId{0U}, EventTransition::Repeat}, {2U, 1U}},
+        {{ControlRefId{0U}, EventTransition::Again}, {2U, 1U}},
         {{ControlRefId{0U}, EventTransition::Up}, {3U, 1U}},
     };
     storage.requirements = ComputeProgramRequirements(storage);
@@ -627,7 +712,7 @@ void TestPauseEffectsAndIdempotence()
                 == inputweaver::InputDecision::Forward
             && harness.runtime.PauseOn()
             && harness.runtime.Generation() == initial + 2U,
-        "pause On observes a repeat and recovers while off");
+        "pause On observes again and recovers while off");
     const std::uint64_t onGeneration = harness.runtime.Generation();
     Check(
         harness.runtime.HandleInput(KeyboardEvent(trigger, inputweaver::Transition::Down))
@@ -757,7 +842,7 @@ void AppendExpression(
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     });
     AppendExpression(storage, ExpressionType::Boolean, 1U, {
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 0U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     });
     AppendExpression(storage, ExpressionType::State, 1U, {
@@ -961,6 +1046,235 @@ void TestExpressionVm()
     Check(
         heldAfter.Succeeded() && heldAfter.value.booleanValue,
         "physical state updates before later expression evaluation");
+}
+
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeArrayActionStorage()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    const StringId stateArrayName{
+        static_cast<std::uint32_t>(storage.strings.size())};
+    storage.strings.push_back("gates");
+    const StringId numberArrayName{
+        static_cast<std::uint32_t>(storage.strings.size())};
+    storage.strings.push_back("values");
+    const StringId resultName{
+        static_cast<std::uint32_t>(storage.strings.size())};
+    storage.strings.push_back("result");
+    storage.arrays = {
+        {ArrayElementType::State, {0U, 2U}},
+        {ArrayElementType::Number, {0U, 2U}},
+    };
+    storage.initialArrayStates = {0U, 1U};
+    storage.initialArrayNumbers = {1.5, 2.5};
+    storage.debugInfo.arrays = {
+        {stateArrayName, ArrayId{0U}, {0U, 1U}},
+        {numberArrayName, ArrayId{1U}, {1U, 1U}},
+    };
+    storage.userValues.initialStates = {1U};
+    storage.valueRefs.push_back({
+        ValueDomain::UserState,
+        ValueType::State,
+        0U});
+    storage.debugInfo.variables.push_back({
+        resultName,
+        ValueRefId{static_cast<std::uint32_t>(storage.valueRefs.size() - 1U)},
+        {2U, 1U}});
+
+    const auto appendExpression = [&](ExpressionType type,
+                                      std::uint32_t maximumStack,
+                                      std::initializer_list<ExpressionInstruction> code) {
+        const ExpressionId id{
+            static_cast<std::uint32_t>(storage.expressions.size())};
+        const std::uint32_t begin = static_cast<std::uint32_t>(
+            storage.expressionCode.size());
+        storage.expressionCode.insert(
+            storage.expressionCode.end(),
+            code.begin(),
+            code.end());
+        storage.expressions.push_back({
+            {begin, static_cast<std::uint32_t>(code.size())},
+            type,
+            maximumStack,
+            source});
+        storage.debugInfo.expressionInstructionSpans.insert(
+            storage.debugInfo.expressionInstructionSpans.end(),
+            code.size(),
+            source);
+        return id;
+    };
+    const std::uint32_t indexZero = static_cast<std::uint32_t>(
+        storage.numberConstants.size());
+    storage.numberConstants.push_back(0.8);
+    const std::uint32_t indexOne = static_cast<std::uint32_t>(
+        storage.numberConstants.size());
+    storage.numberConstants.push_back(1.2);
+    const std::uint32_t appendedNumber = static_cast<std::uint32_t>(
+        storage.numberConstants.size());
+    storage.numberConstants.push_back(3.5);
+    const ExpressionId firstIndex = appendExpression(
+        ExpressionType::Number,
+        1U,
+        {{ExpressionOpcode::PushNumber, ExpressionType::Number, indexZero, 0U},
+         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U}});
+    const ExpressionId secondIndex = appendExpression(
+        ExpressionType::Number,
+        1U,
+        {{ExpressionOpcode::PushNumber, ExpressionType::Number, indexOne, 0U},
+         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U}});
+    const ExpressionId stateOn = appendExpression(
+        ExpressionType::State,
+        1U,
+        {{ExpressionOpcode::PushState, ExpressionType::State, 1U, 0U},
+         {ExpressionOpcode::Return, ExpressionType::State, 0U, 0U}});
+    const ExpressionId numberValue = appendExpression(
+        ExpressionType::Number,
+        1U,
+        {{ExpressionOpcode::PushNumber, ExpressionType::Number, appendedNumber, 0U},
+         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U}});
+    static_cast<void>(appendExpression(
+        ExpressionType::State,
+        1U,
+        {{ExpressionOpcode::PushNumber, ExpressionType::Number, indexZero, 0U},
+         {ExpressionOpcode::LoadArrayElement, ExpressionType::State, 0U, 0U},
+         {ExpressionOpcode::Return, ExpressionType::State, 0U, 0U}}));
+    static_cast<void>(appendExpression(
+        ExpressionType::Number,
+        1U,
+        {{ExpressionOpcode::LoadArrayLength, ExpressionType::Number, 0U, 0U},
+         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U}}));
+    static_cast<void>(appendExpression(
+        ExpressionType::Number,
+        1U,
+        {{ExpressionOpcode::LoadArrayLength, ExpressionType::Number, 1U, 0U},
+         {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U}}));
+    static_cast<void>(appendExpression(
+        ExpressionType::State,
+        1U,
+        {{ExpressionOpcode::PushNumber, ExpressionType::Number, appendedNumber, 0U},
+         {ExpressionOpcode::LoadArrayElement, ExpressionType::State, 0U, 0U},
+         {ExpressionOpcode::Return, ExpressionType::State, 0U, 0U}}));
+
+    storage.actionPrograms = {{{0U, 6U}, 0U, 0U, source}};
+    storage.actionCode = {
+        {ActionOpcode::SetArrayElement, 0U, firstIndex.value, stateOn.value},
+        {ActionOpcode::ToggleArrayElement, 0U, secondIndex.value, 0U},
+        {ActionOpcode::AppendArrayElement, 1U, numberValue.value, 0U},
+        {ActionOpcode::PopArrayElement, 0U, 0U, 0U},
+        {ActionOpcode::ClearArray, 1U, 0U, 0U},
+        {ActionOpcode::End, 0U, 0U, 0U},
+    };
+    storage.debugInfo.actionInstructionSpans.assign(
+        storage.actionCode.size(),
+        source);
+    return storage;
+}
+
+void TestArrayRuntime()
+{
+    using namespace inputweaver;
+    RuntimeHarness harness;
+    const auto program = Finalize(MakeArrayActionStorage());
+    Check(harness.runtime.Activate(program).activated, "array fixture activates");
+    const std::uint32_t trigger = TriggerControl(*program);
+    Check(
+        harness.runtime.HandleInput(KeyboardEvent(trigger, Transition::Down))
+            == InputDecision::Suppress,
+        "array action rule consumes its event");
+    (void)harness.runtime.Pump();
+    const std::size_t expressionBase = program->Expressions().size() - 4U;
+    const RuntimeEvaluationResult first = harness.runtime.EvaluateExpression(
+        ExpressionId{static_cast<std::uint32_t>(expressionBase)});
+    const RuntimeEvaluationResult stateLength = harness.runtime.EvaluateExpression(
+        ExpressionId{static_cast<std::uint32_t>(expressionBase + 1U)});
+    const RuntimeEvaluationResult numberLength = harness.runtime.EvaluateExpression(
+        ExpressionId{static_cast<std::uint32_t>(expressionBase + 2U)});
+    const RuntimeEvaluationResult bounds = harness.runtime.EvaluateExpression(
+        ExpressionId{static_cast<std::uint32_t>(expressionBase + 3U)});
+    bool poppedState = true;
+    Check(
+        first.Succeeded() && first.value.type == ExpressionType::State
+            && first.value.stateValue == 1U
+            && stateLength.Succeeded()
+            && stateLength.value.numberValue == 1.0
+            && numberLength.Succeeded()
+            && numberLength.value.numberValue == 0.0
+            && bounds.fault == RuntimeEvaluationFault::ArrayBounds
+            && harness.runtime.ReadUserState(0U, poppedState)
+            && !poppedState,
+        "array actions use floor indexes and commit set, toggle, append, pop, and clear");
+    const std::size_t arrayChanges = static_cast<std::size_t>(std::count_if(
+        harness.debug.events.begin(),
+        harness.debug.events.end(),
+        [](const RuntimeDebugEvent& event) {
+            return event.kind == RuntimeDebugEventKind::ArrayChanged;
+        }));
+    Check(arrayChanges == 5U, "each successful array mutation publishes a snapshot");
+    const RuntimeMetrics metrics = harness.runtime.Metrics();
+    Check(
+        metrics.currentArrayBytes != 0U
+            && metrics.peakArrayBytes == metrics.currentArrayBytes,
+        "array allocation metrics expose current and peak storage");
+
+    RuntimeCapacities limited{};
+    limited.maximumArrayBytes = program->Requirements().initialArrayElementBytes;
+    RuntimeHarness limitedHarness(limited);
+    const RuntimeActivationResult rejected = limitedHarness.runtime.Activate(program);
+    Check(
+        !rejected.activated
+            && rejected.error.code == RuntimeActivationErrorCode::ArrayByteCapacity
+            && rejected.error.subject
+                == static_cast<std::uint32_t>(RuntimeActivationSubject::ArrayBytes),
+        "activation accounts for array pages and directory storage");
+
+    CompiledProgramStorage growthStorage = MakeArrayActionStorage();
+    growthStorage.arrays[1].initialValues.count = 256U;
+    growthStorage.initialArrayNumbers.assign(256U, 2.5);
+    const SourceSpan rejectedAppendSpan{7U, 3U};
+    growthStorage.debugInfo.actionInstructionSpans[2U] = rejectedAppendSpan;
+    const auto growthProgram = Finalize(std::move(growthStorage));
+    RuntimeArrayStorage initialStates(
+        ArrayElementType::State,
+        growthProgram->InitialArrayStates(),
+        std::span<const double>{});
+    RuntimeArrayStorage initialNumbers(
+        ArrayElementType::Number,
+        std::span<const std::uint8_t>{},
+        growthProgram->InitialArrayNumbers());
+    RuntimeCapacities growthLimit{};
+    growthLimit.maximumArrayBytes = initialStates.AllocatedBytes()
+        + initialNumbers.AllocatedBytes();
+    RuntimeHarness growthHarness(growthLimit);
+    Check(growthHarness.runtime.Activate(growthProgram).activated,
+        "an exact initial array allocation fits its byte capacity");
+    (void)growthHarness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*growthProgram),
+        Transition::Down));
+    (void)growthHarness.runtime.Pump();
+    const std::size_t growthExpressionBase = growthProgram->Expressions().size() - 4U;
+    const RuntimeEvaluationResult retainedLength =
+        growthHarness.runtime.EvaluateExpression(ExpressionId{
+            static_cast<std::uint32_t>(growthExpressionBase + 2U)});
+    RuntimeDiagnosticRecord growthDiagnostic{};
+    bool foundGrowthRejection = false;
+    while (growthHarness.runtime.TryPopDiagnostic(growthDiagnostic)) {
+        foundGrowthRejection = foundGrowthRejection
+            || (growthDiagnostic.kind == RuntimeDiagnosticKind::TaskActionFault
+                && growthDiagnostic.subject == 1U
+                && growthDiagnostic.position == 2U
+                && growthDiagnostic.source == rejectedAppendSpan
+                && growthDiagnostic.detail == 25U);
+    }
+    const RuntimeMetrics growthMetrics = growthHarness.runtime.Metrics();
+    Check(
+        retainedLength.Succeeded()
+            && retainedLength.value.numberValue == 256.0
+            && growthMetrics.currentArrayBytes == growthLimit.maximumArrayBytes
+            && growthMetrics.peakArrayBytes == growthLimit.maximumArrayBytes
+            && growthMetrics.rejectedArrayGrowth == 1U
+            && foundGrowthRejection,
+        "a rejected page growth rolls back and identifies its array action");
 }
 
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeArrowFixtureStorage()
@@ -1671,6 +1985,184 @@ void TestConcurrentStateLocks()
         "nonblocking hook locks fail open while accepted toggles remain deterministic");
 }
 
+[[nodiscard]] inputweaver::CompiledProgramStorage MakeEventSnapshotStorage(
+    bool arrayFirst = false)
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = MakeConcurrentStateStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.strings.push_back("sharedArray");
+    storage.arrays = {{ArrayElementType::State, {0U, 1U}}};
+    storage.initialArrayStates = {0U};
+    storage.debugInfo.arrays = {{StringId{2U}, ArrayId{0U}, source}};
+    storage.numberConstants = {0.0};
+    const ExpressionId index{
+        static_cast<std::uint32_t>(storage.expressions.size())};
+    AppendExpression(storage, ExpressionType::Number, 1U, {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
+    });
+    const ExpressionId flagOn{
+        static_cast<std::uint32_t>(storage.expressions.size())};
+    AppendExpression(storage, ExpressionType::Boolean, 2U, {
+        {ExpressionOpcode::LoadValue, ExpressionType::State, 0U, 0U},
+        {ExpressionOpcode::PushState, ExpressionType::State, 1U, 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    const ExpressionId arrayOn{
+        static_cast<std::uint32_t>(storage.expressions.size())};
+    AppendExpression(storage, ExpressionType::Boolean, 2U, {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::LoadArrayElement, ExpressionType::State, 0U, 0U},
+        {ExpressionOpcode::PushState, ExpressionType::State, 1U, 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    const ExpressionId arrayValue{
+        static_cast<std::uint32_t>(storage.expressions.size())};
+    AppendExpression(storage, ExpressionType::State, 1U, {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::LoadArrayElement, ExpressionType::State, 0U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::State, 0U, 0U},
+    });
+    storage.debugInfo.expressionInstructionSpans.insert(
+        storage.debugInfo.expressionInstructionSpans.end(),
+        14U,
+        source);
+    storage.actionPrograms = {{{0U, 3U}, 0U, 0U, source}};
+    storage.actionCode = arrayFirst
+        ? std::vector<ActionInstruction>{
+            {ActionOpcode::ToggleArrayElement, 0U, index.value, 0U},
+            {ActionOpcode::Toggle, 0U, 0U, 0U},
+            {ActionOpcode::End, 0U, 0U, 0U}}
+        : std::vector<ActionInstruction>{
+            {ActionOpcode::Toggle, 0U, 0U, 0U},
+            {ActionOpcode::ToggleArrayElement, 0U, index.value, 0U},
+            {ActionOpcode::End, 0U, 0U, 0U}};
+    storage.debugInfo.actionInstructionSpans.assign(3U, source);
+    storage.rules.push_back({
+        flagOn,
+        ActionProgramId{},
+        MappingId{},
+        Delivery::Consume,
+        MatchFlow::Stop,
+        RuleKind::Event,
+        1U,
+        source});
+    storage.eventBuckets = {
+        {{ControlRefId{0U}, EventTransition::Down}, {1U, 1U}},
+        {{ControlRefId{1U}, EventTransition::Down}, {0U, 1U}},
+    };
+    storage.exitControlRules.push_back({flagOn, 2U, source});
+    storage.exitControlBuckets.insert(
+        storage.exitControlBuckets.begin(),
+        {{ControlRefId{0U}, EventTransition::Down}, {1U, 1U}});
+    storage.pauseControlRules = {
+        {arrayOn, Delivery::Consume, PauseEffect::On, 3U, source},
+    };
+    storage.pauseControlBuckets = {
+        {{ControlRefId{0U}, EventTransition::Down}, {0U, 1U}},
+    };
+    (void)arrayValue;
+    storage.requirements = ComputeProgramRequirements(storage);
+    return storage;
+}
+
+void TestEventSnapshotAndCancelledMutation()
+{
+    using namespace inputweaver;
+    const auto program = Finalize(MakeEventSnapshotStorage());
+    const auto arrayFirstProgram = Finalize(MakeEventSnapshotStorage(true));
+    const auto run = [&](const std::shared_ptr<const CompiledProgram>& candidate,
+                         bool cancel) {
+        struct Result final {
+            InputDecision decision{InputDecision::Suppress};
+            bool taskBlocked{};
+            bool value{};
+            bool arrayValue{};
+            std::uint64_t cancelledTasks{};
+        } result;
+        RuntimeHarness harness;
+        Check(harness.runtime.Activate(candidate).activated,
+            "event snapshot fixture activates");
+        const ControlRefId taskControl = FindKeyboardControl(*candidate, 0x3fU);
+        const ControlRefId snapshotControl = FindKeyboardControl(*candidate, 0x40U);
+        RuntimeInputEvent queued = KeyboardEvent(taskControl.value, Transition::Down);
+        queued.debugCaptureEpoch = 1U;
+        queued.debugInputSequence = 1U;
+        Check(harness.runtime.HandleInput(queued) == InputDecision::Suppress,
+            "snapshot fixture queues its mutation task");
+
+        std::atomic<bool> dispatchEntered{false};
+        std::atomic<bool> dispatchReleased{false};
+        std::atomic<bool> executionStarted{false};
+        std::atomic<bool> pumpDone{false};
+        harness.route.dispatchEntered = &dispatchEntered;
+        harness.route.dispatchReleased = &dispatchReleased;
+        harness.debug.executionStarted = &executionStarted;
+        std::thread eventThread([&] {
+            result.decision = harness.runtime.HandleInput(
+                KeyboardEvent(snapshotControl.value, Transition::Down));
+        });
+        const auto waitFor = [](const std::atomic<bool>& flag) {
+            const auto deadline = std::chrono::steady_clock::now()
+                + std::chrono::seconds(1);
+            while (!flag.load(std::memory_order_acquire)
+                && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            return flag.load(std::memory_order_acquire);
+        };
+        Check(waitFor(dispatchEntered),
+            "snapshot event reaches the controlled routing boundary");
+        std::thread pumpThread([&] {
+            (void)harness.runtime.Pump();
+            pumpDone.store(true, std::memory_order_release);
+        });
+        Check(waitFor(executionStarted),
+            "queued mutation starts while the event is in flight");
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        result.taskBlocked = !pumpDone.load(std::memory_order_acquire);
+        if (cancel) {
+            harness.runtime.RequestShutdown();
+        }
+        dispatchReleased.store(true, std::memory_order_release);
+        eventThread.join();
+        pumpThread.join();
+        (void)harness.runtime.ReadUserState(0U, result.value);
+        const RuntimeEvaluationResult array = harness.runtime.EvaluateExpression(
+            ExpressionId{4U});
+        result.arrayValue = array.Succeeded() && array.value.stateValue != 0U;
+        result.cancelledTasks = harness.runtime.Metrics().cancelledTasks;
+        return result;
+    };
+
+    const auto committed = run(program, false);
+    Check(
+        committed.taskBlocked
+            && committed.decision == InputDecision::Forward
+            && committed.value
+            && committed.arrayValue,
+        "exit, PAUSE, and ordinary predicates share one event-start state");
+    const auto cancelledScalar = run(program, true);
+    const auto cancelledArray = run(arrayFirstProgram, true);
+    Check(
+        cancelledScalar.taskBlocked
+            && cancelledScalar.decision == InputDecision::Forward
+            && !cancelledScalar.value
+            && !cancelledScalar.arrayValue
+            && cancelledScalar.cancelledTasks == 1U
+            && cancelledArray.taskBlocked
+            && cancelledArray.decision == InputDecision::Forward
+            && !cancelledArray.value
+            && !cancelledArray.arrayValue
+            && cancelledArray.cancelledTasks == 1U,
+        "scalar and array mutations recheck generation after taking state locks");
+}
+
 void TestExecCancellationBoundaries()
 {
     const auto program = Finalize(MakeActionFixtureStorage());
@@ -1765,7 +2257,12 @@ void TestExecCancellationBoundaries()
     storage.controlRequirements = {
         {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
     };
-    storage.debugInfo.expressionInstructionSpans.assign(4U, source);
+    storage.debugInfo.expressionInstructionSpans = {
+        {1U, 1U},
+        {3U, 1U},
+        {7U, 3U},
+        {11U, 1U},
+    };
     storage.debugInfo.actionInstructionSpans.assign(2U, source);
     storage.requirements = ComputeProgramRequirements(storage);
     return storage;
@@ -1784,14 +2281,19 @@ void TestTaskExpressionFault()
     bool foundFault = false;
     while (harness.runtime.TryPopDiagnostic(diagnostic)) {
         foundFault = foundFault
-            || diagnostic.kind
-                == inputweaver::RuntimeDiagnosticKind::TaskExpressionFault;
+            || (diagnostic.kind
+                    == inputweaver::RuntimeDiagnosticKind::TaskExpressionFault
+                && diagnostic.subject == 0U
+                && diagnostic.position == 2U
+                && diagnostic.source == inputweaver::SourceSpan{7U, 3U}
+                && diagnostic.detail == static_cast<std::uint32_t>(
+                    inputweaver::RuntimeEvaluationFault::DivisionByZero));
     }
     Check(
         harness.runtime.FatalShutdownRequested()
             && harness.runtime.ActiveTaskCount() == 0U
             && foundFault,
-        "task expression fault requests shutdown and records its action position");
+        "task expression faults report the exact expression instruction span");
 }
 
 void TestRuntimeDebugEvents()
@@ -2129,7 +2631,7 @@ void TestOwnershipFaultsAndOutputFailure()
         ExpressionId{}, ActionProgramId{0U}, MappingId{}, Delivery::Observe,
         MatchFlow::Stop, RuleKind::Event, 1U, source});
     storage.eventBuckets.push_back({
-        {ControlRefId{1U}, EventTransition::Repeat}, {1U, 1U}});
+        {ControlRefId{1U}, EventTransition::Again}, {1U, 1U}});
     storage.requirements = ComputeProgramRequirements(storage);
     return storage;
 }
@@ -2149,8 +2651,8 @@ void TestMappingAndTaskOwnershipOverlap()
             && harness.output.requests[0].transition
                 == inputweaver::RuntimeOutputTransition::Down
             && harness.output.requests[1].transition
-                == inputweaver::RuntimeOutputTransition::Repeat,
-        "mapping repeat and overlapping tap retain one global down owner");
+            == inputweaver::RuntimeOutputTransition::Again,
+        "mapping again and overlapping tap retain one global down owner");
     harness.clock.Advance(30'000'000);
     (void)harness.runtime.Pump();
     Check(
@@ -2226,7 +2728,12 @@ void TestProductionTaskThread()
     (void)runtime.HandleInput(KeyboardEvent(
         TriggerControl(*program),
         inputweaver::Transition::Down));
-    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(1);
+    while (runtime.Metrics().completedTasks == 0U
+        && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     runtime.StopTaskThread();
     Check(
         output.requests.size() == 2U
@@ -2489,7 +2996,7 @@ void TestActivationAndTransientCapacity()
             == inputweaver::RuntimeActivationErrorCode::UnsupportedControl,
         "unsupported control rejects activation before publication");
     RuntimeHarness missingCapability;
-    missingCapability.controls.rejectRepeat = true;
+    missingCapability.controls.rejectAgain = true;
     Check(
         missingCapability.runtime.Activate(mapping).error.code
             == inputweaver::RuntimeActivationErrorCode::MissingControlCapability,
@@ -2516,7 +3023,7 @@ void TestActivationAndTransientCapacity()
 
     RuntimeHarness retained;
     Check(retained.runtime.Activate(tap).activated, "baseline program activates");
-    retained.controls.rejectRepeat = true;
+    retained.controls.rejectAgain = true;
     const auto failedReload = retained.runtime.Activate(mapping);
     Check(
         !failedReload.activated && retained.runtime.HasActiveProgram(),
@@ -2642,7 +3149,7 @@ void TestReversibleTargetEligibility()
             source,
             inputweaver::Transition::Down))
                 == inputweaver::InputDecision::Suppress,
-        "eligible target commits a mapping repeat");
+        "eligible target commits a mapping again");
     (void)mappingHarness.runtime.Pump();
     const std::uint64_t generation = mappingHarness.runtime.Generation();
     mappingHarness.runtime.SetTargetEligible(false);
@@ -2654,7 +3161,7 @@ void TestReversibleTargetEligibility()
             && mappingHarness.output.requests[0].transition
                 == inputweaver::RuntimeOutputTransition::Down
             && mappingHarness.output.requests[1].transition
-                == inputweaver::RuntimeOutputTransition::Repeat
+            == inputweaver::RuntimeOutputTransition::Again
             && mappingHarness.output.requests[0].generation == generation
             && mappingHarness.output.requests[1].generation == generation
             && mappingHarness.output.requests[2].transition
@@ -2670,7 +3177,7 @@ void TestReversibleTargetEligibility()
             source,
             inputweaver::Transition::Down))
                 == inputweaver::InputDecision::Forward,
-        "held source repeat after foreground return does not remap");
+        "held source again after foreground return does not remap");
     (void)mappingHarness.runtime.Pump();
     Check(
         mappingHarness.output.requests.size() == 3U,
@@ -2928,7 +3435,7 @@ void TestPhysicalStateInitialization()
             source,
             inputweaver::Transition::Down))
                 == inputweaver::InputDecision::Forward,
-        "startup-held source repeat cannot create a mapping");
+        "startup-held source again cannot create a mapping");
     (void)seeded.runtime.Pump();
     Check(seeded.output.requests.empty(), "physical-state seeding publishes no output");
     (void)seeded.runtime.HandleInput(KeyboardEvent(
@@ -3087,6 +3594,7 @@ void TestRoutingFailureAndExit()
 
 int main()
 {
+    TestArrayStorage();
     TestEffectiveTargetOverride();
     TestTapFixture();
     TestMappingFixture();
@@ -3095,12 +3603,14 @@ int main()
     TestPauseEffectsAndIdempotence();
     TestExitControlSemantics();
     TestExpressionVm();
+    TestArrayRuntime();
     TestArrowFlowAndOverlappingOwnership();
     TestActionVm();
     TestTaskProgressBudgets();
     TestMaximumSynchronousDispatch();
     TestNestedRepeatScheduling();
     TestConcurrentStateLocks();
+    TestEventSnapshotAndCancelledMutation();
     TestExecCancellationBoundaries();
     TestTaskExpressionFault();
     TestRuntimeDebugEvents();

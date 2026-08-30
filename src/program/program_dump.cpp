@@ -76,8 +76,8 @@ void WriteControl(std::ostream& output, ControlRef control)
     switch (value) {
     case EventTransition::Down:
         return "down";
-    case EventTransition::Repeat:
-        return "repeat";
+    case EventTransition::Again:
+        return "again";
     case EventTransition::Up:
         return "up";
     }
@@ -123,8 +123,16 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "number";
     case ExpressionType::Duration:
         return "duration";
+    case ExpressionType::ControlState:
+        return "control-state";
     }
     return "unknown";
+}
+
+[[nodiscard]] std::string_view ArrayElementTypeName(
+    ArrayElementType value) noexcept
+{
+    return value == ArrayElementType::State ? "state" : "number";
 }
 
 [[nodiscard]] std::string_view ValueDomainName(ValueDomain value) noexcept
@@ -157,8 +165,8 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "push-duration";
     case ExpressionOpcode::LoadValue:
         return "load-value";
-    case ExpressionOpcode::ReadControlHeld:
-        return "read-control-held";
+    case ExpressionOpcode::ReadControlState:
+        return "read-control-state";
     case ExpressionOpcode::Unary:
         return "unary";
     case ExpressionOpcode::Binary:
@@ -171,6 +179,12 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "jump-if-true";
     case ExpressionOpcode::Return:
         return "return";
+    case ExpressionOpcode::PushControlState:
+        return "push-control-state";
+    case ExpressionOpcode::LoadArrayLength:
+        return "load-array-length";
+    case ExpressionOpcode::LoadArrayElement:
+        return "load-array-element";
     }
     return "unknown";
 }
@@ -208,6 +222,16 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "yield";
     case ActionOpcode::End:
         return "end";
+    case ActionOpcode::SetArrayElement:
+        return "set-array-element";
+    case ActionOpcode::ToggleArrayElement:
+        return "toggle-array-element";
+    case ActionOpcode::AppendArrayElement:
+        return "append-array-element";
+    case ActionOpcode::PopArrayElement:
+        return "pop-array-element";
+    case ActionOpcode::ClearArray:
+        return "clear-array";
     }
     return "unknown";
 }
@@ -265,6 +289,9 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     output << "requirements states=" << requirements.stateSlotCount
            << " numbers=" << requirements.numberSlotCount
            << " durations=" << requirements.durationSlotCount
+           << " arrays=" << requirements.arrayCount
+           << " initial-array-element-bytes="
+           << requirements.initialArrayElementBytes
            << " mapping-slots=" << requirements.mappingSlotCount
            << " exit-rules/event="
            << requirements.maximumExitRulesPerEvent
@@ -333,6 +360,25 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
                << " index=" << value.index << '\n';
     }
 
+    output << "arrays " << program.Arrays().size() << '\n';
+    for (std::size_t index = 0; index < program.Arrays().size(); ++index) {
+        const ArrayDescriptor& array = program.Arrays()[index];
+        output << "  y" << index << " type="
+               << ArrayElementTypeName(array.elementType) << " initial=";
+        WriteRange(output, array.initialValues);
+        output << '\n';
+    }
+    output << "initial-array-states " << program.InitialArrayStates().size();
+    for (const std::uint8_t value : program.InitialArrayStates()) {
+        output << ' ' << static_cast<unsigned int>(value);
+    }
+    output << '\n';
+    output << "initial-array-numbers " << program.InitialArrayNumbers().size();
+    for (const double value : program.InitialArrayNumbers()) {
+        output << ' ' << value;
+    }
+    output << '\n';
+
     output << "number-constants " << program.NumberConstants().size();
     for (const double value : program.NumberConstants()) {
         output << ' ' << value;
@@ -381,7 +427,8 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         const ActionInstruction& instruction = program.ActionCode()[index];
         output << "  i" << index << ' ' << ActionOpcodeName(instruction.opcode)
                << " operand0=" << instruction.operand0
-               << " operand1=" << instruction.operand1 << " source=";
+               << " operand1=" << instruction.operand1
+               << " operand2=" << instruction.operand2 << " source=";
         WriteSpan(output, program.DebugInfo().actionInstructionSpans[index]);
         output << '\n';
     }
@@ -491,6 +538,19 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
         WriteId(output, 'v', variable.value);
         output << " source=";
         WriteSpan(output, variable.declaration);
+        output << '\n';
+    }
+    output << "array-debug " << program.DebugInfo().arrays.size() << '\n';
+    for (std::size_t index = 0;
+         index < program.DebugInfo().arrays.size();
+         ++index) {
+        const ArrayDebugRecord& array = program.DebugInfo().arrays[index];
+        output << "  ad" << index << " name=";
+        WriteId(output, 's', array.name);
+        output << " array=";
+        WriteId(output, 'y', array.array);
+        output << " source=";
+        WriteSpan(output, array.declaration);
         output << '\n';
     }
     output << "rule-debug " << program.DebugInfo().rules.size() << '\n';

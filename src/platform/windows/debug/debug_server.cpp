@@ -19,6 +19,7 @@
 #include <atomic>
 #include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -203,16 +204,25 @@ struct ProducerRecord final {
             : 0U;
     };
     if (program.DebugInfo().variables.size() + 1U
-        > debug::kMaximumDebugValues) {
+            > debug::kMaximumDebugValues
+        || program.DebugInfo().arrays.size() > debug::kMaximumDebugArrays) {
         return false;
     }
-    std::uint64_t captureBytes = 8U + 4U + 4U + 5U + 2U;
+    std::uint64_t captureBytes = 8U + 4U + 4U + 5U + 2U + 4U;
     for (const VariableDebugRecord& variable : program.DebugInfo().variables) {
         const std::uint64_t nameBytes = textBytes(variable.name);
         if (nameBytes > debug::kMaximumDebugTextBytes) {
             return false;
         }
         captureBytes += 4U + nameBytes + 9U;
+    }
+    for (const ArrayDebugRecord& array : program.DebugInfo().arrays) {
+        const std::uint64_t nameBytes = textBytes(array.name);
+        if (nameBytes > debug::kMaximumDebugTextBytes) {
+            return false;
+        }
+        captureBytes += 4U + nameBytes + 1U + 8U + 1U + 1U
+            + kRuntimeDebugArrayPreviewCount * sizeof(double);
     }
     if (captureBytes > debug::kMaximumFramePayloadBytes) {
         return false;
@@ -262,6 +272,65 @@ struct WindowsDebugServer::Impl final {
         ValueRefId reference{};
         ValueType type{ValueType::State};
     };
+
+    struct ArrayStateDescriptor final {
+        std::string name;
+        ArrayId array{};
+        ArrayElementType elementType{ArrayElementType::State};
+    };
+
+    struct ArrayStateCache final {
+        std::atomic<std::uint64_t> sequence{0U};
+        std::atomic<std::uint64_t> length{0U};
+        std::atomic<std::uint8_t> prefixCount{0U};
+        std::atomic<std::uint8_t> suffixCount{0U};
+        std::array<std::atomic<std::uint64_t>,
+                   kRuntimeDebugArrayPreviewCount> elementBits{};
+    };
+
+    [[nodiscard]] static std::uint64_t EncodeArrayElement(
+        ArrayElementType type,
+        const RuntimeDebugArrayElement& value) noexcept
+    {
+        return type == ArrayElementType::State
+            ? static_cast<std::uint64_t>(value.stateValue)
+            : std::bit_cast<std::uint64_t>(value.numberValue);
+    }
+
+    [[nodiscard]] static bool ValidArraySnapshot(
+        const RuntimeDebugArraySnapshot& snapshot) noexcept
+    {
+        const std::size_t prefix = snapshot.prefixCount;
+        const std::size_t suffix = snapshot.suffixCount;
+        if (prefix + suffix > kRuntimeDebugArrayPreviewCount) {
+            return false;
+        }
+        if (snapshot.length <= kRuntimeDebugArrayPreviewCount) {
+            if (prefix != snapshot.length || suffix != 0U) {
+                return false;
+            }
+        } else if (prefix != kRuntimeDebugArrayPreviewCount / 2U
+            || suffix != kRuntimeDebugArrayPreviewCount / 2U) {
+            return false;
+        }
+        if (snapshot.elementType == ArrayElementType::State) {
+            for (std::size_t index = 0U; index < prefix + suffix; ++index) {
+                if (snapshot.elements[index].stateValue > 1U) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (snapshot.elementType == ArrayElementType::Number) {
+            for (std::size_t index = 0U; index < prefix + suffix; ++index) {
+                if (std::isfinite(snapshot.elements[index].numberValue) == 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
 
     [[nodiscard]] static std::uint64_t EncodeStateBits(
         const debug::DebugValue& value) noexcept
@@ -324,6 +393,26 @@ struct WindowsDebugServer::Impl final {
         return value;
     }
 
+    [[nodiscard]] debug::DebugArrayValue ProtocolArrayValue(
+        const RuntimeDebugArraySnapshot& source) const noexcept
+    {
+        debug::DebugArrayValue value{};
+        value.elementType = source.elementType;
+        value.length = source.length;
+        value.prefixCount = source.prefixCount;
+        value.suffixCount = source.suffixCount;
+        const std::size_t count = static_cast<std::size_t>(source.prefixCount)
+            + static_cast<std::size_t>(source.suffixCount);
+        for (std::size_t index = 0U;
+             index < count && index < value.elements.size();
+             ++index) {
+            value.elements[index].stateValue =
+                source.elements[index].stateValue != 0U;
+            value.elements[index].numberValue = source.elements[index].numberValue;
+        }
+        return value;
+    }
+
     [[nodiscard]] bool UpdateState(const RuntimeDebugValue& value) noexcept
     {
         const std::uint32_t index = StateIndex(value);
@@ -337,6 +426,81 @@ struct WindowsDebugServer::Impl final {
             EncodeStateBits(ProtocolValue(value)),
             std::memory_order_release);
         return true;
+    }
+
+    [[nodiscard]] std::uint32_t ArrayIndex(ArrayId array) const noexcept
+    {
+        return array.IsValid() && array.value < arrayStateIndices.size()
+            ? arrayStateIndices[array.value]
+            : kInvalidProgramIndex;
+    }
+
+    [[nodiscard]] bool UpdateArray(
+        const RuntimeDebugArraySnapshot& snapshot) noexcept
+    {
+        const std::uint32_t index = ArrayIndex(snapshot.array);
+        if (index == kInvalidProgramIndex
+            || index >= arrayStateDescriptors.size()
+            || arrayStateCaches == nullptr
+            || arrayStateDescriptors[index].elementType != snapshot.elementType
+            || !ValidArraySnapshot(snapshot)) {
+            return false;
+        }
+        ArrayStateCache& cache = arrayStateCaches[index];
+        cache.sequence.fetch_add(1U, std::memory_order_acq_rel);
+        cache.length.store(snapshot.length, std::memory_order_release);
+        cache.prefixCount.store(snapshot.prefixCount, std::memory_order_release);
+        cache.suffixCount.store(snapshot.suffixCount, std::memory_order_release);
+        const std::size_t count = static_cast<std::size_t>(snapshot.prefixCount)
+            + static_cast<std::size_t>(snapshot.suffixCount);
+        for (std::size_t element = 0U; element < count; ++element) {
+            cache.elementBits[element].store(
+                EncodeArrayElement(snapshot.elementType, snapshot.elements[element]),
+                std::memory_order_release);
+        }
+        cache.sequence.fetch_add(1U, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] debug::DebugArrayValue ReadArrayValue(
+        std::size_t index) const noexcept
+    {
+        debug::DebugArrayValue value{};
+        if (index >= arrayStateDescriptors.size()
+            || arrayStateCaches == nullptr) {
+            return value;
+        }
+        value.elementType = arrayStateDescriptors[index].elementType;
+        const ArrayStateCache& cache = arrayStateCaches[index];
+        while (true) {
+            const std::uint64_t before = cache.sequence.load(
+                std::memory_order_acquire);
+            if ((before & 1U) != 0U) {
+                continue;
+            }
+            value.length = cache.length.load(std::memory_order_acquire);
+            value.prefixCount = cache.prefixCount.load(std::memory_order_acquire);
+            value.suffixCount = cache.suffixCount.load(std::memory_order_acquire);
+            const std::size_t count = static_cast<std::size_t>(value.prefixCount)
+                + static_cast<std::size_t>(value.suffixCount);
+            if (count > kRuntimeDebugArrayPreviewCount) {
+                return {};
+            }
+            for (std::size_t element = 0U; element < count; ++element) {
+                const std::uint64_t bits = cache.elementBits[element].load(
+                    std::memory_order_acquire);
+                if (value.elementType == ArrayElementType::State) {
+                    value.elements[element].stateValue = bits != 0U;
+                } else {
+                    value.elements[element].numberValue = std::bit_cast<double>(bits);
+                }
+            }
+            const std::uint64_t after = cache.sequence.load(
+                std::memory_order_acquire);
+            if (before == after) {
+                return value;
+            }
+        }
     }
 
     [[nodiscard]] bool InitializeState()
@@ -392,6 +556,64 @@ struct WindowsDebugServer::Impl final {
                 EncodeStateBits(initial),
                 std::memory_order_relaxed);
         }
+        arrayStateDescriptors.clear();
+        arrayStateIndices.assign(program->Arrays().size(), kInvalidProgramIndex);
+        for (const ArrayDebugRecord& array : program->DebugInfo().arrays) {
+            if (!array.name.IsValid()
+                || array.name.value >= program->Strings().size()
+                || !array.array.IsValid()
+                || array.array.value >= program->Arrays().size()) {
+                return false;
+            }
+            const std::uint32_t index = static_cast<std::uint32_t>(
+                arrayStateDescriptors.size());
+            arrayStateDescriptors.push_back({
+                program->Strings()[array.name.value],
+                array.array,
+                program->Arrays()[array.array.value].elementType});
+            arrayStateIndices[array.array.value] = index;
+        }
+        arrayStateCaches = std::make_unique<ArrayStateCache[]>(
+            arrayStateDescriptors.size());
+        for (const ArrayStateDescriptor& debugArray : arrayStateDescriptors) {
+            const ArrayDescriptor& descriptor =
+                program->Arrays()[debugArray.array.value];
+            RuntimeDebugArraySnapshot initial{};
+            initial.array = debugArray.array;
+            initial.elementType = descriptor.elementType;
+            initial.length = descriptor.initialValues.count;
+            const std::size_t prefix = initial.length
+                    <= kRuntimeDebugArrayPreviewCount
+                ? static_cast<std::size_t>(initial.length)
+                : kRuntimeDebugArrayPreviewCount / 2U;
+            const std::size_t suffix = initial.length
+                    <= kRuntimeDebugArrayPreviewCount
+                ? 0U
+                : kRuntimeDebugArrayPreviewCount / 2U;
+            initial.prefixCount = static_cast<std::uint8_t>(prefix);
+            initial.suffixCount = static_cast<std::uint8_t>(suffix);
+            const auto copyElement = [&](std::size_t source, std::size_t target) {
+                const std::size_t poolIndex = descriptor.initialValues.begin + source;
+                if (descriptor.elementType == ArrayElementType::State) {
+                    initial.elements[target].stateValue =
+                        program->InitialArrayStates()[poolIndex];
+                } else {
+                    initial.elements[target].numberValue =
+                        program->InitialArrayNumbers()[poolIndex];
+                }
+            };
+            for (std::size_t element = 0U; element < prefix; ++element) {
+                copyElement(element, element);
+            }
+            for (std::size_t element = 0U; element < suffix; ++element) {
+                copyElement(
+                    static_cast<std::size_t>(initial.length) - suffix + element,
+                    prefix + element);
+            }
+            if (!UpdateArray(initial)) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -409,6 +631,26 @@ struct WindowsDebugServer::Impl final {
             return true;
         } catch (...) {
             values.clear();
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool PopulateArraySnapshot(
+        std::vector<debug::DebugNamedArray>& arrays) const
+    {
+        try {
+            arrays.clear();
+            arrays.reserve(arrayStateDescriptors.size());
+            for (std::size_t index = 0U;
+                 index < arrayStateDescriptors.size();
+                 ++index) {
+                arrays.push_back({
+                    arrayStateDescriptors[index].name,
+                    ReadArrayValue(index)});
+            }
+            return true;
+        } catch (...) {
+            arrays.clear();
             return false;
         }
     }
@@ -590,6 +832,20 @@ struct WindowsDebugServer::Impl final {
             message.stateChanged.value = ProtocolValue(event.value);
             return WriteMessage(pipe, message);
         }
+        if (event.kind == RuntimeDebugEventKind::ArrayChanged) {
+            const std::uint32_t arrayIndex = ArrayIndex(event.array.array);
+            if (arrayIndex == kInvalidProgramIndex) {
+                return false;
+            }
+            debug::Message message = MakeMessage(
+                debug::MessageKind::ArrayChanged,
+                record.captureEpoch,
+                record.captureTimeNanoseconds,
+                protocolSequence);
+            message.arrayChanged.arrayIndex = arrayIndex;
+            message.arrayChanged.value = ProtocolArrayValue(event.array);
+            return WriteMessage(pipe, message);
+        }
         debug::Message message = MakeMessage(
             debug::MessageKind::RuntimeIssue,
             record.captureEpoch,
@@ -642,7 +898,8 @@ struct WindowsDebugServer::Impl final {
                 protocolSequence);
             message.captureStarted.captureUnixTimeMilliseconds =
                 record.captureUnixTimeMilliseconds;
-            if (!PopulateStateSnapshot(message.captureStarted.values)) {
+            if (!PopulateStateSnapshot(message.captureStarted.values)
+                || !PopulateArraySnapshot(message.captureStarted.arrays)) {
                 return false;
             }
             return WriteMessage(pipe, message);
@@ -816,6 +1073,9 @@ struct WindowsDebugServer::Impl final {
     std::vector<StateDescriptor> stateDescriptors;
     std::vector<std::uint32_t> valueRefStateIndices;
     std::unique_ptr<std::atomic<std::uint64_t>[]> stateBits;
+    std::vector<ArrayStateDescriptor> arrayStateDescriptors;
+    std::vector<std::uint32_t> arrayStateIndices;
+    std::unique_ptr<ArrayStateCache[]> arrayStateCaches;
     DebugServerCallbacks callbacks{};
     std::uint64_t targetSessionId{};
     std::int64_t performanceFrequency{1};
@@ -968,6 +1228,9 @@ void WindowsDebugServer::Stop() noexcept
     impl_->stateDescriptors.clear();
     impl_->valueRefStateIndices.clear();
     impl_->stateBits.reset();
+    impl_->arrayStateDescriptors.clear();
+    impl_->arrayStateIndices.clear();
+    impl_->arrayStateCaches.reset();
 }
 
 DebugCaptureRequest WindowsDebugServer::TakeCaptureRequest() noexcept
@@ -1088,15 +1351,21 @@ bool WindowsDebugServer::Publish(const RuntimeDebugEvent& event) noexcept
         && !impl_->UpdateState(event.value)) {
         return false;
     }
+    if (event.kind == RuntimeDebugEventKind::ArrayChanged
+        && !impl_->UpdateArray(event.array)) {
+        return false;
+    }
     if (!impl_->captureReady.load(std::memory_order_acquire)
         || !impl_->captureActive.load(std::memory_order_acquire)) {
-        return event.kind == RuntimeDebugEventKind::StateChanged;
+        return event.kind == RuntimeDebugEventKind::StateChanged
+            || event.kind == RuntimeDebugEventKind::ArrayChanged;
     }
     const std::uint64_t activeEpoch = impl_->captureEpoch.load(
         std::memory_order_acquire);
     const std::uint64_t eventEpoch =
         (event.kind == RuntimeDebugEventKind::RuntimeIssue
-            || event.kind == RuntimeDebugEventKind::StateChanged)
+            || event.kind == RuntimeDebugEventKind::StateChanged
+            || event.kind == RuntimeDebugEventKind::ArrayChanged)
         && event.captureEpoch == 0U
         ? activeEpoch
         : event.captureEpoch;

@@ -10,6 +10,7 @@
 #include "platform/windows/debug/debug_client.hpp"
 #include "platform/windows/debug/debug_server.hpp"
 #include "program/compiled_program.hpp"
+#include "program/program_validator.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -234,6 +236,8 @@ template <typename Predicate>
         inputweaver::test::MakeMappingFixtureStorage();
     storage.strings.push_back("F6 -> F7;");
     storage.strings.push_back("combat");
+    storage.strings.push_back("flags");
+    storage.strings.push_back("samples");
     storage.userValues.initialStates.push_back(0U);
     storage.valueRefs.push_back({
         inputweaver::ValueDomain::UserState,
@@ -243,11 +247,22 @@ template <typename Predicate>
         inputweaver::StringId{2U},
         inputweaver::ValueRefId{0U},
         {0U, 1U}});
+    storage.arrays = {
+        {inputweaver::ArrayElementType::State, {0U, 3U}},
+        {inputweaver::ArrayElementType::Number, {0U, 10U}},
+    };
+    storage.initialArrayStates = {0U, 1U, 0U};
+    storage.initialArrayNumbers = {
+        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+    storage.debugInfo.arrays = {
+        {inputweaver::StringId{3U}, inputweaver::ArrayId{0U}, {1U, 1U}},
+        {inputweaver::StringId{4U}, inputweaver::ArrayId{1U}, {2U, 1U}},
+    };
     storage.debugInfo.rules.push_back({
         0U,
         inputweaver::StringId{},
         inputweaver::StringId{1U}});
-    storage.requirements.stateSlotCount = 1U;
+    storage.requirements = inputweaver::ComputeProgramRequirements(storage);
     return storage;
 }
 
@@ -541,9 +556,21 @@ void TestDebugClientIntegration()
                 && state->values[0].name == "PAUSE"
                 && state->values[0].value.stateValue
                 && state->values[1].name == "combat"
-                && !state->values[1].value.stateValue;
+                && !state->values[1].value.stateValue
+                && state->arrays.size() == 2U
+                && state->arrays[0].name == "flags"
+                && state->arrays[0].value.length == 3U
+                && state->arrays[0].value.prefixCount == 3U
+                && state->arrays[0].value.suffixCount == 0U
+                && !state->arrays[0].value.elements[0].stateValue
+                && state->arrays[0].value.elements[1].stateValue
+                && state->arrays[1].name == "samples"
+                && state->arrays[1].value.length == 10U
+                && state->arrays[1].value.prefixCount == 4U
+                && state->arrays[1].value.suffixCount == 4U
+                && state->arrays[1].value.elements[7].numberValue == 9.0;
         }),
-        "DebugClient derives INIT state from WindowsDebugServer");
+        "DebugClient derives scalar and bounded array INIT state from the server");
 
     inputweaver::RuntimeDebugEvent changed{};
     changed.kind = inputweaver::RuntimeDebugEventKind::StateChanged;
@@ -572,6 +599,28 @@ void TestDebugClientIntegration()
                 && state->values[1].value.stateValue;
         }),
         "DebugClient applies the user state value update");
+
+    inputweaver::RuntimeDebugEvent arrayChanged{};
+    arrayChanged.kind = inputweaver::RuntimeDebugEventKind::ArrayChanged;
+    arrayChanged.array.array = inputweaver::ArrayId{0U};
+    arrayChanged.array.elementType = inputweaver::ArrayElementType::State;
+    arrayChanged.array.length = 3U;
+    arrayChanged.array.prefixCount = 3U;
+    arrayChanged.array.elements[0].stateValue = 1U;
+    arrayChanged.array.elements[1].stateValue = 0U;
+    arrayChanged.array.elements[2].stateValue = 1U;
+    Check(server.Publish(arrayChanged),
+        "integration array update is published");
+    Check(
+        WaitUntil([&] {
+            const auto state = client.ReadState();
+            return state->arrays.size() == 2U
+                && state->arrays[0].value.length == 3U
+                && state->arrays[0].value.elements[0].stateValue
+                && !state->arrays[0].value.elements[1].stateValue
+                && state->arrays[0].value.elements[2].stateValue;
+        }),
+        "DebugClient applies an array value update");
 
     const auto correlation = server.BeginInput();
     inputweaver::RuntimeDebugEvent matched{};
@@ -613,6 +662,72 @@ void TestDebugClientIntegration()
         WaitForRequest(server)
             == inputweaver::win32::DebugCaptureRequest::Stop,
         "DebugClient StopCapture reaches WindowsDebugServer");
+    server.EndCapture();
+
+    inputweaver::RuntimeDebugEvent shortArray = arrayChanged;
+    shortArray.array.length = 2U;
+    shortArray.array.prefixCount = 2U;
+    shortArray.array.elements[0].stateValue = 0U;
+    shortArray.array.elements[1].stateValue = 1U;
+    inputweaver::RuntimeDebugEvent longArray = arrayChanged;
+    longArray.array.length = 12U;
+    longArray.array.prefixCount = 4U;
+    longArray.array.suffixCount = 4U;
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        longArray.array.elements[index].stateValue = 0U;
+        longArray.array.elements[4U + index].stateValue = 1U;
+    }
+    std::atomic<bool> stopArrayWriter{false};
+    std::thread arrayWriter([&] {
+        bool useLong = false;
+        while (!stopArrayWriter.load(std::memory_order_acquire)) {
+            (void)server.Publish(useLong ? longArray : shortArray);
+            useLong = !useLong;
+            Sleep(1U);
+        }
+    });
+    Check(client.StartCapture().Succeeded(),
+        "DebugClient restarts capture during array publication");
+    Check(
+        WaitForRequest(server)
+            == inputweaver::win32::DebugCaptureRequest::Start,
+        "restarted capture reaches WindowsDebugServer");
+    Check(server.BeginCapture({}),
+        "server builds a fresh snapshot during array publication");
+    const bool consistentArray = WaitUntil([&] {
+        const auto state = client.ReadState();
+        if (!state->capturing || state->arrays.size() != 2U) {
+            return false;
+        }
+        const auto& value = state->arrays[0].value;
+        const bool shortValue = value.length == 2U
+            && value.prefixCount == 2U
+            && value.suffixCount == 0U
+            && !value.elements[0].stateValue
+            && value.elements[1].stateValue;
+        const bool longValue = value.length == 12U
+            && value.prefixCount == 4U
+            && value.suffixCount == 4U
+            && std::all_of(
+                value.elements.begin(),
+                value.elements.begin() + 4U,
+                [](const auto& element) { return !element.stateValue; })
+            && std::all_of(
+                value.elements.begin() + 4U,
+                value.elements.end(),
+                [](const auto& element) { return element.stateValue; });
+        return shortValue || longValue;
+    });
+    stopArrayWriter.store(true, std::memory_order_release);
+    arrayWriter.join();
+    Check(consistentArray,
+        "array cache snapshots never mix two published sequences");
+    Check(client.StopCapture().Succeeded(),
+        "DebugClient stops the restarted capture");
+    Check(
+        WaitForRequest(server)
+            == inputweaver::win32::DebugCaptureRequest::Stop,
+        "restarted capture stop reaches WindowsDebugServer");
     server.EndCapture();
     Check(
         client.RequestExecutorStop().Succeeded(),

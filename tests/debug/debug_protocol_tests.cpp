@@ -80,7 +80,7 @@ void TestCaptureStarted()
 
     const auto decoded = RoundTrip(message);
     Check(
-        inputweaver::debug::kProtocolVersion == 3U
+        inputweaver::debug::kProtocolVersion == 4U
             && decoded.Succeeded()
             && decoded.message.captureStarted.captureUnixTimeMilliseconds
                 == 1'725'000'000'123LL
@@ -89,7 +89,7 @@ void TestCaptureStarted()
             && decoded.message.captureStarted.values[1].value.numberValue == 2.5
             && decoded.message.captureStarted.values[2].value.durationValue
                     .nanoseconds == 80'000'000,
-        "capture wall-clock anchor and values round trip in protocol version 3");
+        "capture wall-clock anchor and values round trip in protocol version 4");
 }
 
 void TestRuleMatched()
@@ -100,7 +100,7 @@ void TestRuleMatched()
     message.header.captureEpoch = 7U;
     message.ruleMatched.executionMarker = 11U;
     message.ruleMatched.triggerInputSequence = 5U;
-    message.ruleMatched.conditionText = "combat[on] and LCtrl[held]";
+    message.ruleMatched.conditionText = "combat == on and LCtrl == held";
     message.ruleMatched.actionText = "wait(80ms)";
 
     const auto decoded = RoundTrip(message);
@@ -110,7 +110,7 @@ void TestRuleMatched()
         "execution marker round trips");
     Check(
         decoded.message.ruleMatched.conditionText
-                == "combat[on] and LCtrl[held]"
+            == "combat == on and LCtrl == held"
             && decoded.message.ruleMatched.actionText == "wait(80ms)",
         "human-readable condition and action text round trip");
 }
@@ -169,6 +169,60 @@ void TestTerminalAndIssueMessages()
         "state change payload round trips");
 }
 
+void TestArrayValues()
+{
+    using namespace inputweaver;
+    debug::DebugArrayValue shortArray{};
+    shortArray.elementType = ArrayElementType::State;
+    shortArray.length = 2U;
+    shortArray.prefixCount = 2U;
+    shortArray.elements[0].stateValue = true;
+    shortArray.elements[1].stateValue = false;
+    debug::Message started{};
+    started.header.kind = debug::MessageKind::CaptureStarted;
+    started.captureStarted.captureUnixTimeMilliseconds = 1;
+    started.captureStarted.arrays.push_back({"gates", shortArray});
+    const auto decodedStarted = RoundTrip(started);
+    Check(
+        decodedStarted.Succeeded()
+            && decodedStarted.message.captureStarted.arrays.size() == 1U
+            && decodedStarted.message.captureStarted.arrays[0].name == "gates"
+            && decodedStarted.message.captureStarted.arrays[0].value.length == 2U
+            && decodedStarted.message.captureStarted.arrays[0]
+                .value.elements[0].stateValue,
+        "named short array snapshot round trips");
+
+    debug::DebugArrayValue longArray{};
+    longArray.elementType = ArrayElementType::Number;
+    longArray.length = 12U;
+    longArray.prefixCount = 4U;
+    longArray.suffixCount = 4U;
+    for (std::size_t index = 0U; index < longArray.elements.size(); ++index) {
+        longArray.elements[index].numberValue = static_cast<double>(index) + 0.5;
+    }
+    debug::Message changed{};
+    changed.header.kind = debug::MessageKind::ArrayChanged;
+    changed.arrayChanged.arrayIndex = 3U;
+    changed.arrayChanged.value = longArray;
+    const auto decodedChanged = RoundTrip(changed);
+    Check(
+        decodedChanged.Succeeded()
+            && decodedChanged.message.arrayChanged.arrayIndex == 3U
+            && decodedChanged.message.arrayChanged.value.length == 12U
+            && decodedChanged.message.arrayChanged.value.prefixCount == 4U
+            && decodedChanged.message.arrayChanged.value.suffixCount == 4U
+            && decodedChanged.message.arrayChanged.value.elements[7].numberValue
+                == 7.5,
+        "long array change carries exact length and bounded prefix and suffix");
+
+    longArray.prefixCount = 3U;
+    changed.arrayChanged.value = longArray;
+    std::vector<std::uint8_t> invalid;
+    Check(
+        !debug::EncodeMessage(changed, invalid),
+        "inconsistent long array preview is rejected");
+}
+
 void TestMalformedFrame()
 {
     inputweaver::debug::Message message{};
@@ -196,6 +250,7 @@ int main()
     TestCaptureStarted();
     TestInputEvent();
     TestRuleMatched();
+    TestArrayValues();
     TestTerminalAndIssueMessages();
     TestMalformedFrame();
     if (gFailureCount != 0) {

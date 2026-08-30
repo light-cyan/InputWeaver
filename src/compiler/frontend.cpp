@@ -1,11 +1,12 @@
 #include "frontend.hpp"
 
+#include "language/lexer.hpp"
+#include "language/word_catalog.hpp"
+
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -16,33 +17,25 @@
 namespace inputweaver::compiler {
 namespace {
 
-[[nodiscard]] bool IsAsciiLetter(char value) noexcept
-{
-    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z');
-}
+using language::LexemeKind;
 
-[[nodiscard]] bool IsDigit(char value) noexcept
-{
-    return value >= '0' && value <= '9';
-}
+struct ParserLexeme final {
+    LexemeKind kind{LexemeKind::Invalid};
+    SourceSpan span{};
+    std::string_view text;
+};
 
-[[nodiscard]] bool IsHexDigit(char value) noexcept
-{
-    return IsDigit(value)
-        || (value >= 'A' && value <= 'F')
-        || (value >= 'a' && value <= 'f');
-}
-
-[[nodiscard]] bool IsWordCharacter(char value) noexcept
-{
-    return IsAsciiLetter(value) || IsDigit(value) || value == '_';
-}
-
-[[nodiscard]] SourceSpan SpanFrom(std::size_t begin, std::size_t end) noexcept
+[[nodiscard]] SourceSpan CompilerSpan(language::LexemeSpan span) noexcept
 {
     return {
-        static_cast<std::uint32_t>(begin),
-        static_cast<std::uint32_t>(end - begin)};
+        static_cast<std::uint32_t>(span.beginByte),
+        static_cast<std::uint32_t>(span.byteLength)};
+}
+
+[[nodiscard]] ParserLexeme ParserView(
+    const language::Lexeme& lexeme) noexcept
+{
+    return {lexeme.kind, CompilerSpan(lexeme.span), lexeme.text};
 }
 
 [[nodiscard]] SourceSpan MergeSpans(SourceSpan left, SourceSpan right) noexcept
@@ -56,348 +49,37 @@ namespace {
     return {begin, static_cast<std::uint32_t>(end - begin)};
 }
 
-[[nodiscard]] std::size_t Utf8SequenceLength(unsigned char first) noexcept
+[[nodiscard]] CompileDiagnosticCode CompilerIssueCode(
+    language::LexicalIssueCode code) noexcept
 {
-    if ((first & 0xe0U) == 0xc0U) {
-        return 2U;
+    switch (code) {
+    case language::LexicalIssueCode::InvalidCharacter: return CompileDiagnosticCode::InvalidCharacter;
+    case language::LexicalIssueCode::NonAsciiSyntax: return CompileDiagnosticCode::NonAsciiSyntax;
+    case language::LexicalIssueCode::EmbeddedNul: return CompileDiagnosticCode::EmbeddedNul;
+    case language::LexicalIssueCode::InvalidNumber: return CompileDiagnosticCode::InvalidNumber;
+    case language::LexicalIssueCode::UnterminatedString: return CompileDiagnosticCode::UnterminatedString;
+    case language::LexicalIssueCode::InvalidEscape: return CompileDiagnosticCode::InvalidEscape;
+    case language::LexicalIssueCode::UnterminatedBlockComment: return CompileDiagnosticCode::UnterminatedBlockComment;
+    case language::LexicalIssueCode::NestedBlockComment: return CompileDiagnosticCode::NestedBlockComment;
     }
-    if ((first & 0xf0U) == 0xe0U) {
-        return 3U;
-    }
-    if ((first & 0xf8U) == 0xf0U) {
-        return 4U;
-    }
-    return 1U;
+    return CompileDiagnosticCode::InternalCompiler;
 }
 
-class Lexer final {
-public:
-    Lexer(
-        const SourceFile& source,
-        const CompilerLimits& limits,
-        DiagnosticSink& diagnostics) noexcept
-        : source_(source), limits_(limits), diagnostics_(diagnostics)
-    {
+[[nodiscard]] std::string CompilerIssueMessage(
+    language::LexicalIssueCode code)
+{
+    switch (code) {
+    case language::LexicalIssueCode::InvalidCharacter: return "invalid syntax character";
+    case language::LexicalIssueCode::NonAsciiSyntax: return "non-ASCII text is allowed only inside comments";
+    case language::LexicalIssueCode::EmbeddedNul: return "source contains an embedded NUL";
+    case language::LexicalIssueCode::InvalidNumber: return "invalid number literal";
+    case language::LexicalIssueCode::UnterminatedString: return "unterminated string literal";
+    case language::LexicalIssueCode::InvalidEscape: return "unsupported string escape sequence";
+    case language::LexicalIssueCode::UnterminatedBlockComment: return "unterminated block comment";
+    case language::LexicalIssueCode::NestedBlockComment: return "block comments cannot be nested";
     }
-
-    [[nodiscard]] std::vector<Token> Run()
-    {
-        while (position_ < source_.bytes.size() && !diagnostics_.Full()) {
-            SkipTrivia();
-            if (position_ >= source_.bytes.size() || diagnostics_.Full()) {
-                break;
-            }
-            if (tokens_.size() + 1U >= limits_.maximumTokens) {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::TokenLimit,
-                    SpanFrom(position_, position_),
-                    "token count exceeds the configured limit");
-                break;
-            }
-            LexToken();
-        }
-        tokens_.push_back({
-            TokenKind::EndOfFile,
-            SpanFrom(source_.bytes.size(), source_.bytes.size()),
-            {}});
-        return std::move(tokens_);
-    }
-
-private:
-    void Add(
-        TokenKind kind,
-        std::size_t begin,
-        std::size_t end,
-        std::optional<std::string> text = std::nullopt)
-    {
-        std::string tokenText = text.has_value()
-            ? std::move(*text)
-            : source_.bytes.substr(begin, end - begin);
-        tokens_.push_back({kind, SpanFrom(begin, end), std::move(tokenText)});
-    }
-
-    [[nodiscard]] bool StartsWith(std::string_view value) const noexcept
-    {
-        return source_.bytes.compare(position_, value.size(), value) == 0;
-    }
-
-    void SkipTrivia()
-    {
-        bool progressed = true;
-        while (progressed && position_ < source_.bytes.size()) {
-            progressed = false;
-            while (position_ < source_.bytes.size()) {
-                const char value = source_.bytes[position_];
-                if (value != ' ' && value != '\t' && value != '\r' && value != '\n') {
-                    break;
-                }
-                ++position_;
-                progressed = true;
-            }
-            if (StartsWith("//")) {
-                progressed = true;
-                position_ += 2U;
-                while (position_ < source_.bytes.size()
-                       && source_.bytes[position_] != '\r'
-                       && source_.bytes[position_] != '\n') {
-                    ++position_;
-                }
-            } else if (StartsWith("/*")) {
-                progressed = true;
-                const std::size_t begin = position_;
-                position_ += 2U;
-                std::size_t depth = 1U;
-                while (position_ < source_.bytes.size() && depth > 0U) {
-                    if (source_.bytes.compare(position_, 2U, "/*") == 0) {
-                        diagnostics_.Add(
-                            CompileDiagnosticCode::NestedBlockComment,
-                            SpanFrom(position_, position_ + 2U),
-                            "block comments cannot be nested");
-                        ++depth;
-                        position_ += 2U;
-                    } else if (source_.bytes.compare(position_, 2U, "*/") == 0) {
-                        --depth;
-                        position_ += 2U;
-                    } else {
-                        ++position_;
-                    }
-                }
-                if (depth != 0U) {
-                    diagnostics_.Add(
-                        CompileDiagnosticCode::UnterminatedBlockComment,
-                        SpanFrom(begin, source_.bytes.size()),
-                        "unterminated block comment");
-                }
-            }
-        }
-    }
-
-    void LexWord()
-    {
-        const std::size_t begin = position_++;
-        while (position_ < source_.bytes.size()
-               && IsWordCharacter(source_.bytes[position_])) {
-            ++position_;
-        }
-        Add(TokenKind::Word, begin, position_);
-    }
-
-    void LexNumber()
-    {
-        const std::size_t begin = position_;
-        if (position_ + 1U < source_.bytes.size()
-            && source_.bytes[position_] == '0'
-            && source_.bytes[position_ + 1U] == 'x') {
-            position_ += 2U;
-            const std::size_t digits = position_;
-            while (position_ < source_.bytes.size()
-                   && IsHexDigit(source_.bytes[position_])) {
-                ++position_;
-            }
-            if (position_ == digits) {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::InvalidNumber,
-                    SpanFrom(begin, position_),
-                    "hexadecimal integer requires at least one digit");
-                Add(TokenKind::Invalid, begin, position_);
-            } else {
-                Add(TokenKind::HexInteger, begin, position_);
-            }
-            return;
-        }
-
-        while (position_ < source_.bytes.size()
-               && IsDigit(source_.bytes[position_])) {
-            ++position_;
-        }
-        if (position_ + 1U < source_.bytes.size()
-            && source_.bytes[position_] == '.'
-            && IsDigit(source_.bytes[position_ + 1U])) {
-            ++position_;
-            while (position_ < source_.bytes.size()
-                   && IsDigit(source_.bytes[position_])) {
-                ++position_;
-            }
-        }
-
-        for (const std::string_view suffix : {"min", "ms", "s"}) {
-            if (source_.bytes.compare(position_, suffix.size(), suffix) == 0) {
-                const std::size_t after = position_ + suffix.size();
-                if (after == source_.bytes.size()
-                    || !IsWordCharacter(source_.bytes[after])) {
-                    position_ = after;
-                    Add(TokenKind::Duration, begin, position_);
-                    return;
-                }
-            }
-        }
-        Add(TokenKind::Number, begin, position_);
-    }
-
-    void LexString()
-    {
-        const std::size_t begin = position_++;
-        std::string decoded;
-        bool terminated = false;
-        while (position_ < source_.bytes.size()) {
-            const unsigned char value = static_cast<unsigned char>(
-                source_.bytes[position_]);
-            if (value == '"') {
-                ++position_;
-                terminated = true;
-                break;
-            }
-            if (value == '\r' || value == '\n') {
-                break;
-            }
-            if (value >= 0x80U) {
-                const std::size_t count = Utf8SequenceLength(value);
-                diagnostics_.Add(
-                    CompileDiagnosticCode::NonAsciiSyntax,
-                    SpanFrom(position_, position_ + count),
-                    "string literals accept ASCII characters only");
-                position_ += count;
-                continue;
-            }
-            if (value == '\0') {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::EmbeddedNul,
-                    SpanFrom(position_, position_ + 1U),
-                    "string literal contains an embedded NUL");
-                ++position_;
-                continue;
-            }
-            if (value != '\\') {
-                decoded.push_back(static_cast<char>(value));
-                ++position_;
-                continue;
-            }
-            const std::size_t escapeBegin = position_++;
-            if (position_ >= source_.bytes.size()) {
-                break;
-            }
-            const char escaped = source_.bytes[position_++];
-            switch (escaped) {
-            case '\\':
-                decoded.push_back('\\');
-                break;
-            case '"':
-                decoded.push_back('"');
-                break;
-            case 'n':
-                decoded.push_back('\n');
-                break;
-            case 'r':
-                decoded.push_back('\r');
-                break;
-            case 't':
-                decoded.push_back('\t');
-                break;
-            default:
-                diagnostics_.Add(
-                    CompileDiagnosticCode::InvalidEscape,
-                    SpanFrom(escapeBegin, position_),
-                    "unsupported string escape sequence");
-                break;
-            }
-        }
-        if (!terminated) {
-            diagnostics_.Add(
-                CompileDiagnosticCode::UnterminatedString,
-                SpanFrom(begin, position_),
-                "unterminated string literal");
-        }
-        Add(TokenKind::String, begin, position_, std::move(decoded));
-    }
-
-    void LexToken()
-    {
-        const std::size_t begin = position_;
-        const unsigned char value = static_cast<unsigned char>(
-            source_.bytes[position_]);
-        if (IsAsciiLetter(static_cast<char>(value))) {
-            LexWord();
-            return;
-        }
-        if (IsDigit(static_cast<char>(value))) {
-            LexNumber();
-            return;
-        }
-        if (value == '"') {
-            LexString();
-            return;
-        }
-        if (value >= 0x80U) {
-            const std::size_t count = Utf8SequenceLength(value);
-            diagnostics_.Add(
-                CompileDiagnosticCode::NonAsciiSyntax,
-                SpanFrom(position_, position_ + count),
-                "non-ASCII text is allowed only inside comments");
-            position_ += count;
-            Add(TokenKind::Invalid, begin, position_);
-            return;
-        }
-
-        const auto punctuate = [this, begin](TokenKind kind, std::size_t count) {
-            position_ += count;
-            Add(kind, begin, position_);
-        };
-        if (StartsWith("=>>")) {
-            punctuate(TokenKind::ConsumeContinue, 3U);
-        } else if (StartsWith("~>>")) {
-            punctuate(TokenKind::ObserveContinue, 3U);
-        } else if (StartsWith("->")) {
-            punctuate(TokenKind::MappingArrow, 2U);
-        } else if (StartsWith("=>")) {
-            punctuate(TokenKind::ConsumeStop, 2U);
-        } else if (StartsWith("~>")) {
-            punctuate(TokenKind::ObserveStop, 2U);
-        } else if (StartsWith("==")) {
-            punctuate(TokenKind::EqualEqual, 2U);
-        } else if (StartsWith("!=")) {
-            punctuate(TokenKind::BangEqual, 2U);
-        } else if (StartsWith("<=")) {
-            punctuate(TokenKind::LessEqual, 2U);
-        } else if (StartsWith(">=")) {
-            punctuate(TokenKind::GreaterEqual, 2U);
-        } else {
-            TokenKind kind = TokenKind::Invalid;
-            switch (static_cast<char>(value)) {
-            case '=': kind = TokenKind::Equal; break;
-            case '+': kind = TokenKind::Plus; break;
-            case '-': kind = TokenKind::Minus; break;
-            case '*': kind = TokenKind::Star; break;
-            case '/': kind = TokenKind::Slash; break;
-            case '%': kind = TokenKind::Percent; break;
-            case '<': kind = TokenKind::Less; break;
-            case '>': kind = TokenKind::Greater; break;
-            case ':': kind = TokenKind::Colon; break;
-            case ';': kind = TokenKind::Semicolon; break;
-            case '.': kind = TokenKind::Dot; break;
-            case ',': kind = TokenKind::Comma; break;
-            case '(': kind = TokenKind::LeftParen; break;
-            case ')': kind = TokenKind::RightParen; break;
-            case '[': kind = TokenKind::LeftBracket; break;
-            case ']': kind = TokenKind::RightBracket; break;
-            case '|': kind = TokenKind::Pipe; break;
-            default: break;
-            }
-            punctuate(kind, 1U);
-            if (kind == TokenKind::Invalid) {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::InvalidCharacter,
-                    SpanFrom(begin, position_),
-                    "invalid syntax character");
-            }
-        }
-    }
-
-    const SourceFile& source_;
-    const CompilerLimits& limits_;
-    DiagnosticSink& diagnostics_;
-    std::size_t position_{};
-    std::vector<Token> tokens_;
-};
+    return "unknown lexical issue";
+}
 
 class ParseFailure final : public std::runtime_error {
 public:
@@ -407,18 +89,16 @@ public:
 class Parser final {
 public:
     Parser(
-        const SourceFile& source,
-        const std::vector<Token>& tokens,
+        const std::vector<language::Lexeme>& lexemes,
         const CompilerLimits& limits,
         DiagnosticSink& diagnostics) noexcept
-        : source_(source), tokens_(tokens), limits_(limits), diagnostics_(diagnostics)
-    {
-    }
+        : lexemes_(lexemes), limits_(limits), diagnostics_(diagnostics)
+    {}
 
     [[nodiscard]] SyntaxTree Run()
     {
         SyntaxTree tree;
-        while (!Is(TokenKind::EndOfFile) && !diagnostics_.Full()) {
+        while (!Is(LexemeKind::EndOfInput) && !diagnostics_.Full()) {
             try {
                 tree.items.push_back(ParseTopLevel());
             } catch (const ParseFailure&) {
@@ -455,35 +135,40 @@ private:
         Parser& parser_;
     };
 
-    [[nodiscard]] const Token& Current() const noexcept
+    [[nodiscard]] ParserLexeme Current() const noexcept
     {
-        return tokens_[position_];
+        return ParserView(lexemes_[position_]);
     }
 
-    [[nodiscard]] const Token& Previous() const noexcept
+    [[nodiscard]] ParserLexeme Previous() const noexcept
     {
-        return tokens_[position_ - 1U];
+        return ParserView(lexemes_[previousPosition_]);
     }
 
-    [[nodiscard]] bool Is(TokenKind kind) const noexcept
+    [[nodiscard]] bool Is(LexemeKind kind) const noexcept
     {
-        return Current().kind == kind;
+        const LexemeKind current = lexemes_[position_].kind;
+        return current == kind
+            || (kind == LexemeKind::String
+                && current == LexemeKind::IncompleteString);
     }
 
     [[nodiscard]] bool IsWord(std::string_view text) const noexcept
     {
-        return Is(TokenKind::Word) && Current().text == text;
+        return Is(LexemeKind::Word) && Current().text == text;
     }
 
-    const Token& Advance() noexcept
+    ParserLexeme Advance() noexcept
     {
-        if (!Is(TokenKind::EndOfFile)) {
+        const ParserLexeme current = Current();
+        previousPosition_ = position_;
+        if (!Is(LexemeKind::EndOfInput)) {
             ++position_;
         }
-        return Previous();
+        return current;
     }
 
-    [[nodiscard]] bool Match(TokenKind kind) noexcept
+    [[nodiscard]] bool Match(LexemeKind kind) noexcept
     {
         if (!Is(kind)) {
             return false;
@@ -510,7 +195,7 @@ private:
         throw ParseFailure{};
     }
 
-    const Token& Expect(TokenKind kind, std::string_view description)
+    ParserLexeme Expect(LexemeKind kind, std::string_view description)
     {
         if (!Is(kind)) {
             Fail(
@@ -521,12 +206,12 @@ private:
         return Advance();
     }
 
-    const Token& ExpectWordToken(std::string_view description)
+    ParserLexeme ExpectWordToken(std::string_view description)
     {
-        return Expect(TokenKind::Word, description);
+        return Expect(LexemeKind::Word, description);
     }
 
-    const Token& ExpectWord(std::string_view word)
+    ParserLexeme ExpectWord(std::string_view word)
     {
         if (!IsWord(word)) {
             Fail(
@@ -550,8 +235,8 @@ private:
 
     void SynchronizeTopLevel() noexcept
     {
-        while (!Is(TokenKind::EndOfFile)) {
-            if (Match(TokenKind::Semicolon)) {
+        while (!Is(LexemeKind::EndOfInput)) {
+            if (Match(LexemeKind::Semicolon)) {
                 return;
             }
             Advance();
@@ -596,16 +281,19 @@ private:
     {
         TopLevelSyntax item{};
         item.kind = TopLevelSyntax::Kind::TargetSetting;
-        Expect(TokenKind::Equal, "'='");
+        Expect(LexemeKind::Equal, "'='");
         if (MatchWord("GLOBAL")) {
             item.targetGlobal = true;
             item.valueSpan = Previous().span;
         } else {
-            const Token& value = Expect(TokenKind::String, "a target string or GLOBAL");
-            item.literal = value.text;
+            const ParserLexeme& value = Expect(LexemeKind::String, "a target string or GLOBAL");
+            item.literal = language::DecodeStringLiteral(
+                value.text,
+                value.span.beginByte,
+                0U).value;
             item.valueSpan = value.span;
         }
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.span = MergeSpans(begin, semicolon.span);
         CountNode(item.span);
         return item;
@@ -617,11 +305,11 @@ private:
     {
         TopLevelSyntax item{};
         item.kind = kind;
-        Expect(TokenKind::Equal, "'='");
-        const Token& value = Expect(TokenKind::Duration, "a duration literal");
+        Expect(LexemeKind::Equal, "'='");
+        const ParserLexeme& value = Expect(LexemeKind::Duration, "a duration literal");
         item.literal = value.text;
         item.valueSpan = value.span;
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.span = MergeSpans(begin, semicolon.span);
         CountNode(item.span);
         return item;
@@ -633,10 +321,53 @@ private:
     {
         TopLevelSyntax item{};
         item.kind = kind;
-        const Token& name = ExpectWordToken("an identifier");
+        if ((kind == TopLevelSyntax::Kind::StateDeclaration
+             || kind == TopLevelSyntax::Kind::NumberDeclaration)
+            && Match(LexemeKind::LeftBracket)) {
+            Expect(LexemeKind::RightBracket, "']'");
+            item.kind = kind == TopLevelSyntax::Kind::StateDeclaration
+                ? TopLevelSyntax::Kind::StateArrayDeclaration
+                : TopLevelSyntax::Kind::NumberArrayDeclaration;
+        }
+        const ParserLexeme& name = ExpectWordToken("an identifier");
         item.name = name.text;
-        Expect(TokenKind::Equal, "'='");
-        if (kind == TopLevelSyntax::Kind::StateDeclaration) {
+        Expect(LexemeKind::Equal, "'='");
+        if (item.kind == TopLevelSyntax::Kind::StateArrayDeclaration
+            || item.kind == TopLevelSyntax::Kind::NumberArrayDeclaration) {
+            const ParserLexeme& open = Expect(LexemeKind::LeftBracket, "'['");
+            if (!Is(LexemeKind::RightBracket)) {
+                for (;;) {
+                    const SourceSpan elementBegin = Current().span;
+                    if (item.kind == TopLevelSyntax::Kind::StateArrayDeclaration) {
+                        if (!MatchWord("on") && !MatchWord("off")) {
+                            Fail(
+                                CompileDiagnosticCode::ExpectedToken,
+                                Current().span,
+                                "expected 'on' or 'off'");
+                        }
+                        item.arrayLiterals.push_back({
+                            std::string{Previous().text}, Previous().span});
+                    } else {
+                        std::string valueText;
+                        if (Match(LexemeKind::Minus)) {
+                            valueText = "-";
+                        }
+                        const ParserLexeme& value = Expect(
+                            LexemeKind::Number,
+                            "a number literal");
+                        valueText.append(value.text);
+                        item.arrayLiterals.push_back({
+                            std::move(valueText),
+                            MergeSpans(elementBegin, value.span)});
+                    }
+                    if (!Match(LexemeKind::Comma)) {
+                        break;
+                    }
+                }
+            }
+            const ParserLexeme& close = Expect(LexemeKind::RightBracket, "']'");
+            item.valueSpan = MergeSpans(open.span, close.span);
+        } else if (kind == TopLevelSyntax::Kind::StateDeclaration) {
             if (MatchWord("on")) {
                 item.stateValue = true;
             } else if (MatchWord("off")) {
@@ -651,19 +382,20 @@ private:
         } else if (kind == TopLevelSyntax::Kind::NumberDeclaration) {
             std::string sign;
             SourceSpan valueBegin = Current().span;
-            if (Match(TokenKind::Minus)) {
+            if (Match(LexemeKind::Minus)) {
                 sign = "-";
                 valueBegin = Previous().span;
             }
-            const Token& value = Expect(TokenKind::Number, "a number literal");
-            item.literal = sign + value.text;
+            const ParserLexeme& value = Expect(LexemeKind::Number, "a number literal");
+            item.literal = sign;
+            item.literal.append(value.text);
             item.valueSpan = MergeSpans(valueBegin, value.span);
         } else {
-            const Token& value = Expect(TokenKind::Duration, "a duration literal");
+            const ParserLexeme& value = Expect(LexemeKind::Duration, "a duration literal");
             item.literal = value.text;
             item.valueSpan = value.span;
         }
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.span = MergeSpans(begin, semicolon.span);
         CountNode(item.span);
         return item;
@@ -681,8 +413,8 @@ private:
     {
         EventSyntax event{};
         event.control = ParseControl();
-        Expect(TokenKind::Colon, "':'");
-        const Token& transition = ExpectWordToken("down, repeat, or up");
+        Expect(LexemeKind::Colon, "':'");
+        const ParserLexeme& transition = ExpectWordToken("down, again, or up");
         event.transition = transition.text;
         event.span = MergeSpans(event.control.span, transition.span);
         return event;
@@ -694,20 +426,39 @@ private:
         item.kind = TopLevelSyntax::Kind::PauseRule;
         item.event = ParseEvent();
         item.condition = ParseOptionalCondition();
-        if (Is(TokenKind::ConsumeContinue) || Is(TokenKind::ObserveContinue)) {
+        if (Is(LexemeKind::ConsumeContinue) || Is(LexemeKind::ObserveContinue)) {
             Fail(
                 CompileDiagnosticCode::InvalidPauseRule,
                 Current().span,
                 "pause rules do not accept continuing arrows");
         }
-        if (!Is(TokenKind::ConsumeStop) && !Is(TokenKind::ObserveStop)) {
+        if (!Is(LexemeKind::ConsumeStop) && !Is(LexemeKind::ObserveStop)) {
             Fail(
                 CompileDiagnosticCode::InvalidPauseRule,
                 Current().span,
                 "pause rule requires '=>' or '~>'");
         }
-        item.arrow = Advance().kind;
-        const Token& effect = ExpectWordToken("on, off, or toggle");
+        const LexemeKind arrow = Advance().kind;
+        switch (arrow) {
+        case LexemeKind::ConsumeStop:
+            item.arrow = RuleArrowSyntax::ConsumeStop;
+            break;
+        case LexemeKind::ConsumeContinue:
+            item.arrow = RuleArrowSyntax::ConsumeContinue;
+            break;
+        case LexemeKind::ObserveStop:
+            item.arrow = RuleArrowSyntax::ObserveStop;
+            break;
+        case LexemeKind::ObserveContinue:
+            item.arrow = RuleArrowSyntax::ObserveContinue;
+            break;
+        default:
+            Fail(
+                CompileDiagnosticCode::InternalCompiler,
+                Previous().span,
+                "validated rule arrow has no syntax value");
+        }
+        const ParserLexeme& effect = ExpectWordToken("on, off, or toggle");
         if (effect.text != "on" && effect.text != "off" && effect.text != "toggle") {
             Fail(
                 CompileDiagnosticCode::InvalidPauseRule,
@@ -715,7 +466,7 @@ private:
                 "pause effect must be on, off, or toggle");
         }
         item.pauseEffect = effect.text;
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.span = MergeSpans(begin, semicolon.span);
         CountNode(item.span);
         return item;
@@ -727,7 +478,7 @@ private:
         item.kind = TopLevelSyntax::Kind::ExitRule;
         item.event = ParseEvent();
         item.condition = ParseOptionalCondition();
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.span = MergeSpans(begin, semicolon.span);
         CountNode(item.span);
         return item;
@@ -737,36 +488,55 @@ private:
     {
         TopLevelSyntax item{};
         item.sourceControl = ParseControl();
-        if (Match(TokenKind::MappingArrow)) {
+        if (Match(LexemeKind::MappingArrow)) {
             item.kind = TopLevelSyntax::Kind::Mapping;
             item.targetControl = ParseControl();
             item.condition = ParseOptionalCondition();
-            const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+            const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
             item.span = MergeSpans(begin, semicolon.span);
             CountNode(item.span);
             return item;
         }
 
         item.kind = TopLevelSyntax::Kind::EventRule;
-        Expect(TokenKind::Colon, "':' or '->'");
-        const Token& transition = ExpectWordToken("down, repeat, or up");
+        Expect(LexemeKind::Colon, "':' or '->'");
+        const ParserLexeme& transition = ExpectWordToken("down, again, or up");
         item.event.control = std::move(item.sourceControl);
         item.event.transition = transition.text;
         item.event.span = MergeSpans(item.event.control.span, transition.span);
         item.condition = ParseOptionalCondition();
-        if (!Is(TokenKind::ConsumeStop)
-            && !Is(TokenKind::ConsumeContinue)
-            && !Is(TokenKind::ObserveStop)
-            && !Is(TokenKind::ObserveContinue)) {
+        if (!Is(LexemeKind::ConsumeStop)
+            && !Is(LexemeKind::ConsumeContinue)
+            && !Is(LexemeKind::ObserveStop)
+            && !Is(LexemeKind::ObserveContinue)) {
             Fail(
                 CompileDiagnosticCode::ExpectedToken,
                 Current().span,
                 "expected a rule arrow");
         }
-        item.arrow = Advance().kind;
+        const LexemeKind arrow = Advance().kind;
+        switch (arrow) {
+        case LexemeKind::ConsumeStop:
+            item.arrow = RuleArrowSyntax::ConsumeStop;
+            break;
+        case LexemeKind::ConsumeContinue:
+            item.arrow = RuleArrowSyntax::ConsumeContinue;
+            break;
+        case LexemeKind::ObserveStop:
+            item.arrow = RuleArrowSyntax::ObserveStop;
+            break;
+        case LexemeKind::ObserveContinue:
+            item.arrow = RuleArrowSyntax::ObserveContinue;
+            break;
+        default:
+            Fail(
+                CompileDiagnosticCode::InternalCompiler,
+                Previous().span,
+                "validated rule arrow has no syntax value");
+        }
         const SourceSpan flowBegin = Current().span;
         item.actions = ParseActionFlow({";"});
-        const Token& semicolon = Expect(TokenKind::Semicolon, "';'");
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
         item.actionFlowSpan = item.actions.empty()
             ? SourceSpan{flowBegin.beginByte, 0U}
             : MergeSpans(item.actions.front().span, item.actions.back().span);
@@ -775,53 +545,48 @@ private:
         return item;
     }
 
-    [[nodiscard]] bool IsRawControlName(std::string_view name) const noexcept
-    {
-        return name == "HID.Usage"
-            || name == "Windows.VirtualKey"
-            || name == "Windows.ScanCode"
-            || name == "Linux.Key"
-            || name == "MacOS.KeyCode";
-    }
-
     [[nodiscard]] ControlSyntax ParseControl()
     {
         ControlSyntax control{};
-        const Token& first = ExpectWordToken("a control reference");
+        const ParserLexeme& first = ExpectWordToken("a control reference");
         control.name = first.text;
         SourceSpan end = first.span;
-        while (Match(TokenKind::Dot)) {
-            const Token& segment = ExpectWordToken("a control-name segment");
-            control.name += "." + segment.text;
+        while (Match(LexemeKind::Dot)) {
+            const ParserLexeme& segment = ExpectWordToken("a control-name segment");
+            control.name += '.';
+            control.name.append(segment.text);
             end = segment.span;
         }
-        if (IsRawControlName(control.name) && Match(TokenKind::LeftParen)) {
+        if (language::LookupWordRole(control.name)
+                == language::WordRole::RawControl
+            && Match(LexemeKind::LeftParen)) {
             control.raw = true;
-            if (!Is(TokenKind::RightParen)) {
+            if (!Is(LexemeKind::RightParen)) {
                 for (;;) {
                     const SourceSpan argumentBegin = Current().span;
                     std::string sign;
-                    if (Match(TokenKind::Minus)) {
+                    if (Match(LexemeKind::Minus)) {
                         sign = "-";
                     }
-                    if (!Is(TokenKind::Number)
-                        && !Is(TokenKind::HexInteger)
-                        && !Is(TokenKind::Word)) {
+                    if (!Is(LexemeKind::Number)
+                        && !Is(LexemeKind::HexInteger)
+                        && !Is(LexemeKind::Word)) {
                         Fail(
                             CompileDiagnosticCode::ExpectedToken,
                             Current().span,
                             "expected a raw control argument");
                     }
-                    const Token& argument = Advance();
+                    const ParserLexeme& argument = Advance();
+                    sign.append(argument.text);
                     control.arguments.push_back({
-                        sign + argument.text,
+                        std::move(sign),
                         MergeSpans(argumentBegin, argument.span)});
-                    if (!Match(TokenKind::Comma)) {
+                    if (!Match(LexemeKind::Comma)) {
                         break;
                     }
                 }
             }
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             end = close.span;
         }
         control.span = MergeSpans(first.span, end);
@@ -832,25 +597,25 @@ private:
         const std::vector<std::string_view>& terminators) const noexcept
     {
         for (const std::string_view terminator : terminators) {
-            if ((terminator == ";" && Is(TokenKind::Semicolon))
+            if ((terminator == ";" && Is(LexemeKind::Semicolon))
                 || (terminator != ";" && IsWord(terminator))) {
                 return true;
             }
         }
-        return Is(TokenKind::EndOfFile);
+        return Is(LexemeKind::EndOfInput);
     }
 
     [[nodiscard]] bool IsActionStart() const noexcept
     {
-        if (Is(TokenKind::Pipe)) {
+        if (Is(LexemeKind::Pipe)) {
             return true;
         }
-        if (!Is(TokenKind::Word)) {
+        if (!Is(LexemeKind::Word)) {
             return false;
         }
-        constexpr std::array<std::string_view, 11U> names{{
+        constexpr std::array<std::string_view, 14U> names{{
             "press", "release", "tap", "wait", "gap", "set", "toggle",
-            "exec", "if", "repeat", "while",
+            "append", "pop", "clear", "exec", "if", "repeat", "while",
         }};
         return std::find(names.begin(), names.end(), Current().text) != names.end();
     }
@@ -859,20 +624,20 @@ private:
         const std::vector<std::string_view>& terminators) noexcept
     {
         std::uint32_t delimiterDepth = 0U;
-        while (!Is(TokenKind::EndOfFile)) {
+        while (!Is(LexemeKind::EndOfInput)) {
             if (delimiterDepth == 0U) {
                 if (AtActionTerminator(terminators) || IsActionStart()) {
                     return true;
                 }
-                if (Is(TokenKind::Semicolon)
+                if (Is(LexemeKind::Semicolon)
                     || IsWord("else")
                     || IsWord("end")) {
                     return false;
                 }
             }
-            if (Is(TokenKind::LeftParen) || Is(TokenKind::LeftBracket)) {
+            if (Is(LexemeKind::LeftParen) || Is(LexemeKind::LeftBracket)) {
                 ++delimiterDepth;
-            } else if ((Is(TokenKind::RightParen) || Is(TokenKind::RightBracket))
+            } else if ((Is(LexemeKind::RightParen) || Is(LexemeKind::RightBracket))
                 && delimiterDepth > 0U) {
                 --delimiterDepth;
             }
@@ -897,29 +662,43 @@ private:
         return actions;
     }
 
+    [[nodiscard]] TargetSyntax ParseTarget()
+    {
+        TargetSyntax target{};
+        const ParserLexeme& name = ExpectWordToken("a writable target");
+        target.name = name.text;
+        target.span = name.span;
+        if (Match(LexemeKind::LeftBracket)) {
+            target.index = ParseExpression();
+            const ParserLexeme& close = Expect(LexemeKind::RightBracket, "']'");
+            target.span = MergeSpans(name.span, close.span);
+        }
+        return target;
+    }
+
     [[nodiscard]] ActionSyntax ParseAction()
     {
-        if (Match(TokenKind::Pipe)) {
+        if (Match(LexemeKind::Pipe)) {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Gap;
             action.span = Previous().span;
             CountNode(action.span);
             return action;
         }
-        if (!Is(TokenKind::Word)) {
+        if (!Is(LexemeKind::Word)) {
             Fail(
                 CompileDiagnosticCode::UnexpectedToken,
                 Current().span,
                 "expected an action item");
         }
-        const Token& name = Advance();
+        const ParserLexeme& name = Advance();
         if (name.text == "press" || name.text == "release" || name.text == "tap") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Input;
             action.name = name.text;
-            Expect(TokenKind::LeftParen, "'('");
+            Expect(LexemeKind::LeftParen, "'('");
             action.control = ParseControl();
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -927,9 +706,9 @@ private:
         if (name.text == "wait") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Wait;
-            Expect(TokenKind::LeftParen, "'('");
+            Expect(LexemeKind::LeftParen, "'('");
             action.expression = ParseExpression();
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -937,8 +716,8 @@ private:
         if (name.text == "gap") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Gap;
-            Expect(TokenKind::LeftParen, "'('");
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            Expect(LexemeKind::LeftParen, "'('");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -946,11 +725,11 @@ private:
         if (name.text == "set") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Set;
-            Expect(TokenKind::LeftParen, "'('");
-            action.name = ExpectWordToken("a value name").text;
-            Expect(TokenKind::Comma, "','");
+            Expect(LexemeKind::LeftParen, "'('");
+            action.target = ParseTarget();
+            Expect(LexemeKind::Comma, "','");
             action.expression = ParseExpression();
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -958,9 +737,43 @@ private:
         if (name.text == "toggle") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Toggle;
-            Expect(TokenKind::LeftParen, "'('");
-            action.name = ExpectWordToken("a value name").text;
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            Expect(LexemeKind::LeftParen, "'('");
+            action.target = ParseTarget();
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
+            action.span = MergeSpans(name.span, close.span);
+            CountNode(action.span);
+            return action;
+        }
+        if (name.text == "append") {
+            ActionSyntax action{};
+            action.kind = ActionSyntax::Kind::Append;
+            Expect(LexemeKind::LeftParen, "'('");
+            action.name = ExpectWordToken("an array name").text;
+            Expect(LexemeKind::Comma, "','");
+            action.expression = ParseExpression();
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
+            action.span = MergeSpans(name.span, close.span);
+            CountNode(action.span);
+            return action;
+        }
+        if (name.text == "pop") {
+            ActionSyntax action{};
+            action.kind = ActionSyntax::Kind::Pop;
+            Expect(LexemeKind::LeftParen, "'('");
+            action.name = ExpectWordToken("an array name").text;
+            Expect(LexemeKind::Comma, "','");
+            action.secondaryName = ExpectWordToken("a writable scalar name").text;
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
+            action.span = MergeSpans(name.span, close.span);
+            CountNode(action.span);
+            return action;
+        }
+        if (name.text == "clear") {
+            ActionSyntax action{};
+            action.kind = ActionSyntax::Kind::Clear;
+            Expect(LexemeKind::LeftParen, "'('");
+            action.name = ExpectWordToken("an array name").text;
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -968,9 +781,15 @@ private:
         if (name.text == "exec") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Exec;
-            Expect(TokenKind::LeftParen, "'('");
-            action.stringValue = Expect(TokenKind::String, "a command string").text;
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            Expect(LexemeKind::LeftParen, "'('");
+            const ParserLexeme command = Expect(
+                LexemeKind::String,
+                "a command string");
+            action.stringValue = language::DecodeStringLiteral(
+                command.text,
+                command.span.beginByte,
+                0U).value;
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             action.span = MergeSpans(name.span, close.span);
             CountNode(action.span);
             return action;
@@ -985,7 +804,7 @@ private:
             if (MatchWord("else")) {
                 action.alternative = ParseActionFlow({"end"});
             }
-            const Token& end = ExpectWord("end");
+            const ParserLexeme& end = ExpectWord("end");
             action.span = MergeSpans(name.span, end.span);
             CountNode(action.span);
             return action;
@@ -999,7 +818,7 @@ private:
             action.expression = ParseExpression();
             ExpectWord("do");
             action.body = ParseActionFlow({"end"});
-            const Token& end = ExpectWord("end");
+            const ParserLexeme& end = ExpectWord("end");
             action.span = MergeSpans(name.span, end.span);
             CountNode(action.span);
             return action;
@@ -1007,7 +826,7 @@ private:
         Fail(
             CompileDiagnosticCode::UnexpectedToken,
             name.span,
-            "unknown action '" + name.text + "'");
+            "unknown action '" + std::string{name.text} + "'");
     }
 
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> MakeExpression(
@@ -1047,7 +866,7 @@ private:
     {
         auto left = ParseAnd();
         while (MatchWord("or")) {
-            const Token operation = Previous();
+            const ParserLexeme operation = Previous();
             auto right = ParseAnd();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1065,7 +884,7 @@ private:
     {
         auto left = ParseEquality();
         while (MatchWord("and")) {
-            const Token operation = Previous();
+            const ParserLexeme operation = Previous();
             auto right = ParseEquality();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1082,8 +901,8 @@ private:
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParseEquality()
     {
         auto left = ParseRelational();
-        while (Is(TokenKind::EqualEqual) || Is(TokenKind::BangEqual)) {
-            const Token operation = Advance();
+        while (Is(LexemeKind::EqualEqual) || Is(LexemeKind::BangEqual)) {
+            const ParserLexeme operation = Advance();
             auto right = ParseRelational();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1100,11 +919,11 @@ private:
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParseRelational()
     {
         auto left = ParseAdditive();
-        while (Is(TokenKind::Less)
-               || Is(TokenKind::LessEqual)
-               || Is(TokenKind::Greater)
-               || Is(TokenKind::GreaterEqual)) {
-            const Token operation = Advance();
+        while (Is(LexemeKind::Less)
+               || Is(LexemeKind::LessEqual)
+               || Is(LexemeKind::Greater)
+               || Is(LexemeKind::GreaterEqual)) {
+            const ParserLexeme operation = Advance();
             auto right = ParseAdditive();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1121,8 +940,8 @@ private:
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParseAdditive()
     {
         auto left = ParseMultiplicative();
-        while (Is(TokenKind::Plus) || Is(TokenKind::Minus)) {
-            const Token operation = Advance();
+        while (Is(LexemeKind::Plus) || Is(LexemeKind::Minus)) {
+            const ParserLexeme operation = Advance();
             auto right = ParseMultiplicative();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1139,10 +958,10 @@ private:
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParseMultiplicative()
     {
         auto left = ParseUnary();
-        while (Is(TokenKind::Star)
-               || Is(TokenKind::Slash)
-               || Is(TokenKind::Percent)) {
-            const Token operation = Advance();
+        while (Is(LexemeKind::Star)
+               || Is(LexemeKind::Slash)
+               || Is(LexemeKind::Percent)) {
+            const ParserLexeme operation = Advance();
             auto right = ParseUnary();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::Binary,
@@ -1158,10 +977,10 @@ private:
 
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParseUnary()
     {
-        if (Is(TokenKind::Plus)
-            || Is(TokenKind::Minus)
+        if (Is(LexemeKind::Plus)
+            || Is(LexemeKind::Minus)
             || IsWord("not")) {
-            const Token operation = Advance();
+            const ParserLexeme operation = Advance();
             NestingScope nesting(*this, operation.span);
             auto operand = ParseUnary();
             auto expression = MakeExpression(
@@ -1178,60 +997,89 @@ private:
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParsePrimary()
     {
         if (MatchWord("on") || MatchWord("off")) {
-            const Token value = Previous();
+            const ParserLexeme value = Previous();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::StateLiteral,
                 value.span);
             expression->stateValue = value.text == "on";
             return expression;
         }
-        if (Match(TokenKind::Number)) {
-            const Token value = Previous();
+        if (MatchWord("held") || MatchWord("idle")) {
+            const ParserLexeme value = Previous();
+            auto expression = MakeExpression(
+                ExpressionSyntax::Kind::ControlStateLiteral,
+                value.span);
+            expression->controlStateValue = value.text == "held"
+                ? ControlState::Held
+                : ControlState::Idle;
+            return expression;
+        }
+        if (Match(LexemeKind::Number)) {
+            const ParserLexeme value = Previous();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::NumberLiteral,
                 value.span);
             expression->text = value.text;
             return expression;
         }
-        if (Match(TokenKind::Duration)) {
-            const Token value = Previous();
+        if (Match(LexemeKind::Duration)) {
+            const ParserLexeme value = Previous();
             auto expression = MakeExpression(
                 ExpressionSyntax::Kind::DurationLiteral,
                 value.span);
             expression->text = value.text;
             return expression;
         }
-        if (Match(TokenKind::LeftParen)) {
-            const Token open = Previous();
+        if (Match(LexemeKind::LeftParen)) {
+            const ParserLexeme open = Previous();
             NestingScope nesting(*this, open.span);
             auto expression = ParseExpression();
-            const Token& close = Expect(TokenKind::RightParen, "')'");
+            const ParserLexeme& close = Expect(LexemeKind::RightParen, "')'");
             expression->span = MergeSpans(open.span, close.span);
             return expression;
         }
-        if (Is(TokenKind::Word)) {
+        if (Is(LexemeKind::Word)) {
             ControlSyntax subject = ParseControl();
-            if (Match(TokenKind::LeftBracket)) {
-                const Token& test = ExpectWordToken("a state predicate");
-                const Token& close = Expect(TokenKind::RightBracket, "']'");
+            if (Match(LexemeKind::LeftBracket)) {
+                if (subject.raw
+                    || subject.name.find('.') != std::string::npos) {
+                    Fail(
+                        CompileDiagnosticCode::UnexpectedToken,
+                        subject.span,
+                        "array access requires an unqualified array name");
+                }
+                auto index = ParseExpression();
+                const ParserLexeme& close = Expect(LexemeKind::RightBracket, "']'");
                 auto expression = MakeExpression(
-                    ExpressionSyntax::Kind::StateQuery,
+                    ExpressionSyntax::Kind::ArrayElement,
                     MergeSpans(subject.span, close.span));
-                expression->text = test.text;
-                expression->querySubject = std::move(subject);
-                return expression;
-            }
-            if (!subject.raw && subject.name.find('.') == std::string::npos) {
-                auto expression = MakeExpression(
-                    ExpressionSyntax::Kind::ValueReference,
-                    subject.span);
                 expression->text = std::move(subject.name);
+                expression->left = std::move(index);
+                CheckExpressionDepth(*expression);
                 return expression;
             }
-            Fail(
-                CompileDiagnosticCode::UnexpectedToken,
-                subject.span,
-                "control references are values only inside a state query");
+            constexpr std::string_view lengthSuffix = ".length";
+            if (!subject.raw && subject.name.ends_with(lengthSuffix)) {
+                const std::string_view fullName = subject.name;
+                const std::string_view arrayName = fullName.substr(
+                    0U,
+                    fullName.size() - lengthSuffix.size());
+                if (arrayName.find('.') == std::string_view::npos) {
+                    auto expression = MakeExpression(
+                        ExpressionSyntax::Kind::ArrayLength,
+                        subject.span);
+                    expression->text = std::string{arrayName};
+                    return expression;
+                }
+            }
+            {
+                auto expression = MakeExpression(
+                    ExpressionSyntax::Kind::Reference,
+                    subject.span);
+                expression->text = subject.name;
+                expression->reference = std::move(subject);
+                return expression;
+            }
         }
         Fail(
             CompileDiagnosticCode::ExpectedToken,
@@ -1239,39 +1087,50 @@ private:
             "expected an expression");
     }
 
-    const SourceFile& source_;
-    const std::vector<Token>& tokens_;
+    const std::vector<language::Lexeme>& lexemes_;
     const CompilerLimits& limits_;
     DiagnosticSink& diagnostics_;
     std::size_t position_{};
+    std::size_t previousPosition_{};
     std::uint64_t nodeCount_{};
     std::uint32_t nestingDepth_{};
 };
 
 } // namespace
 
-std::vector<Token> LexSource(
+std::optional<SyntaxTree> ParseSource(
     const SourceFile& source,
     const CompilerLimits& limits,
     DiagnosticSink& diagnostics)
 {
-    return Lexer(source, limits, diagnostics).Run();
-}
-
-std::optional<SyntaxTree> ParseTokens(
-    const SourceFile& source,
-    const std::vector<Token>& tokens,
-    const CompilerLimits& limits,
-    DiagnosticSink& diagnostics)
-{
-    if (tokens.empty()) {
+    language::ScanOptions options{};
+    options.retainTrivia = false;
+    options.maximumSignificantLexemes = limits.maximumTokens == 0U
+        ? 0U
+        : static_cast<std::size_t>(limits.maximumTokens - 1U);
+    options.maximumStoredLexemes = options.maximumSignificantLexemes;
+    options.maximumIssues = kMaximumCompileDiagnostics;
+    language::ScanResult scan = language::ScanWeave(source.bytes, options);
+    for (const language::LexicalIssue& issue : scan.issues) {
+        diagnostics.Add(
+            CompilerIssueCode(issue.code),
+            CompilerSpan(issue.span),
+            CompilerIssueMessage(issue.code));
+    }
+    if (scan.significantLexemeLimitReached || scan.storedLexemeLimitReached) {
+        diagnostics.Add(
+            CompileDiagnosticCode::TokenLimit,
+            CompilerSpan(scan.lexemes.back().span),
+            "token count exceeds the configured limit");
+    }
+    if (scan.lexemes.empty()) {
         diagnostics.Add(
             CompileDiagnosticCode::InternalCompiler,
             {},
-            "lexer returned no end-of-file token");
+            "language scanner returned no end-of-input lexeme");
         return std::nullopt;
     }
-    return Parser(source, tokens, limits, diagnostics).Run();
+    return Parser(scan.lexemes, limits, diagnostics).Run();
 }
 
 } // namespace inputweaver::compiler

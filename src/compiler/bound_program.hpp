@@ -15,6 +15,7 @@ using ConstantValue = std::variant<
     std::monostate,
     bool,
     std::uint8_t,
+    ControlState,
     double,
     DurationValue>;
 
@@ -22,10 +23,13 @@ struct BoundExpression final {
     enum class Kind : std::uint8_t {
         BooleanConstant,
         StateConstant,
+        ControlStateConstant,
         NumberConstant,
         DurationConstant,
         LoadValue,
-        ReadControlHeld,
+        ReadControlState,
+        LoadArrayLength,
+        LoadArrayElement,
         Unary,
         Binary,
         LogicalAnd,
@@ -38,9 +42,11 @@ struct BoundExpression final {
     ConstantValue constant;
     bool booleanValue{};
     std::uint8_t stateValue{};
+    ControlState controlStateValue{};
     double numberValue{};
     DurationValue durationValue{};
     ValueRef value{};
+    ArrayId array{};
     ControlRef control{};
     UnaryOperator unary{};
     BinaryOperator binary{};
@@ -57,6 +63,11 @@ struct BoundAction final {
         Gap,
         Set,
         Toggle,
+        SetArrayElement,
+        ToggleArrayElement,
+        AppendArrayElement,
+        PopArrayElement,
+        ClearArray,
         Exec,
         If,
         Repeat,
@@ -67,8 +78,10 @@ struct BoundAction final {
     SourceSpan span{};
     ControlRef control{};
     ValueRef value{};
+    ArrayId array{};
     std::string command;
     std::unique_ptr<BoundExpression> expression;
+    std::unique_ptr<BoundExpression> index;
     std::vector<BoundAction> body;
     std::vector<BoundAction> alternative;
 };
@@ -76,6 +89,12 @@ struct BoundAction final {
 struct BoundVariableDebug final {
     std::string name;
     ValueRef value{};
+    SourceSpan declaration{};
+};
+
+struct BoundArrayDebug final {
+    std::string name;
+    ArrayId array{};
     SourceSpan declaration{};
 };
 
@@ -111,7 +130,11 @@ struct BoundProgram final {
     DurationValue tapDuration{30'000'000};
     DurationValue actionGap{10'000'000};
     UserValueLayout userValues;
+    std::vector<ArrayDescriptor> arrays;
+    std::vector<std::uint8_t> initialArrayStates;
+    std::vector<double> initialArrayNumbers;
     std::vector<BoundVariableDebug> variables;
+    std::vector<BoundArrayDebug> arrayDebug;
     std::vector<BoundRule> rules;
 };
 

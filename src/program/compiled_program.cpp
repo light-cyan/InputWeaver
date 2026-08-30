@@ -63,6 +63,9 @@ void CanonicalizeStrings(CompiledProgramStorage& storage)
     for (auto& variable : storage.debugInfo.variables) {
         RemapId(variable.name, remap);
     }
+    for (auto& array : storage.debugInfo.arrays) {
+        RemapId(array.name, remap);
+    }
     for (auto& rule : storage.debugInfo.rules) {
         RemapId(rule.conditionText, remap);
         RemapId(rule.actionText, remap);
@@ -101,7 +104,7 @@ void CanonicalizeControls(CompiledProgramStorage& storage)
         RemapId(bucket.key.control, remap);
     }
     for (auto& instruction : storage.expressionCode) {
-        if (instruction.opcode == ExpressionOpcode::ReadControlHeld
+        if (instruction.opcode == ExpressionOpcode::ReadControlState
             && instruction.operand0 < remap.size()) {
             instruction.operand0 = remap[instruction.operand0];
         }
@@ -152,9 +155,12 @@ void CanonicalizeValueRefs(CompiledProgramStorage& storage)
     }
     for (auto& instruction : storage.actionCode) {
         if ((instruction.opcode == ActionOpcode::Set
-             || instruction.opcode == ActionOpcode::Toggle)
+              || instruction.opcode == ActionOpcode::Toggle)
             && instruction.operand0 < remap.size()) {
             instruction.operand0 = remap[instruction.operand0];
+        } else if (instruction.opcode == ActionOpcode::PopArrayElement
+            && instruction.operand1 < remap.size()) {
+            instruction.operand1 = remap[instruction.operand1];
         }
     }
 }
@@ -355,6 +361,21 @@ std::span<const ValueRef> CompiledProgram::ValueRefs() const noexcept
 const UserValueLayout& CompiledProgram::UserValues() const noexcept
 {
     return storage_.userValues;
+}
+
+std::span<const ArrayDescriptor> CompiledProgram::Arrays() const noexcept
+{
+    return storage_.arrays;
+}
+
+std::span<const std::uint8_t> CompiledProgram::InitialArrayStates() const noexcept
+{
+    return storage_.initialArrayStates;
+}
+
+std::span<const double> CompiledProgram::InitialArrayNumbers() const noexcept
+{
+    return storage_.initialArrayNumbers;
 }
 
 std::span<const double> CompiledProgram::NumberConstants() const noexcept

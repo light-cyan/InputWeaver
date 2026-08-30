@@ -5,6 +5,7 @@
 #include "support/callback_ref.hpp"
 
 #include <chrono>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -15,6 +16,7 @@ struct RuntimeValue final {
     ExpressionType type{ExpressionType::None};
     bool booleanValue{};
     std::uint8_t stateValue{};
+    ControlState controlStateValue{ControlState::Idle};
     double numberValue{};
     DurationValue durationValue{};
 };
@@ -29,6 +31,9 @@ enum class RuntimeEvaluationFault : std::uint8_t {
     DivisionByZero,
     NonFiniteNumber,
     InvalidDuration,
+    InvalidArray,
+    InvalidArrayIndex,
+    ArrayBounds,
     MissingReturn,
 };
 
@@ -71,7 +76,7 @@ public:
 
 enum class RuntimeOutputTransition : std::uint8_t {
     Down,
-    Repeat,
+    Again,
     Up,
 };
 
@@ -174,6 +179,8 @@ struct RuntimeCapacities final {
     std::uint32_t maximumStateSlots{4096U};
     std::uint32_t maximumNumberSlots{4096U};
     std::uint32_t maximumDurationSlots{4096U};
+    std::uint32_t maximumArrayCount{4096U};
+    std::uint64_t maximumArrayBytes{64U * 1024U * 1024U};
     std::uint32_t maximumMappingSlots{4096U};
     std::uint32_t maximumExitRulesPerEvent{64U};
     std::uint32_t maximumPauseRulesPerEvent{64U};
@@ -200,6 +207,8 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     MissingProgram,
     ControlCapacity,
     ValueCapacity,
+    ArrayCountCapacity,
+    ArrayByteCapacity,
     MappingCapacity,
     ExitRuleCapacity,
     PauseRuleCapacity,
@@ -229,6 +238,8 @@ enum class RuntimeActivationSubject : std::uint32_t {
     StateSlots,
     NumberSlots,
     DurationSlots,
+    ArrayCount,
+    ArrayBytes,
     MaximumContinuouslyReadyQuanta,
     ContinuouslyReadyBackoffNanoseconds,
     MaximumOutputTransitionsPerInterval,
@@ -307,6 +318,8 @@ struct RuntimeDiagnosticRecord final {
     std::int64_t deadlineNanoseconds{};
     std::uint32_t detail{};
     std::uint32_t platformError{};
+    std::uint64_t required{};
+    std::uint64_t available{};
 };
 
 enum class RuntimeExecutionResult : std::uint8_t {
@@ -320,6 +333,7 @@ enum class RuntimeDebugEventKind : std::uint8_t {
     ExecutionEnded,
     RuntimeIssue,
     StateChanged,
+    ArrayChanged,
 };
 
 struct RuntimeDebugValue final {
@@ -328,6 +342,22 @@ struct RuntimeDebugValue final {
     bool stateValue{};
     double numberValue{};
     DurationValue durationValue{};
+};
+
+struct RuntimeDebugArrayElement final {
+    std::uint8_t stateValue{};
+    double numberValue{};
+};
+
+inline constexpr std::size_t kRuntimeDebugArrayPreviewCount = 8U;
+
+struct RuntimeDebugArraySnapshot final {
+    ArrayId array{};
+    ArrayElementType elementType{ArrayElementType::State};
+    std::uint64_t length{};
+    std::uint8_t prefixCount{};
+    std::uint8_t suffixCount{};
+    std::array<RuntimeDebugArrayElement, kRuntimeDebugArrayPreviewCount> elements{};
 };
 
 struct RuntimeDebugIssue final {
@@ -349,6 +379,7 @@ struct RuntimeDebugEvent final {
     RuntimeExecutionResult result{RuntimeExecutionResult::Completed};
     RuntimeDebugIssue issue{};
     RuntimeDebugValue value{};
+    RuntimeDebugArraySnapshot array{};
 };
 
 class RuntimeDebugEventPort {
@@ -368,6 +399,9 @@ struct RuntimeMetrics final {
     std::uint64_t droppedDiagnostics{};
     std::uint64_t outputTransitions{};
     std::uint64_t schedulerBackoffs{};
+    std::uint64_t currentArrayBytes{};
+    std::uint64_t peakArrayBytes{};
+    std::uint64_t rejectedArrayGrowth{};
 };
 
 struct RuntimePumpResult final {

@@ -269,8 +269,8 @@ void RenderLineEditor(
         + FixedField(TransitionText(event.transition), 7U) + "  "
         + FixedField(debug::InputOriginLabel(event.origin), 4U) + "  "
         + FixedField(DispositionText(event.disposition), 4U);
-    if (event.repeatedDown) {
-        text += " REPEAT";
+    if (event.againDown) {
+        text += " AGAIN";
     }
     if (event.unmatchedUp) {
         text += " NO-DOWN";
@@ -286,8 +286,8 @@ void RenderLineEditor(
     if (event.disposition != debug::InputDisposition::NotApplicable) {
         text += " (" + std::string{DispositionText(event.disposition)} + ')';
     }
-    if (event.repeatedDown) {
-        text += " REPEAT";
+    if (event.againDown) {
+        text += " AGAIN";
     }
     if (event.unmatchedUp) {
         text += " NO-DOWN";
@@ -377,16 +377,20 @@ void AppendExecutionField(
     return lines;
 }
 
+[[nodiscard]] std::string DebugNumberText(double value)
+{
+    std::ostringstream output;
+    output << std::setprecision(15) << value;
+    return output.str();
+}
+
 [[nodiscard]] std::string DebugValueText(const debug::DebugValue& value)
 {
     switch (value.type) {
     case ValueType::State:
         return value.stateValue ? "on" : "off";
-    case ValueType::Number: {
-        std::ostringstream output;
-        output << std::setprecision(15) << value.numberValue;
-        return output.str();
-    }
+    case ValueType::Number:
+        return DebugNumberText(value.numberValue);
     case ValueType::Duration: {
         constexpr std::int64_t nanosecondsPerMillisecond = 1'000'000LL;
         constexpr std::int64_t nanosecondsPerSecond = 1'000LL
@@ -410,6 +414,29 @@ void AppendExecutionField(
     }
     }
     return "?";
+}
+
+[[nodiscard]] std::string DebugArrayText(
+    const debug::DebugArrayState& array)
+{
+    std::string text = '[' + array.name + "=[";
+    const std::size_t prefix = array.value.prefixCount;
+    const std::size_t suffix = array.value.suffixCount;
+    for (std::size_t index = 0U; index < prefix + suffix; ++index) {
+        if (index != 0U) {
+            text += ", ";
+        }
+        if (index == prefix && suffix != 0U) {
+            text += "..., ";
+        }
+        text += array.value.elementType == ArrayElementType::State
+            ? (array.value.elements[index].stateValue ? "on" : "off")
+            : DebugNumberText(array.value.elements[index].numberValue);
+    }
+    text += suffix == 0U
+        ? "]]"
+        : "] length=" + std::to_string(array.value.length) + ']';
+    return text;
 }
 
 [[nodiscard]] std::string DebugPauseText(
@@ -591,8 +618,8 @@ void RenderViewportRows(
         return colors.syntaxConstant;
     case SourceTokenKind::Control:
         return colors.syntaxControl;
-    case SourceTokenKind::Function:
-        return colors.syntaxFunction;
+    case SourceTokenKind::Action:
+        return colors.syntaxAction;
     case SourceTokenKind::Operator:
         return colors.syntaxOperator;
     case SourceTokenKind::String:
@@ -1432,12 +1459,20 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
                 stateCells.push_back(std::move(cell));
             }
+            for (const debug::DebugArrayState& array : debugState->arrays) {
+                std::string cell = DebugArrayText(array);
+                cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
+                stateCells.push_back(std::move(cell));
+            }
             for (const debug::DebugPressedControl& pressed
                  : debugState->pressedControls) {
                 std::string cell = '[' + ControlName(pressed.control) + ' '
                     + std::string{debug::InputOriginLabel(pressed.origin)} + ']';
                 cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
                 stateCells.push_back(std::move(cell));
+            }
+            if (pressedWidth >= 2U) {
+                cellWidth = (std::min)(cellWidth, pressedWidth / 2U);
             }
             const std::size_t columns = (std::max)(
                 static_cast<std::size_t>(1U),

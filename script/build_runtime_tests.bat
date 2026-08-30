@@ -12,6 +12,7 @@ echo [1/7] Building ProgramRuntimeTests.exe...
     "tests\runtime\program_runtime_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
     "src\runtime\artifact_loader.cpp" ^
+    "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
     "src\program\compiled_program.cpp" ^
@@ -25,6 +26,7 @@ echo [2/7] Building WindowsRuntimeAdapterTests.exe...
     "tests\runtime\windows_runtime_adapter_tests.cpp" ^
     "tests\program\compiled_program_fixtures.cpp" ^
     "src\platform\windows\runtime\compiled_target_resolver.cpp" ^
+    "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
     "src\program\compiled_program.cpp" ^

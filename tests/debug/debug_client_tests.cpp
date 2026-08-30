@@ -133,8 +133,8 @@ void TestOriginsAndPressedState()
                 == InputOrigin::PhysicalCandidate,
         "concrete origin replaces INIT state");
     Check(
-        state->recentInputEvents.back().repeatedDown,
-        "first concrete Down after INIT is a repeat");
+        state->recentInputEvents.back().againDown,
+        "first concrete Down after INIT is again");
 
     Check(
         reducer.Accept(MakeInput(
@@ -144,11 +144,11 @@ void TestOriginsAndPressedState()
             inputweaver::Transition::Down,
             InputOrigin::PhysicalCandidate))
             == inputweaver::debug::DebugReductionAction::None,
-        "repeated concrete Down is accepted");
+        "again concrete Down is accepted");
     state = reducer.ReadState();
     Check(
-        state->recentInputEvents.back().repeatedDown,
-        "same-origin Down is a repeat");
+        state->recentInputEvents.back().againDown,
+        "same-origin Down is again");
 
     Check(
         reducer.Accept(MakeInput(
@@ -199,10 +199,10 @@ void TestOriginsAndPressedState()
         "ordinary Down without INIT is accepted");
     state = reducer.ReadState();
     Check(
-        !state->recentInputEvents.back().repeatedDown
+        !state->recentInputEvents.back().againDown
             && state->pressedControls.back().origin
                 == InputOrigin::CurrentInstanceInjected,
-        "ordinary first Down is not a repeat");
+        "ordinary first Down is not again");
 
     Check(
         reducer.Accept(MakeInput(
@@ -230,7 +230,7 @@ void TestOriginsAndPressedState()
         protocolSequence);
     message.ruleMatched.executionMarker = marker;
     message.ruleMatched.triggerInputSequence = triggerInputSequence;
-    message.ruleMatched.conditionText = "combat[on]";
+    message.ruleMatched.conditionText = "combat == on";
     message.ruleMatched.actionText =
         "wait(10ms) wait(20ms) wait(30ms) wait(40ms)";
     return message;
@@ -321,7 +321,7 @@ void TestRuleCorrelationAndInterleaving()
             && first->triggerInput.captureTimeNanoseconds == 6'000'000
             && first->triggerInput.captureUnixTimeMilliseconds
                 == 1'725'000'000'005LL
-            && first->conditionText == "combat[on]"
+            && first->conditionText == "combat == on"
             && first->actionText
                 == "wait(10ms) wait(20ms) wait(30ms) wait(40ms)",
         "execution keeps display times and readable condition and action data");
@@ -570,6 +570,47 @@ void TestValueState()
         "value type drift requests a fresh capture");
 }
 
+void TestArrayState()
+{
+    using namespace inputweaver;
+    debug::DebugStateReducer reducer;
+    reducer.Connected(17U);
+    reducer.CaptureRequested();
+    auto started = MakeMessage(debug::MessageKind::CaptureStarted, 1U);
+    debug::DebugArrayValue initial{};
+    initial.elementType = ArrayElementType::State;
+    initial.length = 2U;
+    initial.prefixCount = 2U;
+    initial.elements[0].stateValue = true;
+    started.captureStarted.arrays.push_back({"gates", initial});
+    Check(
+        reducer.Accept(started) == debug::DebugReductionAction::None,
+        "capture accepts its complete array snapshot");
+    auto state = reducer.ReadState();
+    Check(
+        state->arrays.size() == 1U
+            && state->arrays[0].name == "gates"
+            && state->arrays[0].value.length == 2U,
+        "array name, type, length, and preview enter derived state");
+
+    auto changed = MakeMessage(debug::MessageKind::ArrayChanged, 2U);
+    changed.arrayChanged.arrayIndex = 0U;
+    changed.arrayChanged.value = initial;
+    changed.arrayChanged.value.length = 3U;
+    changed.arrayChanged.value.prefixCount = 3U;
+    changed.arrayChanged.value.elements[2].stateValue = true;
+    Check(
+        reducer.Accept(changed) == debug::DebugReductionAction::None
+            && reducer.ReadState()->arrays[0].value.length == 3U,
+        "array change replaces one complete bounded snapshot");
+
+    changed.header.protocolSequence = 3U;
+    changed.arrayChanged.value.elementType = ArrayElementType::Number;
+    Check(
+        reducer.Accept(changed) == debug::DebugReductionAction::RestartCapture,
+        "array element type drift requests a fresh capture");
+}
+
 } // namespace
 
 int main()
@@ -579,6 +620,7 @@ int main()
     TestIssuesAndRecovery();
     TestStrictValidationAndCapacity();
     TestValueState();
+    TestArrayState();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " debug client test(s) failed.\n";
         return 1;

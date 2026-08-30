@@ -79,7 +79,7 @@ struct DebugInputEvent final {
     Transition transition{Transition::Down};
     InputOrigin origin{InputOrigin::PhysicalCandidate};
     InputDisposition disposition{InputDisposition::NotApplicable};
-    bool repeatedDown{};
+    bool againDown{};
     bool unmatchedUp{};
 };
 
@@ -91,6 +91,11 @@ struct DebugPressedControl final {
 struct DebugVariableState final {
     std::string name;
     DebugValue value{};
+};
+
+struct DebugArrayState final {
+    std::string name;
+    DebugArrayValue value{};
 };
 
 struct DebugRuleExecution final {
@@ -120,6 +125,7 @@ struct DebugClientState final {
     std::vector<DebugInputEvent> recentInputEvents;
     std::vector<DebugPressedControl> pressedControls;
     std::vector<DebugVariableState> values;
+    std::vector<DebugArrayState> arrays;
     std::vector<DebugRuleExecution> ruleExecutions;
     std::vector<DebugRuntimeIssue> runtimeIssues;
 };
@@ -128,6 +134,7 @@ struct DebugClientCapacities final {
     std::size_t maximumInputEvents{512U};
     std::size_t maximumPressedControls{256U};
     std::size_t maximumValues{kMaximumDebugValues};
+    std::size_t maximumArrays{kMaximumDebugArrays};
     std::size_t maximumRuleExecutions{256U};
     std::size_t maximumPendingRuleExecutions{256U};
     std::size_t maximumRuntimeIssues{128U};

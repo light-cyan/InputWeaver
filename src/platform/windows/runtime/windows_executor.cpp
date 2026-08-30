@@ -67,6 +67,9 @@ void PrintProgramMetrics(
                << L" runtime_diagnostic_drops=" << metrics.runtime.droppedDiagnostics
                << L" output_transitions=" << metrics.runtime.outputTransitions
                << L" scheduler_backoffs=" << metrics.runtime.schedulerBackoffs
+               << L" current_array_bytes=" << metrics.runtime.currentArrayBytes
+               << L" peak_array_bytes=" << metrics.runtime.peakArrayBytes
+               << L" rejected_array_growth=" << metrics.runtime.rejectedArrayGrowth
                << L" queued_outputs=" << metrics.queuedOutputs
                << L" cancelled_outputs=" << metrics.cancelledOutputs
                << L" injection_failures=" << metrics.injectionFailures

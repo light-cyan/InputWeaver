@@ -13,10 +13,11 @@
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 3U;
+inline constexpr std::uint16_t kProtocolVersion = 4U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
+inline constexpr std::uint32_t kMaximumDebugArrays = 4'096U;
 inline constexpr std::uint32_t kMaximumDebugTextBytes = 16U * 1024U * 1024U;
 
 enum class MessageKind : std::uint16_t {
@@ -31,6 +32,7 @@ enum class MessageKind : std::uint16_t {
     ExecutionEnded = 20U,
     RuntimeIssue = 21U,
     StateChanged = 22U,
+    ArrayChanged = 23U,
 };
 
 enum class InputDisposition : std::uint8_t {
@@ -75,9 +77,28 @@ struct DebugNamedValue final {
     DebugValue value{};
 };
 
+struct DebugArrayElement final {
+    bool stateValue{};
+    double numberValue{};
+};
+
+struct DebugArrayValue final {
+    ArrayElementType elementType{ArrayElementType::State};
+    std::uint64_t length{};
+    std::uint8_t prefixCount{};
+    std::uint8_t suffixCount{};
+    std::array<DebugArrayElement, kRuntimeDebugArrayPreviewCount> elements{};
+};
+
+struct DebugNamedArray final {
+    std::string name;
+    DebugArrayValue value{};
+};
+
 struct CaptureStartedPayload final {
     std::int64_t captureUnixTimeMilliseconds{};
     std::vector<DebugNamedValue> values;
+    std::vector<DebugNamedArray> arrays;
 };
 
 struct InputEventPayload final {
@@ -117,6 +138,11 @@ struct StateChangedPayload final {
     DebugValue value{};
 };
 
+struct ArrayChangedPayload final {
+    std::uint32_t arrayIndex{kInvalidProgramIndex};
+    DebugArrayValue value{};
+};
+
 struct Message final {
     MessageHeader header{};
     HelloPayload hello{};
@@ -127,6 +153,7 @@ struct Message final {
     ExecutionEndedPayload executionEnded{};
     RuntimeIssuePayload runtimeIssue{};
     StateChangedPayload stateChanged{};
+    ArrayChangedPayload arrayChanged{};
 };
 
 enum class DecodeError : std::uint8_t {

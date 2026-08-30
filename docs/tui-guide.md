@@ -81,11 +81,12 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 | --- | --- | --- |
 | 结构关键字 | `when`、`repeat`、`if`、`else` | 紫色 |
 | 类型名 | `state`、`number`、`duration` | 青绿色 |
-| 变量和内蕴值 | 用户变量、`TARGET`、`PAUSE`、`TAP_DURATION` | 浅蓝色 |
-| 常量 | `GLOBAL`、`on`、`off`、`down`、`up`、数字、时长 | 浅绿色 |
-| 控制名 | `A`、`LCtrl`、`Mouse.Left` | 亮蓝色 |
-| 动作函数及配套符号 | `tap`、`set`、`toggle`、`(`、`)`、`|` | 黄色 |
+| 变量、数组和内蕴值 | 用户变量、用户数组、`TARGET`、`PAUSE`、`TAP_DURATION`、`ACTION_GAP` | 浅蓝色 |
+| 常量 | `GLOBAL`、`on`、`off`、`held`、`idle`、`down`、`again`、`up`、数字、时长 | 浅绿色 |
+| 控制名 | `A`、`LCtrl`、`Mouse.Left`、`Windows.VirtualKey` | 亮蓝色 |
+| 动作和分隔符 | `tap`、`set`、`toggle`、`append`、`pop`、`clear`、`|` | 黄色 |
 | 规则和映射箭头 | `->`、`~>`、`=>`、`=>>`、`~>>` | 亮白色 |
+| 普通源码文本 | `and`、`or`、`not`、括号、方括号、逗号、冒号、分号、点和表达式运算符 | 默认前景色 |
 | 字符串 | `"..."` | 橙色 |
 | 注释 | `//...`、`/*...*/` | 绿色 |
 
@@ -166,7 +167,7 @@ Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成
 
 ### EVENTS
 
-EVENTS 的每一行依次显示捕获时间、控制、转换、来源和处置结果，并可能附加 `REPEAT` 或 `NO-DOWN`：
+EVENTS 的每一行依次显示捕获时间、控制、转换、来源和处置结果，并可能附加 `AGAIN` 或 `NO-DOWN`：
 
 ```text
 16:28:38.582  A                 down     PHY   PASS
@@ -176,13 +177,13 @@ EVENTS 的每一行依次显示捕获时间、控制、转换、来源和处置�
 
 来源 `PHY` 表示物理候选输入，`SYN` 表示注入来源，`INIT` 表示开始捕获时取得的已按下控制快照。`INIT` 不是捕获后发生的一次新按下；它只把初始按下状态送入 DebugClient，因此转换固定为 `down`，处置结果固定为 `-`。例如 `F22 down INIT -` 表示 Windows 在捕获开始时报告 F22 已处于按下状态。
 
-`PASS` 表示运行时放行当前输入，`DROP` 表示运行时决定消费当前输入；在 Dry-run 中，界面仍显示正常模式下的逻辑决定，但物理输入最终始终放行。`REPEAT` 表示按下发生在已有按下状态之后，`NO-DOWN` 表示释放前没有对应的已知按下。
+`PASS` 表示运行时放行当前输入，`DROP` 表示运行时决定消费当前输入；在 Dry-run 中，界面仍显示正常模式下的逻辑决定，但物理输入最终始终放行。`AGAIN` 表示按下发生在已有按下状态之后，`NO-DOWN` 表示释放前没有对应的已知按下。
 
 ### STATE
 
-STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值，再显示当前按下的控制；`off`、`0` 等值也会显示，不会只保留活动状态。控制项同时标出其当前来源，例如 `[LCtrl PHY]` 或 `[F22 INIT]`。
+STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值以及全部数组，再显示当前按下的控制；`off`、`0` 和空数组也会显示。数组分别显示为 `[values=[]]`、`[values=[2, 4, 8]]`，长数组显示为 `[values=[0, 1, 2, 3, ..., 996, 997, 998, 999] length=1000]`。控制项同时标出其当前来源，例如 `[LCtrl PHY]` 或 `[F22 INIT]`。
 
-开始捕获时，执行器发送 `PAUSE` 和全部用户值的完整快照；实际运行产生的变化随后以增量方式同步。`PAUSE` 不重复放在 STATE 中，而是固定显示在 HEALTH。
+开始捕获时，执行器发送 `PAUSE`、全部用户标量值和全部数组快照；实际运行产生的变化随后以增量方式同步。`PAUSE` 不重复放在 STATE 中，而是固定显示在 HEALTH。
 
 ### ACTION EXECUTIONS
 
@@ -206,7 +207,7 @@ HEALTH 显示连接、捕获、信任状态、捕获代次、Dry-run、`PAUSE`�
 
 ## TUI 按键保护
 
-宿主启动每个 `InputWeaver.exe` 时都会附加 `--exclude InputWeaverTUI.exe`。Exclude 使用与 Target 相同的进程定位器，并随前台窗口变化重新定位；前端关闭并重新创建后保护继续生效。排除选择命中前台进程时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的按下和重复输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
+宿主启动每个 `InputWeaver.exe` 时都会附加 `--exclude InputWeaverTUI.exe`。Exclude 使用与 Target 相同的进程定位器，并随前台窗口变化重新定位；前端关闭并重新创建后保护继续生效。排除选择命中前台进程时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的 `down` 和 `again` 输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
 
 该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
 

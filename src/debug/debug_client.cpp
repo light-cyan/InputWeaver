@@ -92,6 +92,7 @@ struct DebugStateReducer::Impl final {
         state.recentInputEvents.clear();
         state.pressedControls.clear();
         state.values.clear();
+        state.arrays.clear();
         state.ruleExecutions.clear();
         state.runtimeIssues.clear();
         pendingExecutions.clear();
@@ -290,7 +291,8 @@ struct DebugStateReducer::Impl final {
         }
         if (message.header.captureTimeNanoseconds < 0
             || message.captureStarted.captureUnixTimeMilliseconds <= 0
-            || message.captureStarted.values.size() > capacities.maximumValues) {
+            || message.captureStarted.values.size() > capacities.maximumValues
+            || message.captureStarted.arrays.size() > capacities.maximumArrays) {
             return Recover(DebugClientFault::InconsistentState);
         }
         ClearCapture();
@@ -301,6 +303,10 @@ struct DebugStateReducer::Impl final {
         state.values.reserve(message.captureStarted.values.size());
         for (const DebugNamedValue& value : message.captureStarted.values) {
             state.values.push_back({value.name, value.value});
+        }
+        state.arrays.reserve(message.captureStarted.arrays.size());
+        for (const DebugNamedArray& array : message.captureStarted.arrays) {
+            state.arrays.push_back({array.name, array.value});
         }
         state.capturing = true;
         state.captureTrusted = true;
@@ -346,7 +352,7 @@ struct DebugStateReducer::Impl final {
         input.disposition = payload.disposition;
         if (payload.transition == Transition::Down) {
             if (payload.origin == InputOrigin::InitialSample) {
-                input.repeatedDown = FindPressed(
+                input.againDown = FindPressed(
                     input.control,
                     InputOrigin::InitialSample) != state.pressedControls.end();
                 if (!AddPressed(input.control, InputOrigin::InitialSample)) {
@@ -359,7 +365,7 @@ struct DebugStateReducer::Impl final {
                 const bool alreadyPressed = FindPressed(
                     input.control,
                     payload.origin) != state.pressedControls.end();
-                input.repeatedDown = replacedInitial || alreadyPressed;
+                input.againDown = replacedInitial || alreadyPressed;
                 if (!AddPressed(input.control, payload.origin)) {
                     return Recover(DebugClientFault::CapacityExceeded);
                 }
@@ -507,6 +513,20 @@ struct DebugStateReducer::Impl final {
         return DebugReductionAction::None;
     }
 
+    [[nodiscard]] DebugReductionAction AcceptArrayChanged(
+        const Message& message)
+    {
+        const ArrayChangedPayload& changed = message.arrayChanged;
+        if (changed.arrayIndex >= state.arrays.size()
+            || state.arrays[changed.arrayIndex].value.elementType
+                != changed.value.elementType) {
+            return Recover(DebugClientFault::InconsistentState);
+        }
+        state.arrays[changed.arrayIndex].value = changed.value;
+        Publish();
+        return DebugReductionAction::None;
+    }
+
     [[nodiscard]] DebugReductionAction Accept(const Message& message)
     {
         if (!state.connected) {
@@ -560,6 +580,8 @@ struct DebugStateReducer::Impl final {
             return AcceptRuntimeIssue(message);
         case MessageKind::StateChanged:
             return AcceptStateChanged(message);
+        case MessageKind::ArrayChanged:
+            return AcceptArrayChanged(message);
         case MessageKind::Hello:
         case MessageKind::HelloAccepted:
         case MessageKind::StartCapture:

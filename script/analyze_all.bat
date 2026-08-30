@@ -25,6 +25,7 @@ exit /b 0
 set "INPUTWEAVER_FILE=%~1"
 set "INPUTWEAVER_OWNER="
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/program/" set "INPUTWEAVER_OWNER=program"
+if /i "!INPUTWEAVER_FILE:~0,13!"=="src/language/" set "INPUTWEAVER_OWNER=language"
 if /i "!INPUTWEAVER_FILE:~0,13!"=="src/compiler/" set "INPUTWEAVER_OWNER=compiler"
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/runtime/" set "INPUTWEAVER_OWNER=runtime"
 if /i "!INPUTWEAVER_FILE:~0,10!"=="src/debug/" set "INPUTWEAVER_OWNER=debug"

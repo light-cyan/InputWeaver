@@ -9,46 +9,11 @@
 
 namespace inputweaver::compiler {
 
-enum class TokenKind : std::uint8_t {
-    Word,
-    Number,
-    Duration,
-    HexInteger,
-    String,
-    Equal,
-    MappingArrow,
+enum class RuleArrowSyntax : std::uint8_t {
     ConsumeStop,
     ConsumeContinue,
     ObserveStop,
     ObserveContinue,
-    EqualEqual,
-    BangEqual,
-    Less,
-    LessEqual,
-    Greater,
-    GreaterEqual,
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-    Colon,
-    Semicolon,
-    Dot,
-    Comma,
-    LeftParen,
-    RightParen,
-    LeftBracket,
-    RightBracket,
-    Pipe,
-    Invalid,
-    EndOfFile,
-};
-
-struct Token final {
-    TokenKind kind{};
-    SourceSpan span{};
-    std::string text;
 };
 
 struct RawControlArgumentSyntax final {
@@ -63,13 +28,23 @@ struct ControlSyntax final {
     SourceSpan span{};
 };
 
+struct ExpressionSyntax;
+
+struct TargetSyntax final {
+    std::string name;
+    SourceSpan span{};
+    std::unique_ptr<ExpressionSyntax> index;
+};
+
 struct ExpressionSyntax final {
     enum class Kind : std::uint8_t {
         StateLiteral,
+        ControlStateLiteral,
         NumberLiteral,
         DurationLiteral,
-        ValueReference,
-        StateQuery,
+        Reference,
+        ArrayElement,
+        ArrayLength,
         Unary,
         Binary,
     };
@@ -79,7 +54,8 @@ struct ExpressionSyntax final {
     std::uint32_t depth{1U};
     std::string text;
     bool stateValue{};
-    ControlSyntax querySubject;
+    ControlState controlStateValue{};
+    ControlSyntax reference;
     std::unique_ptr<ExpressionSyntax> left;
     std::unique_ptr<ExpressionSyntax> right;
 };
@@ -97,6 +73,9 @@ struct ActionSyntax final {
         Gap,
         Set,
         Toggle,
+        Append,
+        Pop,
+        Clear,
         Exec,
         If,
         Repeat,
@@ -106,11 +85,18 @@ struct ActionSyntax final {
     Kind kind{};
     SourceSpan span{};
     std::string name;
+    std::string secondaryName;
     ControlSyntax control;
+    TargetSyntax target;
     std::string stringValue;
     std::unique_ptr<ExpressionSyntax> expression;
     std::vector<ActionSyntax> body;
     std::vector<ActionSyntax> alternative;
+};
+
+struct ArrayLiteralElementSyntax final {
+    std::string text;
+    SourceSpan span{};
 };
 
 struct TopLevelSyntax final {
@@ -121,6 +107,8 @@ struct TopLevelSyntax final {
         StateDeclaration,
         NumberDeclaration,
         DurationDeclaration,
+        StateArrayDeclaration,
+        NumberArrayDeclaration,
         Mapping,
         ExitRule,
         PauseRule,
@@ -133,13 +121,14 @@ struct TopLevelSyntax final {
     SourceSpan actionFlowSpan{};
     std::string name;
     std::string literal;
+    std::vector<ArrayLiteralElementSyntax> arrayLiterals;
     bool stateValue{};
     bool targetGlobal{};
     ControlSyntax sourceControl;
     ControlSyntax targetControl;
     EventSyntax event;
     std::unique_ptr<ExpressionSyntax> condition;
-    TokenKind arrow{};
+    RuleArrowSyntax arrow{};
     std::string pauseEffect;
     std::vector<ActionSyntax> actions;
 };

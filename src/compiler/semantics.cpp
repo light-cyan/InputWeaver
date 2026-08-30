@@ -2,8 +2,9 @@
 
 #include "control_catalog.hpp"
 
+#include "language/word_catalog.hpp"
+
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -25,7 +26,9 @@ namespace {
 constexpr std::int64_t kMaximumSettingDuration = 60'000'000'000LL;
 
 struct Symbol final {
-    ValueRef value{};
+    std::optional<ValueRef> value;
+    ArrayId array{};
+    ArrayElementType arrayType{ArrayElementType::State};
     SourceSpan declaration{};
 };
 
@@ -38,14 +41,7 @@ struct Symbol final {
 
 [[nodiscard]] bool IsReservedName(std::string_view name) noexcept
 {
-    constexpr std::array<std::string_view, 37U> reserved{{
-        "TARGET", "TAP_DURATION", "ACTION_GAP", "PAUSE", "GLOBAL",
-        "state", "number", "duration", "exit", "pause", "when", "on", "off",
-        "toggle", "down", "repeat", "up", "and", "or", "not", "press",
-        "release", "tap", "wait", "gap", "set", "exec", "if", "then",
-        "else", "end", "do", "while", "held", "idle", "E0", "E1",
-    }};
-    return std::find(reserved.begin(), reserved.end(), name) != reserved.end()
+    return language::IsReservedLanguageWord(name)
         || IsReservedControlIdentifier(name);
 }
 
@@ -193,6 +189,8 @@ public:
             case TopLevelSyntax::Kind::StateDeclaration:
             case TopLevelSyntax::Kind::NumberDeclaration:
             case TopLevelSyntax::Kind::DurationDeclaration:
+            case TopLevelSyntax::Kind::StateArrayDeclaration:
+            case TopLevelSyntax::Kind::NumberArrayDeclaration:
                 BindDeclaration(item);
                 break;
             case TopLevelSyntax::Kind::Mapping:
@@ -298,6 +296,41 @@ private:
             return;
         }
 
+        if (item.kind == TopLevelSyntax::Kind::StateArrayDeclaration
+            || item.kind == TopLevelSyntax::Kind::NumberArrayDeclaration) {
+            const ArrayElementType elementType =
+                item.kind == TopLevelSyntax::Kind::StateArrayDeclaration
+                ? ArrayElementType::State
+                : ArrayElementType::Number;
+            const ArrayId array{static_cast<std::uint32_t>(program_.arrays.size())};
+            const std::uint32_t begin = elementType == ArrayElementType::State
+                ? static_cast<std::uint32_t>(program_.initialArrayStates.size())
+                : static_cast<std::uint32_t>(program_.initialArrayNumbers.size());
+            for (const ArrayLiteralElementSyntax& element : item.arrayLiterals) {
+                if (elementType == ArrayElementType::State) {
+                    program_.initialArrayStates.push_back(
+                        element.text == "on" ? 1U : 0U);
+                } else {
+                    const auto initial = ParseNumber(element.text);
+                    if (!initial.has_value()) {
+                        diagnostics_.Add(
+                            CompileDiagnosticCode::InvalidNumber,
+                            element.span,
+                            "number literal must be a finite binary64 value");
+                    }
+                    program_.initialArrayNumbers.push_back(initial.value_or(0.0));
+                }
+            }
+            program_.arrays.push_back({
+                elementType,
+                {begin, static_cast<std::uint32_t>(item.arrayLiterals.size())}});
+            symbols_.emplace(
+                item.name,
+                Symbol{std::nullopt, array, elementType, item.span});
+            program_.arrayDebug.push_back({item.name, array, item.span});
+            return;
+        }
+
         ValueRef value{};
         if (item.kind == TopLevelSyntax::Kind::StateDeclaration) {
             value = {
@@ -333,7 +366,7 @@ private:
             program_.userValues.initialDurations.push_back(
                 initial.value_or(DurationValue{}));
         }
-        symbols_.emplace(item.name, Symbol{value, item.span});
+        symbols_.emplace(item.name, Symbol{value, {}, {}, item.span});
         program_.variables.push_back({item.name, value, item.span});
     }
 
@@ -367,7 +400,36 @@ private:
                 "unknown value '" + std::string(name) + "'");
             return std::nullopt;
         }
+        if (!found->second.value.has_value()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::TypeMismatch,
+                span,
+                "array '" + std::string(name) + "' requires an index or .length");
+            return std::nullopt;
+        }
         return found->second.value;
+    }
+
+    [[nodiscard]] const Symbol* ResolveArray(
+        std::string_view name,
+        SourceSpan span)
+    {
+        const auto found = symbols_.find(std::string(name));
+        if (found == symbols_.end()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::UnknownValue,
+                span,
+                "unknown array '" + std::string(name) + "'");
+            return nullptr;
+        }
+        if (found->second.value.has_value()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::TypeMismatch,
+                span,
+                "'" + std::string(name) + "' is not an array");
+            return nullptr;
+        }
+        return &found->second;
     }
 
     [[nodiscard]] std::optional<ControlRef> BindControl(
@@ -490,6 +552,15 @@ private:
             expression->constant = expression->stateValue;
             return expression;
         }
+        case ExpressionSyntax::Kind::ControlStateLiteral: {
+            auto expression = std::make_unique<BoundExpression>();
+            expression->kind = BoundExpression::Kind::ControlStateConstant;
+            expression->type = ExpressionType::ControlState;
+            expression->span = syntax.span;
+            expression->controlStateValue = syntax.controlStateValue;
+            expression->constant = syntax.controlStateValue;
+            return expression;
+        }
         case ExpressionSyntax::Kind::NumberLiteral: {
             const auto value = ParseNumber(syntax.text);
             if (!value.has_value()) {
@@ -524,98 +595,73 @@ private:
             expression->constant = *value;
             return expression;
         }
-        case ExpressionSyntax::Kind::ValueReference: {
-            const auto value = ResolveValue(syntax.text, syntax.span);
-            if (!value.has_value()) {
+        case ExpressionSyntax::Kind::Reference: {
+            const bool unqualified = !syntax.reference.raw
+                && syntax.reference.name.find('.') == std::string::npos;
+            const bool scalarCandidate = unqualified
+                && (syntax.text == "PAUSE"
+                    || syntax.text == "TAP_DURATION"
+                    || syntax.text == "ACTION_GAP"
+                    || symbols_.contains(syntax.text));
+            if (scalarCandidate) {
+                const auto value = ResolveValue(syntax.text, syntax.span);
+                if (!value.has_value()) {
+                    return MakeErrorExpression(syntax.span);
+                }
+                auto expression = std::make_unique<BoundExpression>();
+                expression->kind = BoundExpression::Kind::LoadValue;
+                expression->type = ToExpressionType(value->type);
+                expression->span = syntax.span;
+                expression->value = *value;
+                return expression;
+            }
+            const auto control = BindControl(syntax.reference);
+            if (!control.has_value()) {
                 return MakeErrorExpression(syntax.span);
             }
             auto expression = std::make_unique<BoundExpression>();
-            expression->kind = BoundExpression::Kind::LoadValue;
-            expression->type = ToExpressionType(value->type);
+            expression->kind = BoundExpression::Kind::ReadControlState;
+            expression->type = ExpressionType::ControlState;
             expression->span = syntax.span;
-            expression->value = *value;
+            expression->control = *control;
             return expression;
         }
-        case ExpressionSyntax::Kind::StateQuery:
-            return BindStateQuery(syntax);
+        case ExpressionSyntax::Kind::ArrayElement: {
+            const Symbol* array = ResolveArray(syntax.text, syntax.span);
+            auto index = BindExpression(*syntax.left);
+            RequireType(
+                *index,
+                ExpressionType::Number,
+                syntax.left->span,
+                "array index must have type Number");
+            if (array == nullptr) {
+                return MakeErrorExpression(syntax.span);
+            }
+            auto expression = std::make_unique<BoundExpression>();
+            expression->kind = BoundExpression::Kind::LoadArrayElement;
+            expression->type = ToExpressionType(array->arrayType);
+            expression->span = syntax.span;
+            expression->array = array->array;
+            expression->left = std::move(index);
+            return expression;
+        }
+        case ExpressionSyntax::Kind::ArrayLength: {
+            const Symbol* array = ResolveArray(syntax.text, syntax.span);
+            if (array == nullptr) {
+                return MakeErrorExpression(syntax.span);
+            }
+            auto expression = std::make_unique<BoundExpression>();
+            expression->kind = BoundExpression::Kind::LoadArrayLength;
+            expression->type = ExpressionType::Number;
+            expression->span = syntax.span;
+            expression->array = array->array;
+            return expression;
+        }
         case ExpressionSyntax::Kind::Unary:
             return BindUnary(syntax);
         case ExpressionSyntax::Kind::Binary:
             return BindBinary(syntax);
         }
-        return MakeErrorExpression(syntax.span);
-    }
-
-    [[nodiscard]] std::unique_ptr<BoundExpression> BindStateQuery(
-        const ExpressionSyntax& syntax)
-    {
-        if (syntax.text == "held" || syntax.text == "idle") {
-            const auto control = BindControl(syntax.querySubject);
-            if (!control.has_value()) {
-                return MakeErrorExpression(syntax.span);
-            }
-            auto held = std::make_unique<BoundExpression>();
-            held->kind = BoundExpression::Kind::ReadControlHeld;
-            held->type = ExpressionType::Boolean;
-            held->span = syntax.span;
-            held->control = *control;
-            if (syntax.text == "held") {
-                return held;
-            }
-            auto idle = std::make_unique<BoundExpression>();
-            idle->kind = BoundExpression::Kind::Unary;
-            idle->type = ExpressionType::Boolean;
-            idle->span = syntax.span;
-            idle->unary = UnaryOperator::BooleanNot;
-            idle->left = std::move(held);
-            return idle;
-        }
-        if (syntax.text == "on" || syntax.text == "off") {
-            if (syntax.querySubject.raw
-                || syntax.querySubject.name.find('.') != std::string::npos) {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::TypeMismatch,
-                    syntax.span,
-                    "on/off queries require a state value");
-                return MakeErrorExpression(syntax.span);
-            }
-            const auto value = ResolveValue(
-                syntax.querySubject.name,
-                syntax.querySubject.span);
-            if (!value.has_value()) {
-                return MakeErrorExpression(syntax.span);
-            }
-            if (value->type != ValueType::State) {
-                diagnostics_.Add(
-                    CompileDiagnosticCode::TypeMismatch,
-                    syntax.span,
-                    "on/off queries require a state value");
-                return MakeErrorExpression(syntax.span);
-            }
-            auto load = std::make_unique<BoundExpression>();
-            load->kind = BoundExpression::Kind::LoadValue;
-            load->type = ExpressionType::State;
-            load->span = syntax.querySubject.span;
-            load->value = *value;
-            auto expected = std::make_unique<BoundExpression>();
-            expected->kind = BoundExpression::Kind::StateConstant;
-            expected->type = ExpressionType::State;
-            expected->span = syntax.span;
-            expected->stateValue = syntax.text == "on" ? 1U : 0U;
-            expected->constant = expected->stateValue;
-            auto equality = std::make_unique<BoundExpression>();
-            equality->kind = BoundExpression::Kind::Binary;
-            equality->type = ExpressionType::Boolean;
-            equality->span = syntax.span;
-            equality->binary = BinaryOperator::Equal;
-            equality->left = std::move(load);
-            equality->right = std::move(expected);
-            return equality;
-        }
-        diagnostics_.Add(
-            CompileDiagnosticCode::TypeMismatch,
-            syntax.span,
-            "state predicate must be held, idle, on, or off");
         return MakeErrorExpression(syntax.span);
     }
 
@@ -742,7 +788,8 @@ private:
             if (left != right
                 || (left != ExpressionType::State
                     && left != ExpressionType::Number
-                    && left != ExpressionType::Duration)) {
+                    && left != ExpressionType::Duration
+                    && left != ExpressionType::ControlState)) {
                 return false;
             }
             result = operation == "=="
@@ -833,6 +880,10 @@ private:
             &expression.left->constant);
         const std::uint8_t* rightState = std::get_if<std::uint8_t>(
             &expression.right->constant);
+        const ControlState* leftControlState = std::get_if<ControlState>(
+            &expression.left->constant);
+        const ControlState* rightControlState = std::get_if<ControlState>(
+            &expression.right->constant);
 
         switch (expression.binary) {
         case BinaryOperator::NumberAdd:
@@ -913,6 +964,9 @@ private:
                 equal = *leftDuration == *rightDuration;
             } else if (leftState != nullptr && rightState != nullptr) {
                 equal = *leftState == *rightState;
+            } else if (leftControlState != nullptr
+                       && rightControlState != nullptr) {
+                equal = *leftControlState == *rightControlState;
             }
             if (equal.has_value()) {
                 expression.constant = expression.binary == BinaryOperator::Equal
@@ -990,12 +1044,12 @@ private:
         SourceSpan span)
     {
         if (transition == "down") return EventTransition::Down;
-        if (transition == "repeat") return EventTransition::Repeat;
+        if (transition == "again") return EventTransition::Again;
         if (transition == "up") return EventTransition::Up;
         diagnostics_.Add(
             CompileDiagnosticCode::TypeMismatch,
             span,
-            "event transition must be down, repeat, or up");
+            "event transition must be down, again, or up");
         return std::nullopt;
     }
 
@@ -1028,40 +1082,134 @@ private:
                 action.kind = BoundAction::Kind::Gap;
                 break;
             case ActionSyntax::Kind::Set: {
-                action.kind = BoundAction::Kind::Set;
-                const auto value = ResolveValue(item.name, item.span);
-                if (value.has_value()) {
-                    action.value = *value;
-                    if (!IsWritable(*value)) {
-                        diagnostics_.Add(
-                            CompileDiagnosticCode::ReadOnlyValue,
-                            item.span,
-                            "set target must be a user variable");
-                    }
-                }
                 action.expression = BindExpression(*item.expression);
-                if (value.has_value()) {
+                if (item.target.index == nullptr) {
+                    action.kind = BoundAction::Kind::Set;
+                    const auto value = ResolveValue(
+                        item.target.name,
+                        item.target.span);
+                    if (value.has_value()) {
+                        action.value = *value;
+                        if (!IsWritable(*value)) {
+                            diagnostics_.Add(
+                                CompileDiagnosticCode::ReadOnlyValue,
+                                item.target.span,
+                                "set target must be a user variable");
+                        }
+                    }
+                    if (value.has_value()) {
+                        RequireType(
+                            *action.expression,
+                            ToExpressionType(value->type),
+                            item.span,
+                            "set expression type must match its target");
+                    }
+                    break;
+                }
+                action.kind = BoundAction::Kind::SetArrayElement;
+                const Symbol* array = ResolveArray(
+                    item.target.name,
+                    item.target.span);
+                action.index = BindExpression(*item.target.index);
+                RequireType(
+                    *action.index,
+                    ExpressionType::Number,
+                    item.target.index->span,
+                    "array index must have type Number");
+                if (array != nullptr) {
+                    action.array = array->array;
                     RequireType(
                         *action.expression,
-                        ToExpressionType(value->type),
+                        ToExpressionType(array->arrayType),
                         item.span,
                         "set expression type must match its target");
                 }
                 break;
             }
             case ActionSyntax::Kind::Toggle: {
-                action.kind = BoundAction::Kind::Toggle;
-                const auto value = ResolveValue(item.name, item.span);
-                if (value.has_value()) {
-                    action.value = *value;
-                    if (!IsWritable(*value)) {
+                if (item.target.index == nullptr) {
+                    action.kind = BoundAction::Kind::Toggle;
+                    const auto value = ResolveValue(
+                        item.target.name,
+                        item.target.span);
+                    if (value.has_value()) {
+                        action.value = *value;
+                        if (!IsWritable(*value)) {
+                            diagnostics_.Add(
+                                CompileDiagnosticCode::ReadOnlyValue,
+                                item.target.span,
+                                "toggle target must be a user state variable");
+                        } else if (value->type != ValueType::State) {
+                            ReportType(
+                                item.target.span,
+                                "toggle target must have type State");
+                        }
+                    }
+                    break;
+                }
+                action.kind = BoundAction::Kind::ToggleArrayElement;
+                const Symbol* array = ResolveArray(
+                    item.target.name,
+                    item.target.span);
+                action.index = BindExpression(*item.target.index);
+                RequireType(
+                    *action.index,
+                    ExpressionType::Number,
+                    item.target.index->span,
+                    "array index must have type Number");
+                if (array != nullptr) {
+                    action.array = array->array;
+                    if (array->arrayType != ArrayElementType::State) {
+                        ReportType(
+                            item.target.span,
+                            "toggle target must be a State array element");
+                    }
+                }
+                break;
+            }
+            case ActionSyntax::Kind::Append: {
+                action.kind = BoundAction::Kind::AppendArrayElement;
+                const Symbol* array = ResolveArray(item.name, item.span);
+                action.expression = BindExpression(*item.expression);
+                if (array != nullptr) {
+                    action.array = array->array;
+                    RequireType(
+                        *action.expression,
+                        ToExpressionType(array->arrayType),
+                        item.span,
+                        "append expression type must match the array element type");
+                }
+                break;
+            }
+            case ActionSyntax::Kind::Pop: {
+                action.kind = BoundAction::Kind::PopArrayElement;
+                const Symbol* array = ResolveArray(item.name, item.span);
+                const auto target = ResolveValue(item.secondaryName, item.span);
+                if (array != nullptr) {
+                    action.array = array->array;
+                }
+                if (target.has_value()) {
+                    action.value = *target;
+                    if (!IsWritable(*target)) {
                         diagnostics_.Add(
                             CompileDiagnosticCode::ReadOnlyValue,
                             item.span,
-                            "toggle target must be a user state variable");
-                    } else if (value->type != ValueType::State) {
-                        ReportType(item.span, "toggle target must have type State");
+                            "pop target must be a user variable");
+                    } else if (array != nullptr
+                        && ToExpressionType(target->type)
+                            != ToExpressionType(array->arrayType)) {
+                        ReportType(
+                            item.span,
+                            "pop target type must match the array element type");
                     }
+                }
+                break;
+            }
+            case ActionSyntax::Kind::Clear: {
+                action.kind = BoundAction::Kind::ClearArray;
+                const Symbol* array = ResolveArray(item.name, item.span);
+                if (array != nullptr) {
+                    action.array = array->array;
                 }
                 break;
             }
@@ -1152,12 +1300,12 @@ private:
                 RequireType(*rule.condition, ExpressionType::Boolean, item.condition->span,
                     message);
             }
-            rule.delivery = item.arrow == TokenKind::ConsumeStop
-                    || item.arrow == TokenKind::ConsumeContinue
-                ? Delivery::Consume
-                : Delivery::Observe;
-            rule.flow = item.arrow == TokenKind::ConsumeContinue
-                    || item.arrow == TokenKind::ObserveContinue
+        rule.delivery = item.arrow == RuleArrowSyntax::ConsumeStop
+                || item.arrow == RuleArrowSyntax::ConsumeContinue
+            ? Delivery::Consume
+            : Delivery::Observe;
+        rule.flow = item.arrow == RuleArrowSyntax::ConsumeContinue
+                || item.arrow == RuleArrowSyntax::ObserveContinue
                 ? MatchFlow::Continue
                 : MatchFlow::Stop;
             if (item.kind == TopLevelSyntax::Kind::ExitRule) {
@@ -1175,14 +1323,26 @@ private:
         program_.rules.push_back(std::move(rule));
     }
 
-    [[nodiscard]] static std::unique_ptr<BoundExpression> MakeHeldExpression(
-        ControlRef control)
+    [[nodiscard]] static std::unique_ptr<BoundExpression> MakeControlComparison(
+        ControlRef control,
+        ControlState expected)
     {
-        auto expression = std::make_unique<BoundExpression>();
-        expression->kind = BoundExpression::Kind::ReadControlHeld;
-        expression->type = ExpressionType::Boolean;
-        expression->control = control;
-        return expression;
+        auto read = std::make_unique<BoundExpression>();
+        read->kind = BoundExpression::Kind::ReadControlState;
+        read->type = ExpressionType::ControlState;
+        read->control = control;
+        auto constant = std::make_unique<BoundExpression>();
+        constant->kind = BoundExpression::Kind::ControlStateConstant;
+        constant->type = ExpressionType::ControlState;
+        constant->controlStateValue = expected;
+        constant->constant = expected;
+        auto comparison = std::make_unique<BoundExpression>();
+        comparison->kind = BoundExpression::Kind::Binary;
+        comparison->type = ExpressionType::Boolean;
+        comparison->binary = BinaryOperator::Equal;
+        comparison->left = std::move(read);
+        comparison->right = std::move(constant);
+        return comparison;
     }
 
     [[nodiscard]] static std::unique_ptr<BoundExpression> MakeLogicalExpression(
@@ -1225,12 +1385,12 @@ private:
             BoundExpression::Kind::LogicalAnd,
             MakeLogicalExpression(
                 BoundExpression::Kind::LogicalOr,
-                MakeHeldExpression(*leftControl),
-                MakeHeldExpression(*rightControl)),
+                MakeControlComparison(*leftControl, ControlState::Held),
+                MakeControlComparison(*rightControl, ControlState::Held)),
             MakeLogicalExpression(
                 BoundExpression::Kind::LogicalOr,
-                MakeHeldExpression(*leftShift),
-                MakeHeldExpression(*rightShift)));
+                MakeControlComparison(*leftShift, ControlState::Held),
+                MakeControlComparison(*rightShift, ControlState::Held)));
         rule.sourceOrdinal = kInvalidProgramIndex;
         program_.rules.push_back(std::move(rule));
     }

@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <limits>
 #include <map>
-#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -23,7 +22,7 @@ constexpr std::uint8_t kAllControlUseBits =
     ToControlUseBits(ControlUse::EventSource)
     | ToControlUseBits(ControlUse::PhysicalState)
     | ToControlUseBits(ControlUse::OutputDownUp)
-    | ToControlUseBits(ControlUse::OutputRepeat);
+    | ToControlUseBits(ControlUse::OutputAgain);
 
 class ValidationContext final {
 public:
@@ -136,7 +135,7 @@ template <typename Id>
 [[nodiscard]] bool ValidEventTransition(EventTransition transition) noexcept
 {
     return transition == EventTransition::Down
-        || transition == EventTransition::Repeat
+        || transition == EventTransition::Again
         || transition == EventTransition::Up;
 }
 
@@ -146,7 +145,8 @@ template <typename Id>
         || type == ExpressionType::Boolean
         || type == ExpressionType::State
         || type == ExpressionType::Number
-        || type == ExpressionType::Duration;
+        || type == ExpressionType::Duration
+        || type == ExpressionType::ControlState;
 }
 
 [[nodiscard]] bool IsWritableValue(const ValueRef& value) noexcept
@@ -180,20 +180,69 @@ template <typename Id>
     return false;
 }
 
-[[nodiscard]] bool PopType(
-    std::vector<ExpressionType>& stack,
-    ExpressionType expected) noexcept
-{
-    if (stack.empty() || stack.back() != expected) {
-        return false;
+class ExpressionStacks final {
+public:
+    using State = std::uint32_t;
+    static constexpr State Empty = 0U;
+    static constexpr State Unreachable = (std::numeric_limits<State>::max)();
+
+    explicit ExpressionStacks(std::size_t maximumSize)
+        : nodes_(1U)
+    {
+        nodes_.reserve(maximumSize);
     }
-    stack.pop_back();
-    return true;
-}
+
+    [[nodiscard]] State Push(State stack, ExpressionType type)
+    {
+        for (State child = nodes_[stack].firstChild; child != Empty;
+             child = nodes_[child].nextSibling) {
+            if (nodes_[child].type == type) {
+                return child;
+            }
+        }
+        const State child = static_cast<State>(nodes_.size());
+        nodes_.push_back({stack, Empty, nodes_[stack].firstChild,
+            nodes_[stack].depth + 1U, type});
+        nodes_[stack].firstChild = child;
+        return child;
+    }
+
+    [[nodiscard]] bool Pop(State& stack, ExpressionType expected) const noexcept
+    {
+        if (stack == Empty || nodes_[stack].type != expected) {
+            return false;
+        }
+        stack = nodes_[stack].parent;
+        return true;
+    }
+
+    [[nodiscard]] ExpressionType Pop(State& stack) const noexcept
+    {
+        const Node& node = nodes_[stack];
+        stack = node.parent;
+        return node.type;
+    }
+
+    [[nodiscard]] std::uint32_t Depth(State stack) const noexcept
+    {
+        return nodes_[stack].depth;
+    }
+
+private:
+    struct Node final {
+        State parent{};
+        State firstChild{};
+        State nextSibling{};
+        std::uint32_t depth{};
+        ExpressionType type{ExpressionType::None};
+    };
+    std::vector<Node> nodes_;
+};
 
 void ValidateExpressionOperator(
     const ExpressionInstruction& instruction,
-    std::vector<ExpressionType>& stack,
+    ExpressionStacks& stacks,
+    ExpressionStacks::State& stack,
     ValidationContext& context,
     const std::string& location)
 {
@@ -218,14 +267,14 @@ void ValidateExpressionOperator(
                 "unknown unary operator");
             return;
         }
-        if (!PopType(stack, input) || instruction.type != output) {
+        if (!stacks.Pop(stack, input) || instruction.type != output) {
             context.Add(
                 ProgramValidationErrorCode::Expression,
                 location,
                 "unary operator stack or result type mismatch");
             return;
         }
-        stack.push_back(output);
+        stack = stacks.Push(stack, output);
         return;
     }
 
@@ -283,28 +332,27 @@ void ValidateExpressionOperator(
     }
 
     if (equality) {
-        if (stack.size() < 2U) {
+        if (stacks.Depth(stack) < 2U) {
             context.Add(
                 ProgramValidationErrorCode::Expression,
                 location,
                 "equality operator stack underflow");
             return;
         }
-        right = stack.back();
-        stack.pop_back();
-        left = stack.back();
-        stack.pop_back();
+        right = stacks.Pop(stack);
+        left = stacks.Pop(stack);
         if (left != right
             || (left != ExpressionType::State
                 && left != ExpressionType::Number
-                && left != ExpressionType::Duration)) {
+                && left != ExpressionType::Duration
+                && left != ExpressionType::ControlState)) {
             context.Add(
                 ProgramValidationErrorCode::Expression,
                 location,
                 "equality operands must have the same comparable type");
             return;
         }
-    } else if (!PopType(stack, right) || !PopType(stack, left)) {
+    } else if (!stacks.Pop(stack, right) || !stacks.Pop(stack, left)) {
         context.Add(
             ProgramValidationErrorCode::Expression,
             location,
@@ -319,13 +367,13 @@ void ValidateExpressionOperator(
             "binary operator result type mismatch");
         return;
     }
-    stack.push_back(output);
+    stack = stacks.Push(stack, output);
 }
 
 void MergeExpressionStack(
-    std::vector<std::optional<std::vector<ExpressionType>>>& states,
+    std::vector<ExpressionStacks::State>& states,
     std::uint32_t target,
-    const std::vector<ExpressionType>& stack,
+    ExpressionStacks::State stack,
     ValidationContext& context,
     const std::string& location)
 {
@@ -337,9 +385,9 @@ void MergeExpressionStack(
         return;
     }
     auto& state = states[target];
-    if (!state.has_value()) {
+    if (state == ExpressionStacks::Unreachable) {
         state = stack;
-    } else if (*state != stack) {
+    } else if (state != stack) {
         context.Add(
             ProgramValidationErrorCode::Expression,
             location,
@@ -377,15 +425,17 @@ void ValidateExpressionDescriptor(
     }
 
     const std::size_t count = descriptor.code.count;
-    std::vector<std::optional<std::vector<ExpressionType>>> states(count);
-    states[0] = std::vector<ExpressionType>{};
+    ExpressionStacks stacks(count);
+    std::vector<ExpressionStacks::State> states(
+        count, ExpressionStacks::Unreachable);
+    states[0] = ExpressionStacks::Empty;
     std::size_t maximumDepth = 0;
     bool sawReturn = false;
     for (std::size_t local = 0; local < count; ++local) {
-        if (!states[local].has_value()) {
+        if (states[local] == ExpressionStacks::Unreachable) {
             continue;
         }
-        std::vector<ExpressionType> stack = *states[local];
+        ExpressionStacks::State stack = states[local];
         const std::size_t absolute = static_cast<std::size_t>(descriptor.code.begin) + local;
         const ExpressionInstruction& instruction = storage.expressionCode[absolute];
         const std::string location = At("expressionCode", absolute);
@@ -402,7 +452,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "PushBoolean operands or type are invalid");
             }
-            stack.push_back(ExpressionType::Boolean);
+            stack = stacks.Push(stack, ExpressionType::Boolean);
             break;
         case ExpressionOpcode::PushState:
             if (instruction.type != ExpressionType::State
@@ -413,7 +463,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "PushState operands or type are invalid");
             }
-            stack.push_back(ExpressionType::State);
+            stack = stacks.Push(stack, ExpressionType::State);
             break;
         case ExpressionOpcode::PushNumber:
             if (instruction.type != ExpressionType::Number
@@ -424,7 +474,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "PushNumber operands or type are invalid");
             }
-            stack.push_back(ExpressionType::Number);
+            stack = stacks.Push(stack, ExpressionType::Number);
             break;
         case ExpressionOpcode::PushDuration:
             if (instruction.type != ExpressionType::Duration
@@ -435,7 +485,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "PushDuration operands or type are invalid");
             }
-            stack.push_back(ExpressionType::Duration);
+            stack = stacks.Push(stack, ExpressionType::Duration);
             break;
         case ExpressionOpcode::LoadValue:
             if (instruction.operand0 >= storage.valueRefs.size()
@@ -453,19 +503,66 @@ void ValidateExpressionDescriptor(
                         location,
                         "LoadValue result type does not match its value reference");
                 }
-                stack.push_back(expected);
+                stack = stacks.Push(stack, expected);
             }
             break;
-        case ExpressionOpcode::ReadControlHeld:
-            if (instruction.type != ExpressionType::Boolean
+        case ExpressionOpcode::ReadControlState:
+            if ((instruction.type != ExpressionType::Boolean
+                 && instruction.type != ExpressionType::ControlState)
                 || instruction.operand0 >= storage.controls.size()
                 || instruction.operand1 != 0U) {
                 context.Add(
                     ProgramValidationErrorCode::Expression,
                     location,
-                    "ReadControlHeld operands or type are invalid");
+                    "ReadControlState operands or type are invalid");
             }
-            stack.push_back(ExpressionType::Boolean);
+            stack = stacks.Push(
+                stack,
+                instruction.type == ExpressionType::Boolean
+                    ? ExpressionType::Boolean
+                    : ExpressionType::ControlState);
+            break;
+        case ExpressionOpcode::PushControlState:
+            if (instruction.type != ExpressionType::ControlState
+                || instruction.operand0 > static_cast<std::uint32_t>(ControlState::Held)
+                || instruction.operand1 != 0U) {
+                context.Add(
+                    ProgramValidationErrorCode::Expression,
+                    location,
+                    "PushControlState operands or type are invalid");
+            }
+            stack = stacks.Push(stack, ExpressionType::ControlState);
+            break;
+        case ExpressionOpcode::LoadArrayLength:
+            if (instruction.type != ExpressionType::Number
+                || instruction.operand0 >= storage.arrays.size()
+                || instruction.operand1 != 0U) {
+                context.Add(
+                    ProgramValidationErrorCode::Expression,
+                    location,
+                    "LoadArrayLength operands or type are invalid");
+            }
+            stack = stacks.Push(stack, ExpressionType::Number);
+            break;
+        case ExpressionOpcode::LoadArrayElement:
+            if (instruction.operand0 >= storage.arrays.size()
+                || instruction.operand1 != 0U
+                || !stacks.Pop(stack, ExpressionType::Number)) {
+                context.Add(
+                    ProgramValidationErrorCode::Expression,
+                    location,
+                    "LoadArrayElement array, index, or unused operand is invalid");
+            } else {
+                const ExpressionType expected = ToExpressionType(
+                    storage.arrays[instruction.operand0].elementType);
+                if (instruction.type != expected) {
+                    context.Add(
+                        ProgramValidationErrorCode::Expression,
+                        location,
+                        "LoadArrayElement result type differs from the array element type");
+                }
+                stack = stacks.Push(stack, expected);
+            }
             break;
         case ExpressionOpcode::Unary:
         case ExpressionOpcode::Binary:
@@ -475,7 +572,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "operator instruction has a nonzero unused operand");
             }
-            ValidateExpressionOperator(instruction, stack, context, location);
+            ValidateExpressionOperator(instruction, stacks, stack, context, location);
             break;
         case ExpressionOpcode::Jump:
             fallthrough = false;
@@ -502,7 +599,7 @@ void ValidateExpressionDescriptor(
                 || instruction.operand1 != 0U
                 || instruction.operand0 <= local
                 || instruction.operand0 >= count
-                || !PopType(stack, ExpressionType::Boolean)) {
+                || !stacks.Pop(stack, ExpressionType::Boolean)) {
                 context.Add(
                     ProgramValidationErrorCode::Expression,
                     location,
@@ -522,8 +619,8 @@ void ValidateExpressionDescriptor(
             if (instruction.type != descriptor.resultType
                 || instruction.operand0 != 0U
                 || instruction.operand1 != 0U
-                || stack.size() != 1U
-                || !PopType(stack, descriptor.resultType)) {
+                || stacks.Depth(stack) != 1U
+                || !stacks.Pop(stack, descriptor.resultType)) {
                 context.Add(
                     ProgramValidationErrorCode::Expression,
                     location,
@@ -538,7 +635,8 @@ void ValidateExpressionDescriptor(
             break;
         }
 
-        maximumDepth = (std::max)(maximumDepth, stack.size());
+        maximumDepth = (std::max)(maximumDepth,
+            static_cast<std::size_t>(stacks.Depth(stack)));
         if (fallthrough) {
             MergeExpressionStack(states, next, stack, context, location);
         }
@@ -550,8 +648,8 @@ void ValidateExpressionDescriptor(
             descriptorLocation,
             "expression has no reachable Return");
     }
-    if (std::any_of(states.begin(), states.end(), [](const auto& state) {
-            return !state.has_value();
+    if (std::any_of(states.begin(), states.end(), [](const auto state) {
+            return state == ExpressionStacks::Unreachable;
         })) {
         context.Add(
             ProgramValidationErrorCode::Expression,
@@ -660,6 +758,14 @@ void ValidateActionDescriptor(
         const std::string location = At("actionCode", absolute);
         const std::uint32_t next = local + 1U;
         bool fallthrough = true;
+
+        if (instruction.opcode != ActionOpcode::SetArrayElement
+            && instruction.operand2 != 0U) {
+            context.Add(
+                ProgramValidationErrorCode::Action,
+                location,
+                "action has a nonzero unused third operand");
+        }
 
         switch (instruction.opcode) {
         case ActionOpcode::Press:
@@ -841,6 +947,86 @@ void ValidateActionDescriptor(
                     ProgramValidationErrorCode::Action,
                     location,
                     "End has nonzero unused operands");
+            }
+            break;
+        case ActionOpcode::SetArrayElement:
+            if (instruction.operand0 >= storage.arrays.size()
+                || ExpressionResultType(storage, instruction.operand1)
+                    != ExpressionType::Number) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array element set requires an array and a Number index expression");
+            } else if (ExpressionResultType(storage, instruction.operand2)
+                       != ToExpressionType(
+                           storage.arrays[instruction.operand0].elementType)) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array element set value type differs from the array element type");
+            }
+            break;
+        case ActionOpcode::ToggleArrayElement:
+            if (instruction.operand0 >= storage.arrays.size()
+                || ExpressionResultType(storage, instruction.operand1)
+                    != ExpressionType::Number) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array element toggle requires an array and a Number index expression");
+            } else if (storage.arrays[instruction.operand0].elementType
+                       != ArrayElementType::State) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array element toggle requires a State array");
+            }
+            break;
+        case ActionOpcode::AppendArrayElement:
+            if (instruction.operand0 >= storage.arrays.size()) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array append references an unknown array");
+            } else if (ExpressionResultType(storage, instruction.operand1)
+                       != ToExpressionType(
+                           storage.arrays[instruction.operand0].elementType)) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array append value type differs from the array element type");
+            }
+            break;
+        case ActionOpcode::PopArrayElement:
+            if (instruction.operand0 >= storage.arrays.size()
+                || instruction.operand1 >= storage.valueRefs.size()) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array pop references an unknown array or scalar target");
+            } else {
+                const ValueRef& target = storage.valueRefs[instruction.operand1];
+                const ArrayElementType elementType =
+                    storage.arrays[instruction.operand0].elementType;
+                const bool matchingType = (elementType == ArrayElementType::State
+                        && target.type == ValueType::State)
+                    || (elementType == ArrayElementType::Number
+                        && target.type == ValueType::Number);
+                if (!IsWritableValue(target) || !matchingType) {
+                    context.Add(
+                        ProgramValidationErrorCode::Action,
+                        location,
+                        "array pop requires a writable scalar target of the element type");
+                }
+            }
+            break;
+        case ActionOpcode::ClearArray:
+            if (instruction.operand0 >= storage.arrays.size()
+                || instruction.operand1 != 0U) {
+                context.Add(
+                    ProgramValidationErrorCode::Action,
+                    location,
+                    "array clear reference or unused operand is invalid");
             }
             break;
         default:
@@ -1208,6 +1394,128 @@ void ValidateUserValuesAndDebug(
     }
 }
 
+void ValidateArraysAndDebug(
+    const CompiledProgramStorage& storage,
+    ValidationContext& context)
+{
+    std::vector<bool> coveredStates(storage.initialArrayStates.size(), false);
+    std::vector<bool> coveredNumbers(storage.initialArrayNumbers.size(), false);
+    for (std::size_t index = 0; index < storage.arrays.size(); ++index) {
+        const ArrayDescriptor& array = storage.arrays[index];
+        const std::string location = At("arrays", index);
+        std::vector<bool>* covered = nullptr;
+        switch (array.elementType) {
+        case ArrayElementType::State:
+            covered = &coveredStates;
+            break;
+        case ArrayElementType::Number:
+            covered = &coveredNumbers;
+            break;
+        default:
+            context.Add(
+                ProgramValidationErrorCode::Value,
+                location + ".elementType",
+                "array element type is unknown");
+            continue;
+        }
+        if (!ValidRange(array.initialValues, covered->size())) {
+            context.Add(
+                ProgramValidationErrorCode::Range,
+                location + ".initialValues",
+                "array initial-value range is outside its typed pool");
+            continue;
+        }
+        const std::uint64_t end = static_cast<std::uint64_t>(
+            array.initialValues.begin) + array.initialValues.count;
+        for (std::uint64_t raw = array.initialValues.begin; raw < end; ++raw) {
+            const std::size_t position = static_cast<std::size_t>(raw);
+            if ((*covered)[position]) {
+                context.Add(
+                    ProgramValidationErrorCode::Range,
+                    location + ".initialValues",
+                    "array initial-value ranges overlap");
+                break;
+            }
+            (*covered)[position] = true;
+        }
+    }
+    if (std::any_of(coveredStates.begin(), coveredStates.end(), [](bool value) {
+            return !value;
+        })) {
+        context.Add(
+            ProgramValidationErrorCode::Range,
+            "initialArrayStates",
+            "array descriptors do not cover the complete State initial-value pool");
+    }
+    if (std::any_of(coveredNumbers.begin(), coveredNumbers.end(), [](bool value) {
+            return !value;
+        })) {
+        context.Add(
+            ProgramValidationErrorCode::Range,
+            "initialArrayNumbers",
+            "array descriptors do not cover the complete Number initial-value pool");
+    }
+
+    for (std::size_t index = 0; index < storage.initialArrayStates.size(); ++index) {
+        if (storage.initialArrayStates[index] > 1U) {
+            context.Add(
+                ProgramValidationErrorCode::Value,
+                At("initialArrayStates", index),
+                "array State initial value must be zero or one");
+        }
+    }
+    for (std::size_t index = 0; index < storage.initialArrayNumbers.size(); ++index) {
+        const double value = storage.initialArrayNumbers[index];
+        if (!std::isfinite(value) || (value == 0.0 && std::signbit(value))) {
+            context.Add(
+                ProgramValidationErrorCode::Value,
+                At("initialArrayNumbers", index),
+                "array Number initial value is non-finite or negative zero");
+        }
+    }
+
+    if (storage.debugInfo.arrays.size() != storage.arrays.size()) {
+        context.Add(
+            ProgramValidationErrorCode::DebugInfo,
+            "debugInfo.arrays",
+            "array debug records must cover every array exactly once");
+    }
+    std::set<std::uint32_t> coveredArrays;
+    std::uint32_t previousDeclaration = 0U;
+    bool havePreviousDeclaration = false;
+    for (std::size_t index = 0; index < storage.debugInfo.arrays.size(); ++index) {
+        const ArrayDebugRecord& array = storage.debugInfo.arrays[index];
+        const std::string location = At("debugInfo.arrays", index);
+        if (!ValidId(array.name, storage.strings.size())
+            || !ValidId(array.array, storage.arrays.size())) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                location,
+                "array name or ArrayId is invalid");
+        } else if (!coveredArrays.insert(array.array.value).second) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                location,
+                "multiple debug records reference the same array");
+        }
+        if (!ValidSpan(array.declaration, storage.source.byteLength)) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                location + ".declaration",
+                "array declaration span is outside the source file");
+        }
+        if (havePreviousDeclaration
+            && previousDeclaration >= array.declaration.beginByte) {
+            context.Add(
+                ProgramValidationErrorCode::DebugInfo,
+                location + ".declaration",
+                "array debug records are not in declaration order");
+        }
+        previousDeclaration = array.declaration.beginByte;
+        havePreviousDeclaration = true;
+    }
+}
+
 struct RuleBucketValidationText final {
     std::string_view buckets;
     std::string_view rules;
@@ -1442,7 +1750,7 @@ void ValidateRulesAndMappings(
             storage,
             expectedControlUses,
             mapping.target,
-            ControlUse::OutputRepeat,
+                    ControlUse::OutputAgain,
             context,
             At("mappings", index));
     }
@@ -1670,6 +1978,67 @@ void ValidateDebugSpans(
 
 } // namespace
 
+std::uint32_t ComputeMaximumExpressionStackDepth(
+    std::span<const ExpressionInstruction> code)
+{
+    if (code.empty()) {
+        return 0U;
+    }
+    std::vector<std::uint32_t> depths(code.size(), kInvalidProgramIndex);
+    depths[0] = 0U;
+    std::uint32_t maximum = 0U;
+    for (std::size_t index = 0U; index < code.size(); ++index) {
+        if (depths[index] == kInvalidProgramIndex) {
+            continue;
+        }
+        std::uint32_t depth = depths[index];
+        const ExpressionInstruction& instruction = code[index];
+        bool fallthrough = true;
+        const auto merge = [&](std::uint32_t target) {
+            if (target < depths.size()
+                && depths[target] == kInvalidProgramIndex) {
+                depths[target] = depth;
+            }
+        };
+        switch (instruction.opcode) {
+        case ExpressionOpcode::PushBoolean:
+        case ExpressionOpcode::PushState:
+        case ExpressionOpcode::PushNumber:
+        case ExpressionOpcode::PushDuration:
+        case ExpressionOpcode::LoadValue:
+        case ExpressionOpcode::ReadControlState:
+        case ExpressionOpcode::PushControlState:
+        case ExpressionOpcode::LoadArrayLength:
+            ++depth;
+            break;
+        case ExpressionOpcode::Binary:
+            --depth;
+            break;
+        case ExpressionOpcode::Jump:
+            fallthrough = false;
+            merge(instruction.operand0);
+            break;
+        case ExpressionOpcode::JumpIfFalse:
+        case ExpressionOpcode::JumpIfTrue:
+            --depth;
+            merge(instruction.operand0);
+            break;
+        case ExpressionOpcode::Return:
+            --depth;
+            fallthrough = false;
+            break;
+        case ExpressionOpcode::Unary:
+        case ExpressionOpcode::LoadArrayElement:
+            break;
+        }
+        maximum = (std::max)(maximum, depth);
+        if (fallthrough && index + 1U < code.size()) {
+            merge(static_cast<std::uint32_t>(index + 1U));
+        }
+    }
+    return maximum;
+}
+
 ProgramRequirements ComputeProgramRequirements(
     const CompiledProgramStorage& storage)
 {
@@ -1677,6 +2046,11 @@ ProgramRequirements ComputeProgramRequirements(
     requirements.stateSlotCount = ToCount(storage.userValues.initialStates.size());
     requirements.numberSlotCount = ToCount(storage.userValues.initialNumbers.size());
     requirements.durationSlotCount = ToCount(storage.userValues.initialDurations.size());
+    requirements.arrayCount = ToCount(storage.arrays.size());
+    requirements.initialArrayElementBytes = static_cast<std::uint64_t>(
+        storage.initialArrayStates.size())
+        + static_cast<std::uint64_t>(storage.initialArrayNumbers.size())
+            * sizeof(double);
     requirements.mappingSlotCount = ToCount(storage.mappingSlots.size());
 
     for (const ExpressionDescriptor& expression : storage.expressions) {
@@ -1815,6 +2189,9 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"userValues.initialStates", storage.userValues.initialStates.size()},
         {"userValues.initialNumbers", storage.userValues.initialNumbers.size()},
         {"userValues.initialDurations", storage.userValues.initialDurations.size()},
+        {"arrays", storage.arrays.size()},
+        {"initialArrayStates", storage.initialArrayStates.size()},
+        {"initialArrayNumbers", storage.initialArrayNumbers.size()},
         {"numberConstants", storage.numberConstants.size()},
         {"durationConstants", storage.durationConstants.size()},
         {"expressions", storage.expressions.size()},
@@ -1830,6 +2207,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"eventBuckets", storage.eventBuckets.size()},
         {"rules", storage.rules.size()},
         {"debugInfo.variables", storage.debugInfo.variables.size()},
+        {"debugInfo.arrays", storage.debugInfo.arrays.size()},
         {"debugInfo.rules", storage.debugInfo.rules.size()},
         {"debugInfo.expressionInstructionSpans",
             storage.debugInfo.expressionInstructionSpans.size()},
@@ -1848,6 +2226,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
     ValidateCanonicalPools(storage, context);
     ValidateSourceAndSettings(storage, context);
     ValidateUserValuesAndDebug(storage, context);
+    ValidateArraysAndDebug(storage, context);
 
     ValidateRangeCoverage(
         storage.expressions,
@@ -1878,7 +2257,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
          index < storage.expressionCode.size();
          ++index) {
         const ExpressionInstruction& instruction = storage.expressionCode[index];
-        if (instruction.opcode == ExpressionOpcode::ReadControlHeld
+        if (instruction.opcode == ExpressionOpcode::ReadControlState
             && instruction.operand0 < storage.controls.size()) {
             expectedControlUses[instruction.operand0] = static_cast<std::uint8_t>(
                 expectedControlUses[instruction.operand0]

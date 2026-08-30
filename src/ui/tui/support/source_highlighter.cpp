@@ -1,92 +1,103 @@
 #include "source_highlighter.hpp"
 
-#include <algorithm>
-#include <array>
+#include "language/word_catalog.hpp"
+
+#include <cstddef>
+#include <string_view>
 
 namespace inputweaver::ui::tui {
 namespace {
 
-inline constexpr std::array kKeywords{
-    std::string_view{"exit"}, std::string_view{"pause"},
-    std::string_view{"when"}, std::string_view{"repeat"},
-    std::string_view{"and"}, std::string_view{"or"},
-    std::string_view{"not"}, std::string_view{"if"},
-    std::string_view{"then"}, std::string_view{"else"},
-    std::string_view{"while"}, std::string_view{"do"},
-    std::string_view{"end"}};
-inline constexpr std::array kTypes{
-    std::string_view{"state"}, std::string_view{"number"},
-    std::string_view{"duration"}};
-inline constexpr std::array kBuiltinVariables{
-    std::string_view{"TARGET"}, std::string_view{"TAP_DURATION"},
-    std::string_view{"ACTION_GAP"}, std::string_view{"PAUSE"}};
-inline constexpr std::array kConstants{
-    std::string_view{"GLOBAL"}, std::string_view{"on"},
-    std::string_view{"off"}, std::string_view{"held"},
-    std::string_view{"idle"}, std::string_view{"down"},
-    std::string_view{"up"}, std::string_view{"E0"},
-    std::string_view{"E1"}};
-inline constexpr std::array kArrows{
-    std::string_view{"=>>"}, std::string_view{"~>>"},
-    std::string_view{"->"}, std::string_view{"=>"},
-    std::string_view{"~>"}};
-
-[[nodiscard]] bool IsWordStart(char character) noexcept
+[[nodiscard]] bool IsArrow(language::LexemeKind kind) noexcept
 {
-    return (character >= 'A' && character <= 'Z')
-        || (character >= 'a' && character <= 'z')
-        || character == '_';
-}
-
-[[nodiscard]] bool IsWordCharacter(char character) noexcept
-{
-    return IsWordStart(character)
-        || (character >= '0' && character <= '9');
-}
-
-template <typename Range>
-[[nodiscard]] bool Contains(
-    const Range& values,
-    std::string_view word)
-{
-    return std::find(values.begin(), values.end(), word) != values.end();
-}
-
-[[nodiscard]] std::size_t SkipSpaces(
-    std::string_view line,
-    std::size_t offset) noexcept
-{
-    while (offset < line.size()
-        && (line[offset] == ' ' || line[offset] == '\t')) {
-        ++offset;
+    switch (kind) {
+    case language::LexemeKind::MappingArrow:
+    case language::LexemeKind::ConsumeStop:
+    case language::LexemeKind::ConsumeContinue:
+    case language::LexemeKind::ObserveStop:
+    case language::LexemeKind::ObserveContinue:
+        return true;
+    default:
+        return false;
     }
-    return offset;
 }
 
-[[nodiscard]] std::size_t ArrowLength(
-    std::string_view line,
-    std::size_t offset) noexcept
+[[nodiscard]] std::size_t NextSyntaxLexeme(
+    const std::vector<language::Lexeme>& lexemes,
+    std::size_t index) noexcept
 {
-    for (const std::string_view arrow : kArrows) {
-        if (line.compare(offset, arrow.size(), arrow) == 0) {
-            return arrow.size();
-        }
-    }
-    return 0U;
+    do {
+        ++index;
+    } while (index < lexemes.size()
+        && language::IsTrivia(lexemes[index].kind));
+    return index;
 }
 
-[[nodiscard]] std::size_t DottedNameEnd(
-    std::string_view line,
-    std::size_t offset) noexcept
+[[nodiscard]] std::size_t PreviousSyntaxLexeme(
+    const std::vector<language::Lexeme>& lexemes,
+    std::size_t index) noexcept
 {
-    while (offset + 1U < line.size() && line[offset] == '.'
-        && IsWordStart(line[offset + 1U])) {
-        offset += 2U;
-        while (offset < line.size() && IsWordCharacter(line[offset])) {
-            ++offset;
-        }
+    while (index != 0U) {
+        --index;
+        if (!language::IsTrivia(lexemes[index].kind)) return index;
     }
-    return offset;
+    return lexemes.size();
+}
+
+struct DottedRun final {
+    std::size_t end{};
+    std::size_t wordCount{1U};
+    bool controlSpelling{};
+};
+
+[[nodiscard]] bool IsDottedRunStart(
+    const std::vector<language::Lexeme>& lexemes,
+    std::size_t index) noexcept
+{
+    const std::size_t dot = PreviousSyntaxLexeme(lexemes, index);
+    if (dot >= lexemes.size()
+        || lexemes[dot].kind != language::LexemeKind::Dot) return true;
+    const std::size_t word = PreviousSyntaxLexeme(lexemes, dot);
+    return word >= lexemes.size()
+        || lexemes[word].kind != language::LexemeKind::Word;
+}
+
+[[nodiscard]] DottedRun ScanDottedRun(
+    const std::vector<language::Lexeme>& lexemes,
+    std::size_t begin) noexcept
+{
+    const auto startsUpper = [&lexemes](std::size_t word) {
+        const std::string_view text = lexemes[word].text;
+        return !text.empty() && text.front() >= 'A' && text.front() <= 'Z';
+    };
+    DottedRun run{begin, 1U, startsUpper(begin)};
+    for (;;) {
+        const std::size_t dot = NextSyntaxLexeme(lexemes, run.end);
+        const std::size_t word = dot < lexemes.size()
+            && lexemes[dot].kind == language::LexemeKind::Dot
+            ? NextSyntaxLexeme(lexemes, dot) : lexemes.size();
+        if (word >= lexemes.size()
+            || lexemes[word].kind != language::LexemeKind::Word) break;
+        run.end = word;
+        ++run.wordCount;
+        run.controlSpelling = run.controlSpelling && startsUpper(word);
+    }
+    return run;
+}
+
+[[nodiscard]] bool IsArrayLengthWord(
+    const std::vector<language::Lexeme>& lexemes,
+    std::size_t index,
+    const SourceHighlightState& state)
+{
+    if (lexemes[index].text != "length") return false;
+    const std::size_t dot = PreviousSyntaxLexeme(lexemes, index);
+    const std::size_t array = dot < lexemes.size()
+        ? PreviousSyntaxLexeme(lexemes, dot) : lexemes.size();
+    return array < lexemes.size()
+        && lexemes[dot].kind == language::LexemeKind::Dot
+        && lexemes[array].kind == language::LexemeKind::Word
+        && state.arrayNames.contains(lexemes[array].text);
 }
 
 } // namespace
@@ -95,108 +106,112 @@ std::vector<SourceTokenSpan> HighlightWeaveLine(
     std::string_view line,
     SourceHighlightState& state)
 {
+    language::ScanOptions options{};
+    options.initialState = state.lexer;
+    options.finalInput = false;
+    options.maximumIssues = 0U;
+    language::ScanResult scan = language::ScanWeave(line, options);
+    state.lexer = scan.finalState;
+
     std::vector<SourceTokenSpan> spans;
-    std::size_t offset{};
-    bool declarationName{};
-    while (offset < line.size()) {
-        if (state.blockComment) {
-            const std::size_t end = line.find("*/", offset);
-            if (end == std::string_view::npos) {
-                spans.push_back({offset, line.size(), SourceTokenKind::Comment});
-                break;
+    const auto add = [&spans](const language::Lexeme& lexeme,
+                             SourceTokenKind kind) {
+        spans.push_back({lexeme.span.beginByte, lexeme.span.EndByte(), kind});
+    };
+    for (std::size_t index = 0U; index < scan.lexemes.size(); ++index) {
+        const language::Lexeme& lexeme = scan.lexemes[index];
+        if (lexeme.kind == language::LexemeKind::EndOfInput) break;
+        if (lexeme.kind == language::LexemeKind::LineComment
+            || lexeme.kind == language::LexemeKind::BlockComment) {
+            add(lexeme, SourceTokenKind::Comment);
+            continue;
+        }
+        if (lexeme.kind == language::LexemeKind::Whitespace) continue;
+
+        if (state.expectsDeclarationName
+            && lexeme.kind != language::LexemeKind::Word) {
+            if (lexeme.kind == language::LexemeKind::LeftBracket) {
+                state.declarationIsArray = true;
+            } else if (lexeme.kind != language::LexemeKind::RightBracket
+                || !state.declarationIsArray) {
+                state.expectsDeclarationName = false;
+                state.declarationIsArray = false;
             }
-            spans.push_back({offset, end + 2U, SourceTokenKind::Comment});
-            offset = end + 2U;
-            state.blockComment = false;
+        }
+        if (lexeme.kind == language::LexemeKind::String
+            || lexeme.kind == language::LexemeKind::IncompleteString) {
+            add(lexeme, SourceTokenKind::String);
             continue;
         }
-        if (line.compare(offset, 2U, "//") == 0) {
-            spans.push_back({offset, line.size(), SourceTokenKind::Comment});
-            break;
-        }
-        if (line.compare(offset, 2U, "/*") == 0) {
-            const std::size_t end = line.find("*/", offset + 2U);
-            if (end == std::string_view::npos) {
-                spans.push_back({offset, line.size(), SourceTokenKind::Comment});
-                state.blockComment = true;
-                break;
-            }
-            spans.push_back({offset, end + 2U, SourceTokenKind::Comment});
-            offset = end + 2U;
+        if (lexeme.kind == language::LexemeKind::Number
+            || lexeme.kind == language::LexemeKind::Duration
+            || lexeme.kind == language::LexemeKind::HexInteger) {
+            add(lexeme, SourceTokenKind::Constant);
             continue;
         }
-        if (line[offset] == '"') {
-            const std::size_t begin = offset++;
-            bool escaped = false;
-            while (offset < line.size()) {
-                const char character = line[offset++];
-                if (character == '"' && !escaped) {
-                    break;
-                }
-                escaped = character == '\\' && !escaped;
-                if (character != '\\') {
-                    escaped = false;
-                }
-            }
-            spans.push_back({begin, offset, SourceTokenKind::String});
+        if (lexeme.kind == language::LexemeKind::Pipe) {
+            add(lexeme, SourceTokenKind::Action);
             continue;
         }
-        if (line[offset] >= '0' && line[offset] <= '9') {
-            const std::size_t begin = offset++;
-            while (offset < line.size()
-                && (IsWordCharacter(line[offset]) || line[offset] == '.')) {
-                ++offset;
-            }
-            spans.push_back({begin, offset, SourceTokenKind::Constant});
+        if (IsArrow(lexeme.kind)) {
+            add(lexeme, SourceTokenKind::Operator);
             continue;
         }
-        const std::size_t arrowLength = ArrowLength(line, offset);
-        if (arrowLength != 0U) {
-            spans.push_back({
-                offset,
-                offset + arrowLength,
-                SourceTokenKind::Operator});
-            offset += arrowLength;
+        if (lexeme.kind != language::LexemeKind::Word) continue;
+
+        const language::WordRole role = language::LookupWordRole(lexeme.text);
+        if (role == language::WordRole::Type) {
+            add(lexeme, SourceTokenKind::Type);
+            state.expectsDeclarationName = true;
+            state.declarationIsArray = false;
             continue;
         }
-        if (line[offset] == '|' || line[offset] == '('
-            || line[offset] == ')') {
-            spans.push_back({offset, offset + 1U, SourceTokenKind::Function});
-            ++offset;
-            continue;
-        }
-        if (!IsWordStart(line[offset])) {
-            ++offset;
+        if (state.expectsDeclarationName) {
+            add(lexeme, SourceTokenKind::Variable);
+            auto& names = state.declarationIsArray
+                ? state.arrayNames : state.scalarNames;
+            names.emplace(lexeme.text);
+            state.expectsDeclarationName = false;
+            state.declarationIsArray = false;
             continue;
         }
 
-        const std::size_t begin = offset++;
-        while (offset < line.size() && IsWordCharacter(line[offset])) {
-            ++offset;
-        }
-        const std::string_view word = line.substr(begin, offset - begin);
-        const std::size_t next = SkipSpaces(line, offset);
-        if (Contains(kTypes, word)) {
-            spans.push_back({begin, offset, SourceTokenKind::Type});
-            declarationName = true;
-        } else if (declarationName) {
-            spans.push_back({begin, offset, SourceTokenKind::Variable});
-            state.variables.emplace_back(word);
-            declarationName = false;
-        } else if (Contains(kBuiltinVariables, word)
-            || Contains(state.variables, word)) {
-            spans.push_back({begin, offset, SourceTokenKind::Variable});
-        } else if (Contains(kConstants, word)) {
-            spans.push_back({begin, offset, SourceTokenKind::Constant});
-        } else if (word == "toggle"
-            || (next < line.size() && line[next] == '('
-                && (begin == 0U || line[begin - 1U] != '.'))) {
-            spans.push_back({begin, offset, SourceTokenKind::Function});
-        } else if (Contains(kKeywords, word)) {
-            spans.push_back({begin, offset, SourceTokenKind::Keyword});
-        } else if (word.front() >= 'A' && word.front() <= 'Z') {
-            offset = DottedNameEnd(line, offset);
-            spans.push_back({begin, offset, SourceTokenKind::Control});
+        const bool isArray = state.arrayNames.contains(lexeme.text);
+        const bool runStart = IsDottedRunStart(scan.lexemes, index);
+        const DottedRun run = runStart
+            ? ScanDottedRun(scan.lexemes, index)
+            : DottedRun{index};
+        const bool dottedMember = !runStart || run.wordCount > 1U;
+        const bool arrayLength = run.wordCount == 2U
+            && scan.lexemes[run.end].text == "length"
+            && isArray;
+        if (run.controlSpelling && run.wordCount > 1U && !arrayLength) {
+            for (std::size_t cursor = index; cursor <= run.end; ++cursor) {
+                const language::Lexeme& part = scan.lexemes[cursor];
+                if (part.kind == language::LexemeKind::Word) {
+                    add(part, SourceTokenKind::Control);
+                } else if (part.kind == language::LexemeKind::BlockComment
+                    || part.kind == language::LexemeKind::LineComment) {
+                    add(part, SourceTokenKind::Comment);
+                }
+            }
+            index = run.end;
+        } else if (isArray || state.scalarNames.contains(lexeme.text)
+            || IsArrayLengthWord(scan.lexemes, index, state)) {
+            add(lexeme, SourceTokenKind::Variable);
+        } else if (role == language::WordRole::IntrinsicValue) {
+            add(lexeme, SourceTokenKind::Variable);
+        } else if (role == language::WordRole::Constant
+            || role == language::WordRole::Transition
+            || role == language::WordRole::ScanPrefix) {
+            add(lexeme, SourceTokenKind::Constant);
+        } else if (role == language::WordRole::Action) {
+            add(lexeme, SourceTokenKind::Action);
+        } else if (role == language::WordRole::Keyword) {
+            add(lexeme, SourceTokenKind::Keyword);
+        } else if (!dottedMember
+            && lexeme.text.front() >= 'A' && lexeme.text.front() <= 'Z') {
+            add(lexeme, SourceTokenKind::Control);
         }
     }
     return spans;

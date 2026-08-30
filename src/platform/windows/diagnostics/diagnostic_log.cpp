@@ -229,6 +229,10 @@ std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record) {
                << RuntimeLaunchResultName(
                       static_cast<RuntimeLaunchResult>(record.detail))
                << "\",\"platform_error\":" << record.platformError;
+    } else if (record.kind == RuntimeDiagnosticKind::ActivationFailure) {
+        stream << ",\"activation_code\":" << record.detail
+               << ",\"required\":" << record.required
+               << ",\"available\":" << record.available;
     }
     stream << "}";
     return stream.str();

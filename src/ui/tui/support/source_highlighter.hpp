@@ -1,6 +1,10 @@
 #pragma once
 
+#include "language/lexer.hpp"
+
 #include <cstddef>
+#include <functional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,7 +17,7 @@ enum class SourceTokenKind {
     Variable,
     Constant,
     Control,
-    Function,
+    Action,
     Operator,
     String,
     Comment,
@@ -26,8 +30,11 @@ struct SourceTokenSpan final {
 };
 
 struct SourceHighlightState final {
-    bool blockComment{};
-    std::vector<std::string> variables;
+    language::LexerState lexer{};
+    std::set<std::string, std::less<>> scalarNames;
+    std::set<std::string, std::less<>> arrayNames;
+    bool expectsDeclarationName{};
+    bool declarationIsArray{};
 };
 
 [[nodiscard]] std::vector<SourceTokenSpan> HighlightWeaveLine(

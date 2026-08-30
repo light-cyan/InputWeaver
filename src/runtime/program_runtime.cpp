@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -40,8 +41,14 @@ enum class TaskResumeKind : std::uint8_t {
 enum class WorkKind : std::uint8_t {
     TaskStart,
     MappingAcquire,
-    MappingRepeat,
+    MappingAgain,
     MappingRelease,
+};
+
+enum class PauseLockMode : std::uint8_t {
+    None,
+    Read,
+    Write,
 };
 
 [[nodiscard]] constexpr bool IsDebugIssue(
@@ -263,14 +270,70 @@ struct TaskCancellationContext final {
         || context->generation->load(std::memory_order_acquire) != context->expected;
 }
 
+[[nodiscard]] RuntimeDebugArraySnapshot BuildArraySnapshot(
+    ArrayId arrayId,
+    const RuntimeArrayStorage& array) noexcept
+{
+    RuntimeDebugArraySnapshot snapshot{};
+    snapshot.array = arrayId;
+    snapshot.elementType = array.ElementType();
+    snapshot.length = static_cast<std::uint64_t>(array.Size());
+    const std::size_t prefixCount = array.Size() <= kRuntimeDebugArrayPreviewCount
+        ? array.Size()
+        : kRuntimeDebugArrayPreviewCount / 2U;
+    const std::size_t suffixCount = array.Size() <= kRuntimeDebugArrayPreviewCount
+        ? 0U
+        : kRuntimeDebugArrayPreviewCount / 2U;
+    snapshot.prefixCount = static_cast<std::uint8_t>(prefixCount);
+    snapshot.suffixCount = static_cast<std::uint8_t>(suffixCount);
+    RuntimeValue value{};
+    for (std::size_t index = 0U; index < prefixCount; ++index) {
+        (void)array.Read(index, value);
+        snapshot.elements[index].stateValue = value.stateValue;
+        snapshot.elements[index].numberValue = value.numberValue;
+    }
+    for (std::size_t index = 0U; index < suffixCount; ++index) {
+        (void)array.Read(array.Size() - suffixCount + index, value);
+        snapshot.elements[prefixCount + index].stateValue = value.stateValue;
+        snapshot.elements[prefixCount + index].numberValue = value.numberValue;
+    }
+    return snapshot;
+}
+
 } // namespace
 
 struct ProgramRuntime::Impl final {
     struct MutableState final {
+        [[nodiscard]] static std::vector<RuntimeArrayStorage> CreateArrays(
+            const CompiledProgram& program)
+        {
+            std::vector<RuntimeArrayStorage> result;
+            result.reserve(program.Arrays().size());
+            for (const ArrayDescriptor& descriptor : program.Arrays()) {
+                if (descriptor.elementType == ArrayElementType::State) {
+                    result.emplace_back(
+                        descriptor.elementType,
+                        program.InitialArrayStates().subspan(
+                            descriptor.initialValues.begin,
+                            descriptor.initialValues.count),
+                        std::span<const double>{});
+                } else {
+                    result.emplace_back(
+                        descriptor.elementType,
+                        std::span<const std::uint8_t>{},
+                        program.InitialArrayNumbers().subspan(
+                            descriptor.initialValues.begin,
+                            descriptor.initialValues.count));
+                }
+            }
+            return result;
+        }
+
         explicit MutableState(const CompiledProgram& program)
             : userStates(program.UserValues().initialStates),
               userNumbers(program.UserValues().initialNumbers),
               userDurations(program.UserValues().initialDurations),
+              arrays(CreateArrays(program)),
               physicalHeld(std::make_unique<std::atomic<std::uint8_t>[]>(
                   program.Controls().size())),
               physicalSynchronized(
@@ -290,6 +353,7 @@ struct ProgramRuntime::Impl final {
                 userStates,
                 userNumbers,
                 userDurations,
+                arrays,
                 {physicalHeld.get(), program.Controls().size()},
                 pauseOn,
                 program.Settings().tapDuration,
@@ -320,8 +384,28 @@ struct ProgramRuntime::Impl final {
         std::vector<std::uint8_t> userStates;
         std::vector<double> userNumbers;
         std::vector<DurationValue> userDurations;
+        std::vector<RuntimeArrayStorage> arrays;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalHeld;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalSynchronized;
+    };
+
+    struct EventStateTransaction final {
+        EventStateTransaction(MutableState& state, PauseLockMode pauseMode)
+            : pauseRead(state.pauseMutex, std::defer_lock),
+              pauseWrite(state.pauseMutex, std::defer_lock),
+              variables(state.variableMutex, std::defer_lock)
+        {
+            if ((pauseMode == PauseLockMode::Read && !pauseRead.try_lock())
+                || (pauseMode == PauseLockMode::Write && !pauseWrite.try_lock())) {
+                return;
+            }
+            locked = variables.try_lock();
+        }
+
+        std::shared_lock<std::shared_mutex> pauseRead;
+        std::unique_lock<std::shared_mutex> pauseWrite;
+        std::shared_lock<std::shared_mutex> variables;
+        bool locked{};
     };
 
     struct DispatchState final {
@@ -454,7 +538,10 @@ struct ProgramRuntime::Impl final {
                 transactionRejections.load(std::memory_order_relaxed),
                 droppedDiagnostics,
                 outputTransitions.load(std::memory_order_relaxed),
-                schedulerBackoffs.load(std::memory_order_relaxed)};
+                schedulerBackoffs.load(std::memory_order_relaxed),
+                currentArrayBytes.load(std::memory_order_relaxed),
+                peakArrayBytes.load(std::memory_order_relaxed),
+                rejectedArrayGrowth.load(std::memory_order_relaxed)};
         }
 
         std::atomic<std::uint64_t> dispatchedEvents{0U};
@@ -465,6 +552,9 @@ struct ProgramRuntime::Impl final {
         std::atomic<std::uint64_t> transactionRejections{0U};
         std::atomic<std::uint64_t> outputTransitions{0U};
         std::atomic<std::uint64_t> schedulerBackoffs{0U};
+        std::atomic<std::uint64_t> currentArrayBytes{0U};
+        std::atomic<std::uint64_t> peakArrayBytes{0U};
+        std::atomic<std::uint64_t> rejectedArrayGrowth{0U};
     };
 
     struct State final {
@@ -479,10 +569,25 @@ struct ProgramRuntime::Impl final {
               mutableState(*program),
               dispatch(*program, capacities),
               scheduler(*program, capacities),
+              inspectionScratch((std::max)(
+                  std::size_t{1U},
+                  static_cast<std::size_t>(
+                      program->Requirements().maximumExpressionStackDepth))),
               output(program->Controls().size()),
               diagnostics(capacities.diagnosticRecordCount),
               generation(runtimeGeneration)
         {
+            std::uint64_t initialArrayBytes = 0U;
+            for (const RuntimeArrayStorage& array : mutableState.arrays) {
+                initialArrayBytes += static_cast<std::uint64_t>(
+                    array.AllocatedBytes());
+            }
+            metrics.currentArrayBytes.store(
+                initialArrayBytes,
+                std::memory_order_relaxed);
+            metrics.peakArrayBytes.store(
+                initialArrayBytes,
+                std::memory_order_relaxed);
         }
 
         std::shared_ptr<const CompiledProgram> program;
@@ -493,6 +598,8 @@ struct ProgramRuntime::Impl final {
         MutableState mutableState;
         DispatchState dispatch;
         SchedulerState scheduler;
+        std::mutex inspectionMutex;
+        RuntimeExpressionScratch inspectionScratch;
         OutputState output;
         DiagnosticBuffer diagnostics;
         MetricCounters metrics;
@@ -502,6 +609,33 @@ struct ProgramRuntime::Impl final {
         std::atomic<bool> targetEligible{true};
         std::atomic<bool> exitRequested{false};
         std::atomic<bool> fatalShutdownRequested{false};
+    };
+
+    struct MutationTransaction final {
+        MutationTransaction(State& state, const TaskInstance& task)
+            : pause(state.mutableState.pauseMutex),
+              variables(state.mutableState.variableMutex),
+              current(task.generation
+                  == state.generation.load(std::memory_order_acquire))
+        {
+        }
+
+        void Unlock() noexcept
+        {
+            variables.unlock();
+            pause.unlock();
+        }
+
+        std::shared_lock<std::shared_mutex> pause;
+        std::unique_lock<std::shared_mutex> variables;
+        bool current{};
+    };
+
+    struct MutationPublication final {
+        RuntimeDebugValue scalar{};
+        RuntimeDebugArraySnapshot array{};
+        bool hasScalar{};
+        bool hasArray{};
     };
 
     Impl(
@@ -572,7 +706,6 @@ struct ProgramRuntime::Impl final {
     [[nodiscard]] bool EvaluatePredicate(
         State& state,
         ExpressionId expression,
-        SourceSpan source,
         bool& matched) noexcept;
 
     [[nodiscard]] const ExitControlBucket* FindExitBucket(
@@ -617,6 +750,10 @@ struct ProgramRuntime::Impl final {
         std::uint32_t detail = 0U,
         std::uint32_t platformError = 0U) noexcept;
     void PublishStateChanged(RuntimeDebugValue value) noexcept;
+    void PublishArrayChanged(RuntimeDebugArraySnapshot array) noexcept;
+    [[nodiscard]] bool CompleteMutation(
+        MutationTransaction& transaction,
+        const MutationPublication& publication) noexcept;
     [[nodiscard]] std::uint64_t BeginDebugExecution(
         State& state,
         const WorkItem& item) noexcept;
@@ -682,8 +819,15 @@ struct ProgramRuntime::Impl final {
         std::uint32_t instructionPosition) noexcept;
     [[nodiscard]] bool ExecuteToggle(
         State& state,
+        TaskInstance& task,
         const ActionInstruction& instruction,
         std::uint32_t instructionPosition) noexcept;
+    [[nodiscard]] bool ExecuteArrayAction(
+        State& state,
+        TaskInstance& task,
+        const ActionInstruction& instruction,
+        std::uint32_t instructionPosition,
+        SourceSpan source) noexcept;
     [[nodiscard]] RuntimeEvaluationResult EvaluateTaskExpression(
         State& state,
         ExpressionId expression) noexcept;
@@ -691,6 +835,17 @@ struct ProgramRuntime::Impl final {
         const State& state,
         const ActionProgramDescriptor& descriptor,
         std::uint32_t position) const noexcept;
+    [[nodiscard]] SourceSpan ExpressionSource(
+        const State& state,
+        ExpressionId expression,
+        std::uint32_t position,
+        std::uint32_t& globalPosition) const noexcept;
+    void ReportExpressionFault(
+        State& state,
+        RuntimeDiagnosticKind kind,
+        ExpressionId expression,
+        const RuntimeEvaluationResult& result,
+        bool fatal) noexcept;
     [[nodiscard]] std::int64_t NextDeadline(const State& state) const noexcept;
 };
 
@@ -735,6 +890,39 @@ RuntimeActivationError ProgramRuntime::Impl::ValidateCapacities(
             required.durationSlotCount,
             capacities.maximumDurationSlots,
             RuntimeActivationSubject::DurationSlots);
+    }
+    if (required.arrayCount > capacities.maximumArrayCount) {
+        return capacityError(
+            RuntimeActivationErrorCode::ArrayCountCapacity,
+            required.arrayCount,
+            capacities.maximumArrayCount,
+            RuntimeActivationSubject::ArrayCount);
+    }
+    std::uint64_t initialArrayBytes = 0U;
+    for (const ArrayDescriptor& descriptor : program.Arrays()) {
+        const std::optional<std::size_t> bytes =
+            descriptor.elementType == ArrayElementType::State
+                ? RuntimeArrayStorage::StateArray::AllocationBytesForSize(
+                    descriptor.initialValues.count)
+                : RuntimeArrayStorage::NumberArray::AllocationBytesForSize(
+                    descriptor.initialValues.count);
+        if (!bytes
+            || *bytes > (std::numeric_limits<std::uint64_t>::max)()
+                - initialArrayBytes) {
+            return capacityError(
+                RuntimeActivationErrorCode::ArrayByteCapacity,
+                (std::numeric_limits<std::uint64_t>::max)(),
+                capacities.maximumArrayBytes,
+                RuntimeActivationSubject::ArrayBytes);
+        }
+        initialArrayBytes += *bytes;
+    }
+    if (initialArrayBytes > capacities.maximumArrayBytes) {
+        return capacityError(
+            RuntimeActivationErrorCode::ArrayByteCapacity,
+            initialArrayBytes,
+            capacities.maximumArrayBytes,
+            RuntimeActivationSubject::ArrayBytes);
     }
     if (required.mappingSlotCount > capacities.maximumMappingSlots) {
         return capacityError(
@@ -979,7 +1167,6 @@ RuntimeEvaluationResult ProgramRuntime::Impl::Evaluate(
 bool ProgramRuntime::Impl::EvaluatePredicate(
     State& state,
     ExpressionId expression,
-    SourceSpan source,
     bool& matched) noexcept
 {
     if (!expression.IsValid()) {
@@ -991,13 +1178,12 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
         expression,
         state.dispatch.expressionScratch);
     if (!result.Succeeded() || result.value.type != ExpressionType::Boolean) {
-        RequestFatal(
+        ReportExpressionFault(
             state,
             RuntimeDiagnosticKind::PredicateFault,
-            source,
-            expression.value,
-            result.instructionPosition,
-            static_cast<std::uint32_t>(result.fault));
+            expression,
+            result,
+            true);
         matched = false;
         return false;
     }
@@ -1121,6 +1307,32 @@ void ProgramRuntime::Impl::PublishStateChanged(RuntimeDebugValue value) noexcept
     (void)debugPort->Publish(event);
 }
 
+void ProgramRuntime::Impl::PublishArrayChanged(
+    RuntimeDebugArraySnapshot array) noexcept
+{
+    if (debugPort == nullptr) {
+        return;
+    }
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::ArrayChanged;
+    event.array = array;
+    (void)debugPort->Publish(event);
+}
+
+bool ProgramRuntime::Impl::CompleteMutation(
+    MutationTransaction& transaction,
+    const MutationPublication& publication) noexcept
+{
+    transaction.Unlock();
+    if (publication.hasScalar) {
+        PublishStateChanged(publication.scalar);
+    }
+    if (publication.hasArray) {
+        PublishArrayChanged(publication.array);
+    }
+    return true;
+}
+
 std::uint64_t ProgramRuntime::Impl::BeginDebugExecution(
     State& state,
     const WorkItem& item) noexcept
@@ -1238,7 +1450,7 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     if (event.transition == Transition::Down) {
         const bool wasHeld = held.exchange(1U, std::memory_order_acq_rel) != 0U;
         transition = event.device == DeviceKind::Keyboard && wasHeld
-            ? EventTransition::Repeat
+            ? EventTransition::Again
             : EventTransition::Down;
     } else if (event.transition == Transition::Up) {
         held.store(0U, std::memory_order_release);
@@ -1260,27 +1472,32 @@ InputDecision ProgramRuntime::Impl::HandleInput(
 
     const EventKey key{event.control, transition};
     const ExitControlBucket* const exitBucket = FindExitBucket(*state, key);
+    const PauseControlBucket* const pauseBucket = FindPauseBucket(*state, key);
+    const bool hasPauseRules = !state->program->PauseControlBuckets().empty();
+    EventStateTransaction transaction(
+        state->mutableState,
+        !hasPauseRules
+            ? PauseLockMode::None
+            : pauseBucket == nullptr ? PauseLockMode::Read : PauseLockMode::Write);
+    if (!transaction.locked) {
+        return InputDecision::Forward;
+    }
+    const auto accountDecision = [state](InputDecision decision) noexcept {
+        if (decision == InputDecision::Suppress) {
+            state->metrics.suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
+        }
+        return decision;
+    };
+    const std::uint64_t transactionGeneration = state->generation.load(
+        std::memory_order_acquire);
     if (exitBucket != nullptr
         && !state->exitRequested.load(std::memory_order_acquire)) {
-        std::shared_lock pauseLock(
-            state->mutableState.pauseMutex,
-            std::defer_lock);
-        if (!state->program->PauseControlBuckets().empty()
-            && !pauseLock.try_lock()) {
-            return InputDecision::Forward;
-        }
-        std::shared_lock variableLock(
-            state->mutableState.variableMutex,
-            std::try_to_lock);
-        if (!variableLock.owns_lock()) {
-            return InputDecision::Forward;
-        }
         const auto rules = state->program->ExitControlRules().subspan(
             exitBucket->rules.begin,
             exitBucket->rules.count);
         for (const ExitControlRule& rule : rules) {
             bool matched = false;
-            if (!EvaluatePredicate(*state, rule.condition, rule.source, matched)) {
+            if (!EvaluatePredicate(*state, rule.condition, matched)) {
                 return InputDecision::Forward;
             }
             if (!matched) {
@@ -1291,14 +1508,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
             state->metrics.dispatchedEvents.fetch_add(
                 1U,
                 std::memory_order_relaxed);
-            state->metrics.suppressedEvents.fetch_add(
-                1U,
-                std::memory_order_relaxed);
-            return InputDecision::Suppress;
+            return accountDecision(InputDecision::Suppress);
         }
     }
-    const std::uint64_t transactionGeneration = state->generation.load(
-        std::memory_order_acquire);
     if (!state->accepting.load(std::memory_order_acquire)
         || !wasSynchronized
         || !state->targetEligible.load(std::memory_order_acquire)) {
@@ -1318,47 +1530,13 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         return InputDecision::Forward;
     }
 
-    if (state->program->PauseControlBuckets().empty()) {
-        std::shared_lock variableLock(
-            state->mutableState.variableMutex,
-            std::try_to_lock);
-        if (!variableLock.owns_lock()) {
-            return InputDecision::Forward;
-        }
-        const InputDecision decision = DispatchOrdinary(
-            *state,
-            key,
-            transactionGeneration,
-            event.debugCaptureEpoch,
-            event.debugInputSequence);
-        if (decision == InputDecision::Suppress) {
-            state->metrics.suppressedEvents.fetch_add(
-                1U,
-                std::memory_order_relaxed);
-        }
-        return decision;
-    }
-
-    const PauseControlBucket* const pauseBucket = FindPauseBucket(*state, key);
     if (pauseBucket != nullptr) {
-        std::unique_lock pauseLock(
-            state->mutableState.pauseMutex,
-            std::try_to_lock);
-        if (!pauseLock.owns_lock()) {
-            return InputDecision::Forward;
-        }
-        std::shared_lock variableLock(
-            state->mutableState.variableMutex,
-            std::try_to_lock);
-        if (!variableLock.owns_lock()) {
-            return InputDecision::Forward;
-        }
         const auto rules = state->program->PauseControlRules().subspan(
             pauseBucket->rules.begin,
             pauseBucket->rules.count);
         for (const PauseControlRule& rule : rules) {
             bool matched = false;
-            if (!EvaluatePredicate(*state, rule.condition, rule.source, matched)) {
+            if (!EvaluatePredicate(*state, rule.condition, matched)) {
                 return InputDecision::Forward;
             }
             if (!matched) {
@@ -1385,58 +1563,20 @@ InputDecision ProgramRuntime::Impl::HandleInput(
                     state->mutableState.pauseOn});
                 Invalidate(*state, RuntimeCancellationReason::Pause);
             }
-            if (rule.delivery == Delivery::Consume) {
-                state->metrics.suppressedEvents.fetch_add(
-                    1U,
-                    std::memory_order_relaxed);
-                return InputDecision::Suppress;
-            }
-            return InputDecision::Forward;
+            return accountDecision(rule.delivery == Delivery::Consume
+                ? InputDecision::Suppress
+                : InputDecision::Forward);
         }
-        if (!state->mutableState.pauseOn) {
-            return InputDecision::Forward;
-        }
-        const InputDecision decision = DispatchOrdinary(
-            *state,
-            key,
-            transactionGeneration,
-            event.debugCaptureEpoch,
-            event.debugInputSequence);
-        if (decision == InputDecision::Suppress) {
-            state->metrics.suppressedEvents.fetch_add(
-                1U,
-                std::memory_order_relaxed);
-        }
-        return decision;
     }
-
-    std::shared_lock pauseLock(
-        state->mutableState.pauseMutex,
-        std::try_to_lock);
-    if (!pauseLock.owns_lock()) {
+    if (hasPauseRules && !state->mutableState.pauseOn) {
         return InputDecision::Forward;
     }
-    std::shared_lock variableLock(
-        state->mutableState.variableMutex,
-        std::try_to_lock);
-    if (!variableLock.owns_lock()) {
-        return InputDecision::Forward;
-    }
-    if (!state->mutableState.pauseOn) {
-        return InputDecision::Forward;
-    }
-    const InputDecision decision = DispatchOrdinary(
+    return accountDecision(DispatchOrdinary(
         *state,
         key,
         transactionGeneration,
         event.debugCaptureEpoch,
-        event.debugInputSequence);
-    if (decision == InputDecision::Suppress) {
-        state->metrics.suppressedEvents.fetch_add(
-            1U,
-            std::memory_order_relaxed);
-    }
-    return decision;
+        event.debugInputSequence));
 }
 
 bool ProgramRuntime::Impl::SeedPhysicalState(
@@ -1547,14 +1687,14 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
 
     const std::uint32_t slot = FindMappingSlot(state, key.control);
     if (slot != kInvalidProgramIndex
-        && (key.transition == EventTransition::Repeat
+        && (key.transition == EventTransition::Again
             || key.transition == EventTransition::Up)) {
         const std::uint32_t mapping = state.dispatch.activeMappings[slot].load(
             std::memory_order_acquire);
         if (mapping != kInvalidProgramIndex) {
             state.dispatch.transactionScratch[scratchCount++] = {
-                key.transition == EventTransition::Repeat
-                    ? WorkKind::MappingRepeat
+                key.transition == EventTransition::Again
+                    ? WorkKind::MappingAgain
                     : WorkKind::MappingRelease,
                 transactionGeneration,
                 kInvalidTaskSlot,
@@ -1577,7 +1717,7 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
         for (std::size_t ruleOffset = 0U; ruleOffset < rules.size(); ++ruleOffset) {
             const CompiledRule& rule = rules[ruleOffset];
             bool matched = false;
-            if (!EvaluatePredicate(state, rule.condition, rule.source, matched)) {
+            if (!EvaluatePredicate(state, rule.condition, matched)) {
                 return InputDecision::Forward;
             }
             if (!matched) {
@@ -2154,13 +2294,13 @@ void ProgramRuntime::Impl::ProcessMappingWork(
         }
         return;
     }
-    if (item.kind == WorkKind::MappingRepeat) {
+    if (item.kind == WorkKind::MappingAgain) {
         if (owner.owned) {
             bool rateExceeded = false;
             const bool published = PublishOutput(
                 state,
                 owner.target,
-                RuntimeOutputTransition::Repeat,
+                RuntimeOutputTransition::Again,
                 item.generation,
                 nullptr,
                 &rateExceeded);
@@ -2479,6 +2619,46 @@ SourceSpan ProgramRuntime::Impl::ActionSource(
         : descriptor.source;
 }
 
+SourceSpan ProgramRuntime::Impl::ExpressionSource(
+    const State& state,
+    ExpressionId expression,
+    std::uint32_t position,
+    std::uint32_t& globalPosition) const noexcept
+{
+    const auto expressions = state.program->Expressions();
+    if (!expression.IsValid() || expression.value >= expressions.size()) {
+        globalPosition = position;
+        return {};
+    }
+    const ExpressionDescriptor& descriptor = expressions[expression.value];
+    globalPosition = descriptor.code.begin + position;
+    const auto spans = state.program->DebugInfo().expressionInstructionSpans;
+    return position < descriptor.code.count && globalPosition < spans.size()
+        ? spans[globalPosition]
+        : descriptor.source;
+}
+
+void ProgramRuntime::Impl::ReportExpressionFault(
+    State& state,
+    RuntimeDiagnosticKind kind,
+    ExpressionId expression,
+    const RuntimeEvaluationResult& result,
+    bool fatal) noexcept
+{
+    std::uint32_t position{};
+    const SourceSpan source = ExpressionSource(
+        state,
+        expression,
+        result.instructionPosition,
+        position);
+    const std::uint32_t detail = static_cast<std::uint32_t>(result.fault);
+    if (fatal) {
+        RequestFatal(state, kind, source, expression.value, position, detail);
+    } else {
+        PublishDiagnostic(state, kind, source, expression.value, position, 0, detail);
+    }
+}
+
 bool ProgramRuntime::Impl::ExecuteSet(
     State& state,
     TaskInstance& task,
@@ -2493,56 +2673,53 @@ bool ProgramRuntime::Impl::ExecuteSet(
     if (!IsUserDomain(target.domain)) {
         return false;
     }
-    std::shared_lock pauseLock(state.mutableState.pauseMutex);
-    std::unique_lock variableLock(state.mutableState.variableMutex);
-    const RuntimeEvaluationResult result = Evaluate(
-        state,
-        ExpressionId{instruction.operand1},
-        state.scheduler.expressionScratch);
-    if (!result.Succeeded()) {
-        RequestFatal(
-            state,
-            RuntimeDiagnosticKind::TaskExpressionFault,
-            {},
-            task.action.value,
-            instructionPosition,
-            static_cast<std::uint32_t>(result.fault));
+    MutationTransaction transaction(state, task);
+    if (!transaction.current) {
         return false;
     }
+    const ExpressionId expression{instruction.operand1};
+    const RuntimeEvaluationResult result = Evaluate(
+        state,
+        expression,
+        state.scheduler.expressionScratch);
+    if (!result.Succeeded()) {
+        ReportExpressionFault(
+            state,
+            RuntimeDiagnosticKind::TaskExpressionFault,
+            expression,
+            result,
+            true);
+        return false;
+    }
+    MutationPublication publication{};
+    publication.scalar.reference = ValueRefId{instruction.operand0};
+    publication.scalar.type = target.type;
+    publication.hasScalar = true;
     if (target.domain == ValueDomain::UserState
+        && target.index < state.mutableState.userStates.size()
         && result.value.type == ExpressionType::State) {
         state.mutableState.userStates[target.index] = result.value.stateValue;
-        PublishStateChanged({
-            ValueRefId{instruction.operand0},
-            ValueType::State,
-            result.value.stateValue != 0U});
-        return true;
-    }
-    if (target.domain == ValueDomain::UserNumber
+        publication.scalar.stateValue = result.value.stateValue != 0U;
+    } else if (target.domain == ValueDomain::UserNumber
+        && target.index < state.mutableState.userNumbers.size()
         && result.value.type == ExpressionType::Number) {
         state.mutableState.userNumbers[target.index] = result.value.numberValue;
-        RuntimeDebugValue value{};
-        value.reference = ValueRefId{instruction.operand0};
-        value.type = ValueType::Number;
-        value.numberValue = result.value.numberValue;
-        PublishStateChanged(value);
-        return true;
-    }
-    if (target.domain == ValueDomain::UserDuration
+        publication.scalar.numberValue = result.value.numberValue;
+    } else if (target.domain == ValueDomain::UserDuration
+        && target.index < state.mutableState.userDurations.size()
         && result.value.type == ExpressionType::Duration) {
         state.mutableState.userDurations[target.index] = result.value.durationValue;
-        RuntimeDebugValue value{};
-        value.reference = ValueRefId{instruction.operand0};
-        value.type = ValueType::Duration;
-        value.durationValue = result.value.durationValue;
-        PublishStateChanged(value);
-        return true;
+        publication.scalar.durationValue = result.value.durationValue;
+    } else {
+        return false;
     }
-    return false;
+    (void)instructionPosition;
+    return CompleteMutation(transaction, publication);
 }
 
 bool ProgramRuntime::Impl::ExecuteToggle(
     State& state,
+    TaskInstance& task,
     const ActionInstruction& instruction,
     std::uint32_t instructionPosition) noexcept
 {
@@ -2555,16 +2732,229 @@ bool ProgramRuntime::Impl::ExecuteToggle(
         || target.index >= state.mutableState.userStates.size()) {
         return false;
     }
-    std::shared_lock pauseLock(state.mutableState.pauseMutex);
-    std::unique_lock variableLock(state.mutableState.variableMutex);
+    MutationTransaction transaction(state, task);
+    if (!transaction.current) {
+        return false;
+    }
     std::uint8_t& value = state.mutableState.userStates[target.index];
     value = value == 0U ? 1U : 0U;
-    PublishStateChanged({
+    (void)instructionPosition;
+    MutationPublication publication{};
+    publication.scalar = {
         ValueRefId{instruction.operand0},
         ValueType::State,
-        value != 0U});
-    (void)instructionPosition;
-    return true;
+        value != 0U};
+    publication.hasScalar = true;
+    return CompleteMutation(transaction, publication);
+}
+
+bool ProgramRuntime::Impl::ExecuteArrayAction(
+    State& state,
+    TaskInstance& task,
+    const ActionInstruction& instruction,
+    std::uint32_t instructionPosition,
+    SourceSpan source) noexcept
+{
+    const ArrayId arrayId{instruction.operand0};
+    const auto actionFault = [&](std::uint32_t detail) noexcept {
+        PublishDiagnostic(
+            state,
+            RuntimeDiagnosticKind::TaskActionFault,
+            source,
+            instruction.operand0,
+            instructionPosition,
+            0,
+            detail);
+    };
+    if (instruction.operand0 >= state.mutableState.arrays.size()) {
+        actionFault(20U);
+        return false;
+    }
+    RuntimeArrayStorage& array = state.mutableState.arrays[instruction.operand0];
+    const auto expressionFault = [&](ExpressionId expression,
+                                     const RuntimeEvaluationResult& result) noexcept {
+        ReportExpressionFault(
+            state,
+            RuntimeDiagnosticKind::TaskExpressionFault,
+            expression,
+            result,
+            false);
+    };
+    const auto completeArray = [&](MutationTransaction& transaction,
+                                   MutationPublication publication) noexcept {
+        publication.array = BuildArraySnapshot(arrayId, array);
+        publication.hasArray = true;
+        return CompleteMutation(transaction, publication);
+    };
+
+    if (instruction.opcode == ActionOpcode::SetArrayElement
+        || instruction.opcode == ActionOpcode::ToggleArrayElement) {
+        MutationTransaction transaction(state, task);
+        if (!transaction.current) {
+            return false;
+        }
+        const ExpressionId indexExpression{instruction.operand1};
+        const RuntimeEvaluationResult indexResult = Evaluate(
+            state,
+            indexExpression,
+            state.scheduler.expressionScratch);
+        if (!indexResult.Succeeded()
+            || indexResult.value.type != ExpressionType::Number) {
+            expressionFault(indexExpression, indexResult);
+            return false;
+        }
+        const NormalizedArrayIndex index = NormalizeArrayIndex(
+            indexResult.value.numberValue,
+            array.Size());
+        if (!index.Valid()) {
+            actionFault(index.status == ArrayIndexStatus::OutOfBounds
+                ? 22U
+                : 21U);
+            return false;
+        }
+        if (instruction.opcode == ActionOpcode::SetArrayElement) {
+            const ExpressionId valueExpression{instruction.operand2};
+            const RuntimeEvaluationResult valueResult = Evaluate(
+                state,
+                valueExpression,
+                state.scheduler.expressionScratch);
+            if (!valueResult.Succeeded()) {
+                expressionFault(valueExpression, valueResult);
+                return false;
+            }
+            if (!array.Set(index.value, valueResult.value)) {
+                actionFault(23U);
+                return false;
+            }
+        } else if (!array.Toggle(index.value)) {
+            actionFault(23U);
+            return false;
+        }
+        return completeArray(transaction, {});
+    }
+
+    if (instruction.opcode == ActionOpcode::AppendArrayElement) {
+        MutationTransaction planning(state, task);
+        if (!planning.current) {
+            return false;
+        }
+        const ExpressionId valueExpression{instruction.operand1};
+        const RuntimeEvaluationResult valueResult = Evaluate(
+            state,
+            valueExpression,
+            state.scheduler.expressionScratch);
+        if (!valueResult.Succeeded()) {
+            expressionFault(valueExpression, valueResult);
+            return false;
+        }
+        const std::optional<ArrayAppendPlan> plan = array.PlanAppend();
+        const std::uint64_t oldBytes = array.AllocatedBytes();
+        const std::uint64_t currentBytes = state.metrics.currentArrayBytes.load(
+            std::memory_order_relaxed);
+        const auto growthFits = [&](std::uint64_t total) noexcept {
+            return plan && plan->projectedBytes >= oldBytes
+                && total <= capacities.maximumArrayBytes
+                && plan->projectedBytes - oldBytes
+                    <= capacities.maximumArrayBytes - total;
+        };
+        if (!growthFits(currentBytes)) {
+            state.metrics.rejectedArrayGrowth.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+            actionFault(plan ? 25U : 24U);
+            return false;
+        }
+        planning.Unlock();
+        std::optional<RuntimeArrayStorage::PreparedAppend> prepared =
+            array.PrepareAppend(*plan);
+        if (!prepared) {
+            state.metrics.rejectedArrayGrowth.fetch_add(1U, std::memory_order_relaxed);
+            actionFault(24U);
+            return false;
+        }
+        MutationTransaction commit(state, task);
+        const std::uint64_t committedBytes = state.metrics.currentArrayBytes.load(
+            std::memory_order_relaxed);
+        if (!commit.current || array.PlanAppend() != plan) {
+            return false;
+        }
+        if (!growthFits(committedBytes)) {
+            state.metrics.rejectedArrayGrowth.fetch_add(
+                1U,
+                std::memory_order_relaxed);
+            actionFault(25U);
+            return false;
+        }
+        if (!array.Append(valueResult.value, *plan, std::move(*prepared))) {
+            actionFault(23U);
+            return false;
+        }
+        const std::uint64_t newTotal = committedBytes
+            + plan->projectedBytes - oldBytes;
+        state.metrics.currentArrayBytes.store(
+            newTotal,
+            std::memory_order_relaxed);
+        state.metrics.peakArrayBytes.store((std::max)(
+            newTotal,
+            state.metrics.peakArrayBytes.load(std::memory_order_relaxed)),
+            std::memory_order_relaxed);
+        return completeArray(commit, {});
+    }
+
+    if (instruction.opcode == ActionOpcode::PopArrayElement) {
+        const auto refs = state.program->ValueRefs();
+        if (instruction.operand1 >= refs.size()) {
+            actionFault(20U);
+            return false;
+        }
+        const ValueRef& target = refs[instruction.operand1];
+        const bool targetValid =
+            (array.ElementType() == ArrayElementType::State
+                && target.domain == ValueDomain::UserState
+                && target.type == ValueType::State
+                && target.index < state.mutableState.userStates.size())
+            || (array.ElementType() == ArrayElementType::Number
+                && target.domain == ValueDomain::UserNumber
+                && target.type == ValueType::Number
+                && target.index < state.mutableState.userNumbers.size());
+        if (!targetValid) {
+            actionFault(23U);
+            return false;
+        }
+        MutationTransaction transaction(state, task);
+        if (!transaction.current) {
+            return false;
+        }
+        RuntimeValue value{};
+        if (!array.Pop(value)) {
+            actionFault(26U);
+            return false;
+        }
+        if (target.domain == ValueDomain::UserState) {
+            state.mutableState.userStates[target.index] = value.stateValue;
+        } else {
+            state.mutableState.userNumbers[target.index] = value.numberValue;
+        }
+        MutationPublication publication{};
+        publication.scalar.reference = ValueRefId{instruction.operand1};
+        publication.scalar.type = target.type;
+        publication.scalar.stateValue = value.stateValue != 0U;
+        publication.scalar.numberValue = value.numberValue;
+        publication.hasScalar = true;
+        return completeArray(transaction, publication);
+    }
+
+    if (instruction.opcode == ActionOpcode::ClearArray) {
+        MutationTransaction transaction(state, task);
+        if (!transaction.current) {
+            return false;
+        }
+        array.Clear();
+        return completeArray(transaction, {});
+    }
+
+    actionFault(20U);
+    return false;
 }
 
 bool ProgramRuntime::Impl::RunTaskSlice(
@@ -2679,18 +3069,18 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             ScheduleTimed(state, task, state.program->Settings().tapDuration);
             return true;
         case ActionOpcode::Wait: {
+            const ExpressionId expression{instruction.operand0};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                ExpressionId{instruction.operand0});
+                expression);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Duration) {
-                RequestFatal(
+                ReportExpressionFault(
                     state,
                     RuntimeDiagnosticKind::TaskExpressionFault,
-                    source,
-                    task.action.value,
-                    position,
-                    static_cast<std::uint32_t>(result.fault));
+                    expression,
+                    result,
+                    true);
                 FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
@@ -2703,8 +3093,29 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             ScheduleTimed(state, task, state.program->Settings().actionGap);
             return true;
         case ActionOpcode::Set:
-            if (!ExecuteSet(state, task, instruction, position)) {
-                if (!state.fatalShutdownRequested.load(std::memory_order_acquire)) {
+        case ActionOpcode::Toggle:
+        case ActionOpcode::SetArrayElement:
+        case ActionOpcode::ToggleArrayElement:
+        case ActionOpcode::AppendArrayElement:
+        case ActionOpcode::PopArrayElement:
+        case ActionOpcode::ClearArray: {
+            const bool scalar = instruction.opcode == ActionOpcode::Set
+                || instruction.opcode == ActionOpcode::Toggle;
+            const bool succeeded = instruction.opcode == ActionOpcode::Set
+                ? ExecuteSet(state, task, instruction, position)
+                : instruction.opcode == ActionOpcode::Toggle
+                    ? ExecuteToggle(state, task, instruction, position)
+                    : ExecuteArrayAction(
+                    state,
+                    task,
+                    instruction,
+                    position,
+                    source);
+            if (!succeeded) {
+                const bool cancelled = task.generation
+                    != state.generation.load(std::memory_order_acquire);
+                if (scalar && !cancelled
+                    && !state.fatalShutdownRequested.load(std::memory_order_acquire)) {
                     PublishDiagnostic(
                         state,
                         RuntimeDiagnosticKind::TaskActionFault,
@@ -2712,28 +3123,20 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                         task.action.value,
                         position,
                         0,
-                        9U);
+                        instruction.opcode == ActionOpcode::Set ? 9U : 10U);
                 }
-                FinishTask(state, slot, false, RuntimeExecutionResult::Failed);
-                return true;
-            }
-            ++task.position;
-            break;
-        case ActionOpcode::Toggle:
-            if (!ExecuteToggle(state, instruction, position)) {
-                PublishDiagnostic(
+                FinishTask(
                     state,
-                    RuntimeDiagnosticKind::TaskActionFault,
-                    source,
-                    task.action.value,
-                    position,
-                    0,
-                    10U);
-                FinishTask(state, slot, false, RuntimeExecutionResult::Failed);
+                    slot,
+                    cancelled,
+                    cancelled
+                        ? RuntimeExecutionResult::Cancelled
+                        : RuntimeExecutionResult::Failed);
                 return true;
             }
             ++task.position;
             break;
+        }
         case ActionOpcode::Exec: {
             if (task.generation != state.generation.load(std::memory_order_acquire)) {
                 FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
@@ -2773,18 +3176,18 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             task.position = instruction.operand0;
             break;
         case ActionOpcode::JumpIfFalse: {
+            const ExpressionId expression{instruction.operand0};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                ExpressionId{instruction.operand0});
+                expression);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Boolean) {
-                RequestFatal(
+                ReportExpressionFault(
                     state,
                     RuntimeDiagnosticKind::TaskExpressionFault,
-                    source,
-                    task.action.value,
-                    position,
-                    static_cast<std::uint32_t>(result.fault));
+                    expression,
+                    result,
+                    true);
                 FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
@@ -2794,24 +3197,24 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             break;
         }
         case ActionOpcode::RepeatInit: {
+            const ExpressionId expression{instruction.operand1};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                ExpressionId{instruction.operand1});
+                expression);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Number) {
-                RequestFatal(
+                ReportExpressionFault(
                     state,
                     RuntimeDiagnosticKind::TaskExpressionFault,
-                    source,
-                    task.action.value,
-                    position,
-                    static_cast<std::uint32_t>(result.fault));
+                    expression,
+                    result,
+                    true);
                 FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
                 return true;
             }
             task.repeatFrames[instruction.operand0] = {
                 0U,
-                result.value.numberValue};
+                (std::max)(0.0, std::floor(result.value.numberValue))};
             ++task.position;
             break;
         }
@@ -3190,12 +3593,13 @@ RuntimeEvaluationResult ProgramRuntime::EvaluateExpression(
         return result;
     }
     Impl::State& state = *impl_->active;
+    const std::lock_guard inspectionLock(state.inspectionMutex);
     std::shared_lock pauseLock(state.mutableState.pauseMutex);
     std::shared_lock variableLock(state.mutableState.variableMutex);
     return impl_->Evaluate(
         state,
         expression,
-        state.dispatch.expressionScratch);
+        state.inspectionScratch);
 }
 
 bool ProgramRuntime::ReadUserState(

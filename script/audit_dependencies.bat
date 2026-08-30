@@ -9,6 +9,24 @@ set "INPUTWEAVER_DEPENDENCIES=bin\dependencies.tmp"
 set "INPUTWEAVER_CPP=-std=c++20 -DUNICODE -D_UNICODE -Isrc -MM"
 set "INPUTWEAVER_GENERATE=%INPUTWEAVER_CXX% %INPUTWEAVER_CPP%"
 set /a INPUTWEAVER_AUDITED=0
+set "INPUTWEAVER_FORBIDDEN_language=app compiler debug input platform program runtime support ui"
+set "INPUTWEAVER_FORBIDDEN_program=app compiler debug input language platform runtime ui"
+set "INPUTWEAVER_FORBIDDEN_compiler=app debug input platform runtime ui"
+set "INPUTWEAVER_FORBIDDEN_runtime=app compiler debug language platform ui"
+set "INPUTWEAVER_FORBIDDEN_debug=app compiler language platform ui"
+set "INPUTWEAVER_FORBIDDEN_app=compiler language platform ui"
+set "INPUTWEAVER_FORBIDDEN_ui_tui=compiler platform"
+set "INPUTWEAVER_FORBIDDEN_windows_support=app compiler debug input language program runtime ui"
+set "INPUTWEAVER_FORBIDDEN_windows_app=compiler language ui platform/windows/cli platform/windows/compiler platform/windows/diagnostics platform/windows/runtime platform/windows/tui"
+set "INPUTWEAVER_FORBIDDEN_windows_tui=compiler platform/windows/cli platform/windows/compiler platform/windows/diagnostics platform/windows/runtime"
+set "INPUTWEAVER_FORBIDDEN_windows_compiler=app debug input language runtime ui platform/windows/app platform/windows/cli platform/windows/debug platform/windows/diagnostics platform/windows/runtime platform/windows/tui"
+set "INPUTWEAVER_FORBIDDEN_windows_diagnostics=app compiler debug language ui platform/windows/app platform/windows/cli platform/windows/compiler platform/windows/debug platform/windows/runtime platform/windows/tui"
+set "INPUTWEAVER_FORBIDDEN_windows_debug=app compiler language ui platform/windows/app platform/windows/cli platform/windows/compiler platform/windows/diagnostics platform/windows/runtime platform/windows/tui"
+set "INPUTWEAVER_FORBIDDEN_windows_runtime=app compiler language ui platform/windows/app platform/windows/cli platform/windows/compiler platform/windows/tui"
+set "INPUTWEAVER_FORBIDDEN_compiler_cli=app debug input platform runtime"
+set "INPUTWEAVER_FORBIDDEN_runtime_cli=app compiler debug input language platform program runtime"
+set "INPUTWEAVER_FORBIDDEN_windows_compiler_cli=app compiler debug input language program runtime platform/windows/runtime"
+set "INPUTWEAVER_FORBIDDEN_windows_runtime_cli=app compiler debug input language program runtime"
 
 for /f "delims=" %%F in ('git ls-files --cached --others --exclude-standard "src/*.cpp"') do (
     if exist "%%F" (
@@ -28,45 +46,27 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*platform[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\support\*.cpp" "src\support\*.hpp" >nul 2>nul
+findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" /c:"#.*include.*app[/\]" /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*language[/\]" /c:"#.*include.*platform[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\support\*.cpp" "src\support\*.hpp" >nul 2>nul
 if not errorlevel 1 (
     echo Platform-independent support dependency boundary failed.
     exit /b 1
 )
 
-findstr /s /i /r /c:"#.*include.*app[/\]" "src\support\*.cpp" "src\support\*.hpp" >nul 2>nul
+findstr /s /i /r /c:"#.*include.*app[/\]" /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*platform[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*support[/\]" /c:"#.*include.*ui[/\]" "src\language\*.cpp" "src\language\*.hpp" >nul 2>nul
 if not errorlevel 1 (
-    echo Platform-independent support depends on the App module.
+    echo Language dependency boundary failed.
     exit /b 1
 )
 
-findstr /s /i /r /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*diagnostics[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
+findstr /s /i /r /c:"#.*include.*app[/\]" /c:"#.*include.*compiler[/\]" /c:"#.*include.*debug[/\]" /c:"#.*include.*diagnostics[/\]" /c:"#.*include.*input[/\]" /c:"#.*include.*language[/\]" /c:"#.*include.*program[/\]" /c:"#.*include.*runtime[/\]" /c:"#.*include.*ui[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
 if not errorlevel 1 (
     echo Windows support depends on a product module.
     exit /b 1
 )
 
-findstr /s /i /r /c:"#.*include.*app[/\]" "src\platform\windows\support\*.cpp" "src\platform\windows\support\*.hpp" >nul 2>nul
+findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" "src\language\*.cpp" "src\language\*.hpp" "src\compiler\*.cpp" "src\compiler\*.hpp" "src\program\*.cpp" "src\program\*.hpp" "src\runtime\*.cpp" "src\runtime\*.hpp" "src\debug\*.cpp" "src\debug\*.hpp" >nul
 if not errorlevel 1 (
-    echo Windows support depends on the App module.
-    exit /b 1
-)
-
-findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" "src\runtime\*.cpp" "src\runtime\*.hpp" >nul
-if not errorlevel 1 (
-    echo Runtime core contains a native Windows include.
-    exit /b 1
-)
-
-findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" "src\compiler\*.cpp" "src\compiler\*.hpp" >nul
-if not errorlevel 1 (
-    echo Compiler core contains a native Windows include.
-    exit /b 1
-)
-
-findstr /s /i /r /c:"#.*include.*windows" /c:"#.*include.*winuser" /c:"#.*include.*processthreadsapi" "src\program\*.cpp" "src\program\*.hpp" >nul
-if not errorlevel 1 (
-    echo Shared program code contains a native Windows include.
+    echo Platform-independent core contains a native Windows include.
     exit /b 1
 )
 
@@ -98,6 +98,7 @@ exit /b 0
 set "INPUTWEAVER_FILE=%~1"
 set "INPUTWEAVER_OWNER="
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/program/" set "INPUTWEAVER_OWNER=program"
+if /i "!INPUTWEAVER_FILE:~0,13!"=="src/language/" set "INPUTWEAVER_OWNER=language"
 if /i "!INPUTWEAVER_FILE:~0,13!"=="src/compiler/" set "INPUTWEAVER_OWNER=compiler"
 if /i "!INPUTWEAVER_FILE:~0,12!"=="src/runtime/" set "INPUTWEAVER_OWNER=runtime"
 if /i "!INPUTWEAVER_FILE:~0,10!"=="src/debug/" set "INPUTWEAVER_OWNER=debug"
@@ -118,7 +119,12 @@ if not defined INPUTWEAVER_OWNER (
     echo Unclassified tracked implementation: !INPUTWEAVER_FILE!
     exit /b 1
 )
-call :check_!INPUTWEAVER_OWNER! "!INPUTWEAVER_FILE!"
+call set "INPUTWEAVER_FORBIDDEN=%%INPUTWEAVER_FORBIDDEN_!INPUTWEAVER_OWNER!%%"
+if not defined INPUTWEAVER_FORBIDDEN (
+    echo Missing dependency policy for !INPUTWEAVER_OWNER!.
+    exit /b 1
+)
+call :check_dependencies "!INPUTWEAVER_FILE!"
 if errorlevel 1 exit /b 1
 set /a INPUTWEAVER_AUDITED+=1
 exit /b 0
@@ -131,172 +137,17 @@ if errorlevel 1 (
 )
 exit /b 0
 
-:check_program
+:check_dependencies
 call :generate "%~1"
 if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\runtime" /c:"src/runtime" /c:"src\input" /c:"src/input" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Shared program dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_compiler
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\input" /c:"src/input" /c:"src\runtime" /c:"src/runtime" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Compiler dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_runtime
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Runtime dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_debug
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Debug protocol dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_app
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo App dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_ui_tui
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform" /c:"src/platform" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo TUI dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_support
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\app" /c:"src/app" /c:"src\compiler" /c:"src/compiler" /c:"src\debug" /c:"src/debug" /c:"src\input" /c:"src/input" /c:"src\program" /c:"src/program" /c:"src\runtime" /c:"src/runtime" /c:"src\ui" /c:"src/ui" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows support dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_app
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows App dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_tui
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows TUI dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_compiler
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\input" /c:"src/input" /c:"src\runtime" /c:"src/runtime" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows compiler dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_diagnostics
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\compiler" /c:"src/platform/windows/compiler" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows diagnostics dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_debug
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\compiler" /c:"src/platform/windows/compiler" /c:"src\platform\windows\diagnostics" /c:"src/platform/windows/diagnostics" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows debug dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_runtime
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\ui" /c:"src/ui" /c:"src\platform\windows\cli" /c:"src/platform/windows/cli" /c:"src\platform\windows\compiler" /c:"src/platform/windows/compiler" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows runtime dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_compiler_cli
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\input" /c:"src/input" /c:"src\runtime" /c:"src/runtime" /c:"src\platform" /c:"src/platform" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Compiler CLI dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_runtime_cli
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\runtime" /c:"src/runtime" /c:"src\program" /c:"src/program" /c:"src\input" /c:"src/input" /c:"src\platform" /c:"src/platform" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Runtime CLI dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_compiler_cli
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\runtime" /c:"src/runtime" /c:"src\program" /c:"src/program" /c:"src\input" /c:"src/input" /c:"src\platform\windows\runtime" /c:"src/platform/windows/runtime" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows compiler CLI adapter dependency boundary failed for %~1.
-    exit /b 1
-)
-exit /b 0
-
-:check_windows_runtime_cli
-call :generate "%~1"
-if errorlevel 1 exit /b 1
-findstr /i /c:"src\compiler" /c:"src/compiler" /c:"src\runtime" /c:"src/runtime" /c:"src\program" /c:"src/program" /c:"src\input" /c:"src/input" "%INPUTWEAVER_DEPENDENCIES%" >nul
-if not errorlevel 1 (
-    echo Windows runtime CLI adapter dependency boundary failed for %~1.
-    exit /b 1
+for %%D in (%INPUTWEAVER_FORBIDDEN%) do (
+    set "INPUTWEAVER_FORWARD=%%D"
+    set "INPUTWEAVER_BACKWARD=%%D"
+    set "INPUTWEAVER_BACKWARD=!INPUTWEAVER_BACKWARD:/=\!"
+    findstr /i /c:"src/!INPUTWEAVER_FORWARD!" /c:"src\!INPUTWEAVER_BACKWARD!" "%INPUTWEAVER_DEPENDENCIES%" >nul
+    if not errorlevel 1 (
+        echo !INPUTWEAVER_OWNER! dependency boundary failed for %~1: %%D.
+        exit /b 1
+    )
 )
 exit /b 0

@@ -9,6 +9,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -79,6 +80,23 @@ void WriteLittleEndianU64(
     return hash;
 }
 
+[[nodiscard]] std::vector<std::uint8_t> DecodeHex(std::string_view text)
+{
+    const auto nibble = [](char value) noexcept -> std::uint8_t {
+        return value >= '0' && value <= '9'
+            ? static_cast<std::uint8_t>(value - '0')
+            : static_cast<std::uint8_t>(value - 'a' + 10);
+    };
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(text.size() / 2U);
+    for (std::size_t index = 0U; index + 1U < text.size(); index += 2U) {
+        bytes.push_back(static_cast<std::uint8_t>(
+            static_cast<std::uint8_t>(nibble(text[index]) << 4U)
+            | nibble(text[index + 1U])));
+    }
+    return bytes;
+}
+
 [[nodiscard]] std::shared_ptr<const inputweaver::CompiledProgram> FinalizeFixture(
     inputweaver::CompiledProgramStorage storage,
     std::string_view name)
@@ -105,6 +123,8 @@ void WriteLittleEndianU64(
     storage.strings.push_back("number-value");
     storage.strings.push_back("duration-value");
     storage.strings.push_back("fixture-command");
+    storage.strings.push_back("state-array");
+    storage.strings.push_back("number-array");
     storage.settings.target.kind = TargetSelectorKind::Executable;
     storage.settings.target.text = StringId{4U};
     storage.userValues.initialStates = {1U};
@@ -125,6 +145,16 @@ void WriteLittleEndianU64(
         {StringId{1U}, ValueRefId{0U}, {1U, 1U}},
         {StringId{2U}, ValueRefId{1U}, {2U, 1U}},
         {StringId{3U}, ValueRefId{2U}, {3U, 1U}},
+    };
+    storage.arrays = {
+        {ArrayElementType::State, {0U, 2U}},
+        {ArrayElementType::Number, {0U, 2U}},
+    };
+    storage.initialArrayStates = {0U, 1U};
+    storage.initialArrayNumbers = {1.0, 2.5};
+    storage.debugInfo.arrays = {
+        {StringId{5U}, ArrayId{0U}, {4U, 1U}},
+        {StringId{6U}, ArrayId{1U}, {5U, 1U}},
     };
     storage.numberConstants = {2.0};
     storage.durationConstants = {{7'000'000}};
@@ -179,11 +209,20 @@ void WriteLittleEndianU64(
             {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
         }));
     static_cast<void>(appendExpression(
-        ExpressionType::Boolean,
+        ExpressionType::ControlState,
         1U,
         {
-            {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 1U, 0U},
-            {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+            {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
+                1U, 0U},
+            {ExpressionOpcode::Return, ExpressionType::ControlState, 0U, 0U},
+        }));
+    static_cast<void>(appendExpression(
+        ExpressionType::ControlState,
+        1U,
+        {
+            {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+                1U, 0U},
+            {ExpressionOpcode::Return, ExpressionType::ControlState, 0U, 0U},
         }));
     const ExpressionId stateValue = appendExpression(
         ExpressionType::State,
@@ -248,6 +287,21 @@ void WriteLittleEndianU64(
             {ExpressionOpcode::Return, ExpressionType::Duration, 0U, 0U},
         }));
     static_cast<void>(appendExpression(
+        ExpressionType::Number,
+        1U,
+        {
+            {ExpressionOpcode::LoadArrayLength, ExpressionType::Number, 1U, 0U},
+            {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
+        }));
+    static_cast<void>(appendExpression(
+        ExpressionType::State,
+        1U,
+        {
+            {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+            {ExpressionOpcode::LoadArrayElement, ExpressionType::State, 0U, 0U},
+            {ExpressionOpcode::Return, ExpressionType::State, 0U, 0U},
+        }));
+    static_cast<void>(appendExpression(
         ExpressionType::Boolean,
         2U,
         {
@@ -299,7 +353,7 @@ void WriteLittleEndianU64(
         storage.expressionCode.size(),
         span);
 
-    storage.actionPrograms = {{{0U, 18U}, 1U, 1U, span}};
+    storage.actionPrograms = {{{0U, 23U}, 1U, 1U, span}};
     storage.actionCode = {
         {ActionOpcode::Press, 0U, 0U},
         {ActionOpcode::Release, 0U, 0U},
@@ -318,6 +372,11 @@ void WriteLittleEndianU64(
         {ActionOpcode::RepeatNext, 0U, 0U},
         {ActionOpcode::Yield, 0U, 0U},
         {ActionOpcode::Jump, 13U, 0U},
+        {ActionOpcode::SetArrayElement, 0U, numberValue.value, stateValue.value},
+        {ActionOpcode::ToggleArrayElement, 0U, numberValue.value, 0U},
+        {ActionOpcode::AppendArrayElement, 1U, numberValue.value, 0U},
+        {ActionOpcode::PopArrayElement, 0U, 0U, 0U},
+        {ActionOpcode::ClearArray, 1U, 0U, 0U},
         {ActionOpcode::End, 0U, 0U},
     };
     storage.debugInfo.actionInstructionSpans.assign(storage.actionCode.size(), span);
@@ -337,10 +396,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        11254232855236936778ULL,
-        2383582909433179149ULL,
-        400319365229262681ULL,
-        11912010901273324165ULL,
+        1410710887728642629ULL,
+        4282524413056078922ULL,
+        8660794663033244932ULL,
+        15510770940182174398ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -471,7 +530,7 @@ void TestWeavecRoundTrips()
         MakeOpcodeCoverageStorage(),
     };
     constexpr std::array<std::uint8_t, 8U> magic{
-        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x02U};
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x03U};
 
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto original = FinalizeFixture(storages[index], "weavec source fixture");
@@ -504,21 +563,59 @@ void TestWeavecRoundTrips()
             Check(EncodeWeavec(*decoded.program) == bytes,
                 "weavec round trip reproduces identical bytes");
         }
-        if (index == 0U) {
-            std::vector<std::uint8_t> version1 = bytes;
-            version1.resize(version1.size() - 4U);
-            version1[7] = 0x01U;
-            WriteLittleEndianU64(
-                version1,
-                8U,
-                static_cast<std::uint64_t>(
-                    version1.size() - kWeavecHeaderSize));
-            const DecodeWeavecResult decodedVersion1 = DecodeWeavec(version1);
-            Check(
-                decodedVersion1.program != nullptr
-                    && !decodedVersion1.decodeError.has_value(),
-                "WEAVEC format 1 remains readable");
-        }
+    }
+}
+
+void TestLegacyWeavecDecoding()
+{
+    using namespace inputweaver;
+    constexpr std::string_view version2Hex =
+        "574541564543000212030000000000000000000025000000000000000300000001ffffffff090000000600000080c3c90100"
+        "0000008096980000000000000000000000000000000000000000000100000000000000010000000e00000001000000000000"
+        "0001000000010000000000000001000000000100000011000000666978747572652e7461702e776561766503000000000000"
+        "0011000000250000000700000001000000070000003f00000000000000010000000700000040000000000000000100000007"
+        "00000045000000000000000100000007000000e0000000000000000100000007000000e10000000000000001000000070000"
+        "00e4000000000000000100000007000000e50000000000000007000000000000000101000000040200000001030000000204"
+        "000000020500000002060000000200000000000000000000000000000000000000000000000001000000000000000e000000"
+        "010100000000000000000000000e000000050103000000000000000a00040000000000000005010500000000000000080005"
+        "000000000000000001010000000000000009000c00000000000000050104000000000000000a000a00000000000000050106"
+        "0000000000000008000b000000000000000001010000000000000008000d00000000000000000100000000000000000b0100"
+        "0000000000000001000000000000000200000000000000010000001c00000007000000020000000201000000000000000e00"
+        "00000000000000000000000000000001000000020000000000000000010000000100000000000000ffffffff000000000000"
+        "00000000000000000000010000000000000000000000000100000001000000ffffffff00000000ffffffff01000000000000"
+        "1100000013000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        "00000000000000000000000000000000000000000000000000000000020000001c000000070000001c000000070000000000"
+        "0000";
+    const std::vector<std::uint8_t> version2 = DecodeHex(version2Hex);
+    const DecodeWeavecResult decodedVersion2 = DecodeWeavec(version2);
+    Check(
+        decodedVersion2.program != nullptr
+            && !decodedVersion2.decodeError.has_value(),
+        "WEAVEC format 2 golden artifact remains readable");
+
+    std::vector<std::uint8_t> version1 = version2;
+    version1.resize(version1.size() - 4U);
+    version1[7] = 0x01U;
+    WriteLittleEndianU64(
+        version1,
+        8U,
+        static_cast<std::uint64_t>(version1.size() - kWeavecHeaderSize));
+    const DecodeWeavecResult decodedVersion1 = DecodeWeavec(version1);
+    Check(
+        decodedVersion1.program != nullptr
+            && !decodedVersion1.decodeError.has_value(),
+        "WEAVEC format 1 golden artifact remains readable");
+
+    if (decodedVersion2.program != nullptr) {
+        Check(std::any_of(
+                  decodedVersion2.program->ExpressionCode().begin(),
+                  decodedVersion2.program->ExpressionCode().end(),
+                  [](const ExpressionInstruction& instruction) {
+                      return instruction.opcode == ExpressionOpcode::ReadControlState
+                          && instruction.type == ExpressionType::Boolean;
+                  }),
+            "legacy Boolean control reads retain their decoded representation");
     }
 }
 
@@ -587,7 +684,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t requirementsBooleanOffset =
-            kWeavecHeaderSize + 16U + 29U + (14U * 4U);
+            kWeavecHeaderSize + 16U + 29U + 68U;
         bytes[requirementsBooleanOffset] = 2U;
         const auto result = DecodeWeavec(bytes);
         Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
@@ -610,7 +707,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumRulesOffset =
-            kWeavecHeaderSize + 16U + 29U + (6U * 4U);
+            kWeavecHeaderSize + 16U + 29U + 36U;
         bytes[maximumRulesOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -622,7 +719,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumTasksOffset =
-            kWeavecHeaderSize + 16U + 29U + (8U * 4U);
+            kWeavecHeaderSize + 16U + 29U + 44U;
         bytes[maximumTasksOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -634,7 +731,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t firstStringByteOffset =
-            kWeavecHeaderSize + 16U + 29U + 57U + 4U + 4U;
+            kWeavecHeaderSize + 16U + 29U + 69U + 4U + 4U;
         bytes[firstStringByteOffset] = 0xc0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -830,6 +927,127 @@ void TestCompleteOpcodeCoverage()
             "repeat frame requirement is derived");
         Check(program->Requirements().maximumExpressionStackDepth == 2U,
             "expression stack requirement is derived");
+        Check(program->Requirements().arrayCount == 2U
+                && program->Requirements().initialArrayElementBytes
+                    == 2U + 2U * sizeof(double)
+                && program->Arrays().size() == 2U,
+            "array requirements and descriptors are retained");
+    }
+}
+
+void TestCorruptArrays()
+{
+    using namespace inputweaver;
+    const auto expectError = [](
+        auto mutate,
+        ProgramValidationErrorCode code,
+        std::string_view name) {
+        CompiledProgramStorage storage = MakeOpcodeCoverageStorage();
+        mutate(storage);
+        const FinalizeResult result = FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, code), name);
+    };
+    expectError([](CompiledProgramStorage& storage) {
+        storage.initialArrayStates[0] = 2U;
+    }, ProgramValidationErrorCode::Value,
+        "invalid initial array state is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        storage.initialArrayNumbers[0] =
+            (std::numeric_limits<double>::quiet_NaN)();
+    }, ProgramValidationErrorCode::Value,
+        "non-finite initial array number is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        storage.arrays[1].initialValues.count = 99U;
+    }, ProgramValidationErrorCode::Range,
+        "out-of-range array initializer span is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        storage.arrays[1].initialValues.count = 1U;
+    }, ProgramValidationErrorCode::Range,
+        "incomplete array initializer pool coverage is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        storage.arrays[0].elementType = static_cast<ArrayElementType>(99U);
+    }, ProgramValidationErrorCode::Value,
+        "unknown array element type is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        storage.debugInfo.arrays[1].array = ArrayId{0U};
+    }, ProgramValidationErrorCode::DebugInfo,
+        "duplicate array debug identity is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        const auto instruction = std::find_if(
+            storage.actionCode.begin(),
+            storage.actionCode.end(),
+            [](const ActionInstruction& value) {
+                return value.opcode == ActionOpcode::ToggleArrayElement;
+            });
+        instruction->operand0 = 99U;
+    }, ProgramValidationErrorCode::Action,
+        "invalid array action identity is diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        const auto instruction = std::find_if(
+            storage.expressionCode.begin(),
+            storage.expressionCode.end(),
+            [](const ExpressionInstruction& value) {
+                return value.opcode == ExpressionOpcode::LoadArrayLength;
+            });
+        instruction->operand1 = 1U;
+    }, ProgramValidationErrorCode::Expression,
+        "array expression unused operands are diagnosed");
+    expectError([](CompiledProgramStorage& storage) {
+        const auto instruction = std::find_if(
+            storage.actionCode.begin(),
+            storage.actionCode.end(),
+            [](const ActionInstruction& value) {
+                return value.opcode == ActionOpcode::AppendArrayElement;
+            });
+        instruction->operand2 = 1U;
+    }, ProgramValidationErrorCode::Action,
+        "array action unused operands are diagnosed");
+}
+
+void TestDeepExpressionStack()
+{
+    using namespace inputweaver;
+    constexpr std::uint32_t depth = 32U * 1024U;
+    CompiledProgramStorage storage = test::MakeTapFixtureStorage();
+    storage.numberConstants = {1.0};
+    storage.expressionCode.clear();
+    storage.expressionCode.reserve(2U * depth + 2U);
+    for (std::uint32_t index = 0U; index < depth; ++index) {
+        storage.expressionCode.push_back({
+            ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U});
+    }
+    for (std::uint32_t index = 1U; index < depth; ++index) {
+        storage.expressionCode.push_back({ExpressionOpcode::Binary,
+            ExpressionType::Number,
+            static_cast<std::uint32_t>(BinaryOperator::NumberAdd), 0U});
+    }
+    storage.expressionCode.insert(storage.expressionCode.end(), {
+        {ExpressionOpcode::PushNumber, ExpressionType::Number, 0U, 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
+    });
+    storage.expressions = {{{0U, static_cast<std::uint32_t>(
+        storage.expressionCode.size())}, ExpressionType::Boolean, depth, {}}};
+    storage.debugInfo.expressionInstructionSpans.assign(
+        storage.expressionCode.size(), {});
+    storage.controlRequirements.erase(
+        std::remove_if(
+            storage.controlRequirements.begin(),
+            storage.controlRequirements.end(),
+            [](const ControlRequirement& requirement) {
+                return requirement.uses
+                    == ToControlUseBits(ControlUse::PhysicalState);
+            }),
+        storage.controlRequirements.end());
+    storage.requirements = ComputeProgramRequirements(storage);
+
+    const FinalizeResult result = FinalizeCompiledProgram(std::move(storage));
+    Check(result.errors.empty() && result.program != nullptr,
+        "deep expression stacks validate with bounded state storage");
+    if (result.program != nullptr) {
+        Check(result.program->Requirements().maximumExpressionStackDepth == depth,
+            "deep expression stack depth remains exact");
     }
 }
 
@@ -867,7 +1085,7 @@ void TestCorruptBackwardJump()
 void TestBypassedYield()
 {
     auto storage = MakeOpcodeCoverageStorage();
-    storage.actionCode[12].operand1 = 18U;
+    storage.actionCode[10].operand1 = 16U;
     storage.requirements = inputweaver::ComputeProgramRequirements(storage);
     const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
     Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Action),
@@ -1063,12 +1281,15 @@ int main()
     TestRequiredFixtures();
     TestControlIdentityContract();
     TestWeavecRoundTrips();
+    TestLegacyWeavecDecoding();
     TestWeavecRejection();
     TestExitControlContract();
     TestPauseControlContract();
     TestCanonicalization();
     TestBuilderAndImmutableAccess();
     TestCompleteOpcodeCoverage();
+    TestCorruptArrays();
+    TestDeepExpressionStack();
     TestCorruptIdentifier();
     TestCorruptRange();
     TestCorruptBackwardJump();

@@ -28,6 +28,7 @@ echo [2/4] Building TuiTests.exe...
     "src\ui\tui\support\source_editor.cpp" ^
     "src\ui\tui\support\source_highlighter.cpp" ^
     "src\ui\tui\support\text_layout.cpp" ^
+    "src\language\lexer.cpp" ^
     "src\debug\debug_client.cpp" ^
     -o "bin\TuiTests.exe"
 if errorlevel 1 exit /b %errorlevel%

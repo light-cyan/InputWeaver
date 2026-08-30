@@ -61,7 +61,7 @@ The language scanner owns lexical correctness for ASCII syntax, non-ASCII commen
 
 Define one immutable catalog for settings, types, constants, event transitions, structural keywords, actions, intrinsic values, raw-control constructors, scan prefixes, and the contextual `length` property.
 
-Classify `on`, `off`, `held`, and `idle` as constants. Classify action names and the `Pipe` lexeme as actions. Parentheses and other delimiters have no semantic color role.
+Classify `on`, `off`, `held`, and `idle` as constants. Classify action names and the `Pipe` lexeme as actions. Classify rule arrows for the brighter operator color. Parentheses, expression operators, and other delimiters have no semantic color role.
 
 Expose `LookupWordRole` and `IsReservedLanguageWord`. The compiler reserved-name check combines this result with compiler-owned named-control reservations; the highlighter consumes the same roles directly.
 
@@ -129,7 +129,7 @@ Add `ExpressionType::ControlState`, `PushControlState`, `ReadControlState`, `Loa
 
 Add array-element set, array-element toggle, append, pop, and clear action opcodes. Add `operand2` to `ActionInstruction`; V1 and V2 decoding initializes it to zero.
 
-Add array count and initial allocated-array bytes to `ProgramRequirements`. Add getters for descriptors, initial pools, and array debug records.
+Add array count and initial array-element bytes to `ProgramRequirements` as a pre-allocation lower bound. Runtime activation separately accounts for the exact allocated pages and page-directory storage. Add getters for descriptors, initial pools, and array debug records.
 
 Keep scalar `UserValueLayout`, `ValueRef`, and scalar debug records unchanged in purpose. Do not add array domains to `ValueDomain`, array cases to `ValueType`, or duration-array tables.
 
@@ -167,7 +167,7 @@ Implement one `RuntimeArrayStorage` wrapper that owns the element type, logical 
 
 Normalize indexes in one helper: require a finite nonnegative number, apply `floor`, convert to the host index type, and then perform the logical-length bounds check. Return a precise normalization or bounds result to both expression evaluation and actions.
 
-Allocate a new element page before taking `variableMutex` when append reaches a page boundary. Commit the prepared page and logical length under the exclusive lock. Directory growth may allocate while that lock is held; it is rare, has strong rollback behavior, and cannot block the hook because hook dispatch uses `try_lock` and fails open.
+Prepare any required element page and expanded page directory before taking `variableMutex`. Commit the prepared storage and logical length under the exclusive lock, so array growth performs no allocation while mutable state is locked.
 
 Retain allocated pages after pop and clear. Reuse them on later append and release them only when the active program state is destroyed.
 
@@ -245,9 +245,9 @@ Keep application state and platform ports unchanged. The immutable debug client 
 
 Replace `SourceTokenKind::Function` with `Action`. Keep contextual roles for keyword, type, declared storage, constant, control, action, operator, string, and comment.
 
-Call the shared language scanner for every line and classify its lexemes. Retain only contextual work: declaration-name tracking, scalar versus array storage names, dotted control assembly, the event-transition use of `repeat`, and the `.length` property.
+Call the shared language scanner for every line and classify its lexemes. Retain only contextual work: declaration-name tracking, scalar versus array storage names, dotted control assembly, and the `.length` property.
 
-Render `on`, `off`, `held`, and `idle` as constants. Render known action names and `|` as actions. Leave parentheses, brackets, commas, colons, semicolons, and dots unclassified so they use ordinary source text. Render arrows and expression operators as operators.
+Render `on`, `off`, `held`, and `idle` as constants. Render known action names and `|` as actions. Render the contextual `length` property as a variable. Leave parentheses, brackets, commas, colons, semicolons, dots, and expression operators unclassified so they use ordinary source text. Render rule arrows with the brighter operator color.
 
 Delete keyword, type, intrinsic, constant, and arrow tables from the highlighter. Delete `IsWordStart`, `IsWordCharacter`, number scanning, string scanning, comment scanning, arrow scanning, dotted-name character scanning, and the call-shaped-name heuristic.
 

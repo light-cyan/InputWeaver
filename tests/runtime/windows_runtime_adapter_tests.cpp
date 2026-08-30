@@ -311,7 +311,7 @@ void TestWindowsControlCatalogCoverage()
         ToControlUseBits(ControlUse::EventSource)
         | ToControlUseBits(ControlUse::PhysicalState)
         | ToControlUseBits(ControlUse::OutputDownUp)
-        | ToControlUseBits(ControlUse::OutputRepeat);
+        | ToControlUseBits(ControlUse::OutputAgain);
     constexpr std::uint8_t inputUses =
         ToControlUseBits(ControlUse::EventSource)
         | ToControlUseBits(ControlUse::PhysicalState);
@@ -612,9 +612,9 @@ void TestModifierStateSeeding()
         {{2U, 2U}, ExpressionType::Boolean, 1U, source},
     };
     storage.expressionCode = {
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 0U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean, 1U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 1U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     };
     storage.exitControlRules = {

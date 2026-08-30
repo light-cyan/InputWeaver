@@ -60,14 +60,15 @@ Program data:
 
 Code dependencies:
 
-compiler -> program
+language  -> standard library
+compiler -> language + program
 runtime  -> program + input
 debug -> runtime + program + input
 app -> debug
 program  -> standard library
 ui/cli/compiler_cli -> compiler
 ui/cli/runtime_cli -> standard library
-ui/tui -> app + debug
+ui/tui -> language + app + debug
 platform/windows/cli/compiler_main -> ui/cli/compiler_cli
 platform/windows/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
 platform/windows/compiler -> compiler artifact-file interface + platform/windows/support
@@ -77,14 +78,15 @@ platform/windows/debug -> debug + runtime + program + input + platform/windows/s
 platform/windows/support -> Windows API
 platform/windows/tui -> ui/tui + app + platform/windows/app + platform/windows/support
 platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics + platform/windows/support
-all modules -> support only for domain-independent primitives
+all modules except language -> support only for domain-independent primitives
 ```
 
 `program` is the shared definition of the compiled artifact, not a call path between compiler and runtime. The platform-independent CLI layer owns option models, parsing, help, and compiler command presentation. Platform paths place the platform first and the owning module second. The Windows CLI module adapts `wmain` arguments and invokes the appropriate platform-independent CLI or Windows executor interface; the Windows runtime module owns target discovery and session assembly, while the platform-independent `runtime` module owns artifact activation and executable state.
 
 ## File Layout
 
-- `src/compiler/` owns Weave source loading, lexical analysis, parsing, semantic binding, type checking, lowering, compile diagnostics, `.weavec` encoding, and the platform-neutral artifact publication flow.
+- `src/language/` owns platform-independent Weave lexical analysis, string-literal decoding, and the shared language word catalog used by the compiler and source highlighter.
+- `src/compiler/` owns Weave source loading, parsing, semantic binding, type checking, lowering, compile diagnostics, `.weavec` encoding, and the platform-neutral artifact publication flow.
 - `src/program/` owns `CompiledProgram`, canonicalization, structural validation, deterministic dumps, and the shared `.weavec` encoding contract.
 - `src/input/` owns platform-independent live input and output types, transitions, origins, and decisions; platform-native raw events and injection recipes belong under `src/platform/<platform>/`.
 - `src/runtime/` owns platform-independent program activation, physical state, variable and `PAUSE` state, dispatch, expression evaluation, mappings, action execution, task scheduling, cancellation, output ownership, and runtime port interfaces.

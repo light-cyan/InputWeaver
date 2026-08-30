@@ -31,6 +31,7 @@ struct ProgramId final {
 struct StringIdTag;
 struct ControlRefIdTag;
 struct ValueRefIdTag;
+struct ArrayIdTag;
 struct ExpressionIdTag;
 struct ActionProgramIdTag;
 struct MappingIdTag;
@@ -39,6 +40,7 @@ struct MappingSlotIdTag;
 using StringId = ProgramId<StringIdTag>;
 using ControlRefId = ProgramId<ControlRefIdTag>;
 using ValueRefId = ProgramId<ValueRefIdTag>;
+using ArrayId = ProgramId<ArrayIdTag>;
 using ExpressionId = ProgramId<ExpressionIdTag>;
 using ActionProgramId = ProgramId<ActionProgramIdTag>;
 using MappingId = ProgramId<MappingIdTag>;
@@ -93,7 +95,7 @@ struct ControlRef final {
 
 enum class EventTransition : std::uint8_t {
     Down,
-    Repeat,
+    Again,
     Up,
 };
 
@@ -140,6 +142,7 @@ enum class ExpressionType : std::uint8_t {
     State,
     Number,
     Duration,
+    ControlState,
 };
 
 [[nodiscard]] constexpr ExpressionType ToExpressionType(
@@ -184,9 +187,40 @@ struct UserValueLayout final {
     std::vector<DurationValue> initialDurations;
 };
 
+enum class ArrayElementType : std::uint8_t {
+    State,
+    Number,
+};
+
+[[nodiscard]] constexpr ExpressionType ToExpressionType(
+    ArrayElementType type) noexcept
+{
+    switch (type) {
+    case ArrayElementType::State: return ExpressionType::State;
+    case ArrayElementType::Number: return ExpressionType::Number;
+    }
+    return ExpressionType::None;
+}
+
+struct ArrayDescriptor final {
+    ArrayElementType elementType{ArrayElementType::State};
+    TableRange initialValues{};
+};
+
+enum class ControlState : std::uint8_t {
+    Idle,
+    Held,
+};
+
 struct VariableDebugRecord final {
     StringId name{};
     ValueRefId value{};
+    SourceSpan declaration{};
+};
+
+struct ArrayDebugRecord final {
+    StringId name{};
+    ArrayId array{};
     SourceSpan declaration{};
 };
 
@@ -202,13 +236,16 @@ enum class ExpressionOpcode : std::uint8_t {
     PushNumber,
     PushDuration,
     LoadValue,
-    ReadControlHeld,
+    ReadControlState,
     Unary,
     Binary,
     Jump,
     JumpIfFalse,
     JumpIfTrue,
     Return,
+    PushControlState,
+    LoadArrayLength,
+    LoadArrayElement,
 };
 
 struct ExpressionInstruction final {
@@ -266,12 +303,18 @@ enum class ActionOpcode : std::uint8_t {
     RepeatNext,
     Yield,
     End,
+    SetArrayElement,
+    ToggleArrayElement,
+    AppendArrayElement,
+    PopArrayElement,
+    ClearArray,
 };
 
 struct ActionInstruction final {
     ActionOpcode opcode{};
     std::uint32_t operand0{};
     std::uint32_t operand1{};
+    std::uint32_t operand2{};
 };
 
 struct ActionProgramDescriptor final {
@@ -356,7 +399,7 @@ enum class ControlUse : std::uint8_t {
     EventSource = 1U << 0U,
     PhysicalState = 1U << 1U,
     OutputDownUp = 1U << 2U,
-    OutputRepeat = 1U << 3U,
+    OutputAgain = 1U << 3U,
 };
 
 [[nodiscard]] constexpr std::uint8_t ToControlUseBits(ControlUse use) noexcept {
@@ -372,6 +415,8 @@ struct ProgramRequirements final {
     std::uint32_t stateSlotCount{};
     std::uint32_t numberSlotCount{};
     std::uint32_t durationSlotCount{};
+    std::uint32_t arrayCount{};
+    std::uint64_t initialArrayElementBytes{};
     std::uint32_t mappingSlotCount{};
     std::uint32_t maximumExitRulesPerEvent{};
     std::uint32_t maximumPauseRulesPerEvent{};
@@ -390,6 +435,7 @@ struct ProgramRequirements final {
 
 struct ProgramDebugInfo final {
     std::vector<VariableDebugRecord> variables;
+    std::vector<ArrayDebugRecord> arrays;
     std::vector<RuleDebugRecord> rules;
     std::vector<SourceSpan> expressionInstructionSpans;
     std::vector<SourceSpan> actionInstructionSpans;
@@ -406,6 +452,9 @@ struct CompiledProgramStorage final {
     std::vector<ControlRequirement> controlRequirements;
     std::vector<ValueRef> valueRefs;
     UserValueLayout userValues;
+    std::vector<ArrayDescriptor> arrays;
+    std::vector<std::uint8_t> initialArrayStates;
+    std::vector<double> initialArrayNumbers;
 
     std::vector<double> numberConstants;
     std::vector<DurationValue> durationConstants;
@@ -460,6 +509,9 @@ public:
     [[nodiscard]] std::span<const ControlRequirement> ControlRequirements() const noexcept;
     [[nodiscard]] std::span<const ValueRef> ValueRefs() const noexcept;
     [[nodiscard]] const UserValueLayout& UserValues() const noexcept;
+    [[nodiscard]] std::span<const ArrayDescriptor> Arrays() const noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> InitialArrayStates() const noexcept;
+    [[nodiscard]] std::span<const double> InitialArrayNumbers() const noexcept;
     [[nodiscard]] std::span<const double> NumberConstants() const noexcept;
     [[nodiscard]] std::span<const DurationValue> DurationConstants() const noexcept;
     [[nodiscard]] std::span<const ExpressionDescriptor> Expressions() const noexcept;

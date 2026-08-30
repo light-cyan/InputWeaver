@@ -12,7 +12,7 @@ constexpr std::uint8_t kInputCapabilities =
     | ToControlUseBits(ControlUse::PhysicalState);
 constexpr std::uint8_t kOutputCapabilities =
     ToControlUseBits(ControlUse::OutputDownUp)
-    | ToControlUseBits(ControlUse::OutputRepeat);
+        | ToControlUseBits(ControlUse::OutputAgain);
 
 [[nodiscard]] WindowsVirtualKey KeyboardUsageToVirtualKey(
     std::uint32_t usage) noexcept

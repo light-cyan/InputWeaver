@@ -167,6 +167,13 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             std::move(program),
             options.effectiveTargetKind);
         if (!activation.activated) {
+            RuntimeDiagnosticRecord record{};
+            record.kind = RuntimeDiagnosticKind::ActivationFailure;
+            record.subject = activation.error.subject;
+            record.detail = static_cast<std::uint32_t>(activation.error.code);
+            record.required = activation.error.required;
+            record.available = activation.error.available;
+            (void)diagnosticLog.TryPushRuntime(record);
             errorMessage = FormatActivationError(activation.error);
             return false;
         }
@@ -641,6 +648,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 debugServer = std::make_unique<win32::WindowsDebugServer>();
             }
             RuntimeCapacities capacities{};
+            capacities.maximumArrayBytes = 64U * 1024U * 1024U;
             capacities.permitProcessLaunch = options.permitProcessLaunch;
             runtime = std::make_unique<ProgramRuntime>(
                 capacities,

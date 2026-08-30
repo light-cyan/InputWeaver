@@ -1,5 +1,6 @@
 #pragma once
 
+#include "array_storage.hpp"
 #include "runtime_types.hpp"
 
 #include <atomic>
@@ -14,6 +15,7 @@ struct RuntimeExpressionState final {
     std::span<const std::uint8_t> userStates;
     std::span<const double> userNumbers;
     std::span<const DurationValue> userDurations;
+    std::span<const RuntimeArrayStorage> arrays;
     std::span<const std::atomic<std::uint8_t>> physicalHeld;
     bool pauseOn{true};
     DurationValue tapDuration{};

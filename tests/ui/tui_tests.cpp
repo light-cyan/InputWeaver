@@ -423,6 +423,15 @@ void TestSupport()
                         && span.kind == kind;
                 });
     };
+    const auto isOrdinary = [](const auto& spans, std::size_t byteOffset) {
+        return std::none_of(
+            spans.begin(),
+            spans.end(),
+            [byteOffset](const auto& span) {
+                return byteOffset >= span.beginByte
+                    && byteOffset < span.endByte;
+            });
+    };
     constexpr std::string_view declaration =
         "state combat = off; // disabled";
     const auto declarationSpans =
@@ -446,7 +455,8 @@ void TestSupport()
             && declarationSpans.back().kind
                 == inputweaver::ui::tui::SourceTokenKind::Comment,
         "Weave highlighter classifies types, variables, constants, and comments");
-    constexpr std::string_view setting = "TARGET = GLOBAL;";
+    constexpr std::string_view setting =
+        "TARGET = GLOBAL; TAP_DURATION = ACTION_GAP; PAUSE";
     const auto settingSpans = inputweaver::ui::tui::HighlightWeaveLine(
         setting,
         highlightState);
@@ -460,9 +470,24 @@ void TestSupport()
                 setting,
                 settingSpans,
                 "GLOBAL",
-                inputweaver::ui::tui::SourceTokenKind::Constant),
-        "Weave highlighter separates builtin variables from constants");
-    constexpr std::string_view pauseState = "PAUSE[on]";
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "TAP_DURATION",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "ACTION_GAP",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "PAUSE",
+                inputweaver::ui::tui::SourceTokenKind::Variable),
+        "Weave highlighter renders intrinsic values as variables");
+    constexpr std::string_view pauseState = "PAUSE == on";
     const auto pauseSpans = inputweaver::ui::tui::HighlightWeaveLine(
         pauseState,
         highlightState);
@@ -477,7 +502,33 @@ void TestSupport()
                 pauseSpans,
                 "on",
                 inputweaver::ui::tui::SourceTokenKind::Constant),
-        "PAUSE uses variable color while its state predicate is a constant");
+        "PAUSE uses variable color while its state comparison is a constant");
+    constexpr std::string_view logicalExpression =
+        "@ not combat and on or off";
+    const auto logicalSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        logicalExpression,
+        highlightState);
+    Check(
+        hasSpan(
+            logicalExpression,
+            logicalSpans,
+            "combat",
+            inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                logicalExpression,
+                logicalSpans,
+                "on",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                logicalExpression,
+                logicalSpans,
+                "off",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && isOrdinary(logicalSpans, logicalExpression.find("not"))
+            && isOrdinary(logicalSpans, logicalExpression.find("and"))
+            && isOrdinary(logicalSpans, logicalExpression.find("or"))
+            && isOrdinary(logicalSpans, logicalExpression.find('@')),
+        "invalid tokens and logical operators remain ordinary source text");
     constexpr std::string_view action =
         "A:down => tap(B) | wait(20ms);";
     const auto actionSpans = inputweaver::ui::tui::HighlightWeaveLine(
@@ -488,22 +539,12 @@ void TestSupport()
             action,
             actionSpans,
             "tap",
-            inputweaver::ui::tui::SourceTokenKind::Function)
-            && hasSpan(
-                action,
-                actionSpans,
-                "(",
-                inputweaver::ui::tui::SourceTokenKind::Function)
-            && hasSpan(
-                action,
-                actionSpans,
-                ")",
-                inputweaver::ui::tui::SourceTokenKind::Function)
+                inputweaver::ui::tui::SourceTokenKind::Action)
             && hasSpan(
                 action,
                 actionSpans,
                 "|",
-                inputweaver::ui::tui::SourceTokenKind::Function)
+                inputweaver::ui::tui::SourceTokenKind::Action)
             && hasSpan(
                 action,
                 actionSpans,
@@ -528,8 +569,10 @@ void TestSupport()
                 action,
                 actionSpans,
                 "B",
-                inputweaver::ui::tui::SourceTokenKind::Control),
-        "Weave highlighter treats states, numbers, and durations as constants");
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && isOrdinary(actionSpans, action.find('('))
+            && isOrdinary(actionSpans, action.find(')')),
+        "Weave highlighter leaves delimiters ordinary while coloring semantic tokens");
     constexpr std::string_view upRule = "A:up ~> toggle;";
     const auto upSpans = inputweaver::ui::tui::HighlightWeaveLine(
         upRule,
@@ -544,13 +587,41 @@ void TestSupport()
                 upRule,
                 upSpans,
                 "toggle",
-                inputweaver::ui::tui::SourceTokenKind::Function)
+                inputweaver::ui::tui::SourceTokenKind::Action)
             && hasSpan(
                 upRule,
                 upSpans,
                 "~>",
                 inputweaver::ui::tui::SourceTokenKind::Operator),
-        "Weave highlighter treats up as a constant and pause toggle as a function");
+        "Weave highlighter treats up as a constant and pause toggle as an action");
+    constexpr std::string_view againRule =
+        "Windows.VirtualKey(0x41):again => repeat 2 do | end;";
+    const auto againSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        againRule,
+        highlightState);
+    Check(
+        hasSpan(
+            againRule,
+            againSpans,
+            "Windows",
+            inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                againRule,
+                againSpans,
+                "VirtualKey",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && isOrdinary(againSpans, againRule.find('.'))
+            && hasSpan(
+                againRule,
+                againSpans,
+                "again",
+                inputweaver::ui::tui::SourceTokenKind::Constant)
+            && hasSpan(
+                againRule,
+                againSpans,
+                "repeat",
+                inputweaver::ui::tui::SourceTokenKind::Keyword),
+        "raw controls, again transitions, and repeat loops use distinct colors");
     constexpr std::string_view mapping = "Mouse.Middle -> Keyboard.F6;";
     const auto mappingSpans = inputweaver::ui::tui::HighlightWeaveLine(
         mapping,
@@ -559,19 +630,159 @@ void TestSupport()
         hasSpan(
             mapping,
             mappingSpans,
-            "Mouse.Middle",
+            "Mouse",
             inputweaver::ui::tui::SourceTokenKind::Control)
             && hasSpan(
                 mapping,
                 mappingSpans,
-                "Keyboard.F6",
+                "Middle",
                 inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                mapping,
+                mappingSpans,
+                "Keyboard",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                mapping,
+                mappingSpans,
+                "F6",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && isOrdinary(mappingSpans, mapping.find('.'))
+            && isOrdinary(
+                mappingSpans,
+                mapping.find('.', mapping.find('.') + 1U))
             && hasSpan(
                 mapping,
                 mappingSpans,
                 "->",
                 inputweaver::ui::tui::SourceTokenKind::Operator),
-        "complete control names use the designed control color");
+        "control words use the designed color while dots remain ordinary");
+
+    inputweaver::ui::tui::SourceHighlightState contextualState{};
+    (void)inputweaver::ui::tui::HighlightWeaveLine(
+        "state /*",
+        contextualState);
+    constexpr std::string_view scalarDeclaration = "*/ enabled = off;";
+    const auto scalarDeclarationSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            scalarDeclaration,
+            contextualState);
+    (void)inputweaver::ui::tui::HighlightWeaveLine(
+        "number[]",
+        contextualState);
+    constexpr std::string_view arrayDeclaration = "values = [1];";
+    const auto arrayDeclarationSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            arrayDeclaration,
+            contextualState);
+    Check(
+        hasSpan(
+            scalarDeclaration,
+            scalarDeclarationSpans,
+            "enabled",
+            inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                arrayDeclaration,
+                arrayDeclarationSpans,
+                "values",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && isOrdinary(
+                arrayDeclarationSpans,
+                arrayDeclaration.find('['))
+            && isOrdinary(
+                arrayDeclarationSpans,
+                arrayDeclaration.find(']')),
+        "declarations cross lines while array brackets remain ordinary");
+
+    const auto arrayLengthSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            "values.length",
+            contextualState);
+    const auto scalarLengthSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            "enabled.length",
+            contextualState);
+    const auto bareLengthSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            "length",
+            contextualState);
+    Check(
+        arrayLengthSpans.size() == 2U
+            && arrayLengthSpans[0].kind
+                == inputweaver::ui::tui::SourceTokenKind::Variable
+            && arrayLengthSpans[1].kind
+                == inputweaver::ui::tui::SourceTokenKind::Variable
+            && scalarLengthSpans.size() == 1U
+            && bareLengthSpans.empty(),
+        "only array length properties use variable coloring");
+
+    (void)inputweaver::ui::tui::HighlightWeaveLine(
+        "state Windows = off;",
+        contextualState);
+    (void)inputweaver::ui::tui::HighlightWeaveLine(
+        "state Consumer = off;",
+        contextualState);
+    constexpr std::string_view dottedControls =
+        "Windows /* gap */ . Keyboard . IMEOn -> Consumer . VolumeUp;";
+    const auto dottedControlSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            dottedControls,
+            contextualState);
+    const std::size_t firstDot = dottedControls.find('.');
+    const std::size_t secondDot = dottedControls.find('.', firstDot + 1U);
+    const std::size_t thirdDot = dottedControls.find('.', secondDot + 1U);
+    Check(
+        hasSpan(
+            dottedControls,
+            dottedControlSpans,
+            "Windows",
+            inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                dottedControls,
+                dottedControlSpans,
+                "Keyboard",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                dottedControls,
+                dottedControlSpans,
+                "IMEOn",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                dottedControls,
+                dottedControlSpans,
+                "Consumer",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && hasSpan(
+                dottedControls,
+                dottedControlSpans,
+                "VolumeUp",
+                inputweaver::ui::tui::SourceTokenKind::Control)
+            && isOrdinary(dottedControlSpans, firstDot)
+            && isOrdinary(dottedControlSpans, secondDot)
+            && isOrdinary(dottedControlSpans, thirdDot),
+        "dotted control words cross trivia and override namespace variables without coloring dots");
+
+    std::string longDottedControl = "Root";
+    for (std::size_t segment = 0U; segment < 128U; ++segment) {
+        longDottedControl.append(".Segment");
+        longDottedControl.append(std::to_string(segment));
+    }
+    const auto longDottedSpans =
+        inputweaver::ui::tui::HighlightWeaveLine(
+            longDottedControl,
+            contextualState);
+    std::size_t coloredBytes{};
+    const bool allControlWords = std::all_of(
+        longDottedSpans.begin(),
+        longDottedSpans.end(),
+        [&coloredBytes](const auto& span) {
+            coloredBytes += span.endByte - span.beginByte;
+            return span.kind == inputweaver::ui::tui::SourceTokenKind::Control;
+        });
+    Check(
+        allControlWords && longDottedSpans.size() == 129U
+            && coloredBytes + 128U == longDottedControl.size(),
+        "long dotted controls classify each word once while leaving dots ordinary");
 }
 
 void TestController()
@@ -731,6 +942,32 @@ void TestController()
             0.0,
             {80'000'000}}},
     };
+    debugState->arrays.push_back({"empty", {}});
+    inputweaver::debug::DebugArrayValue gates{};
+    gates.elementType = inputweaver::ArrayElementType::State;
+    gates.length = 2U;
+    gates.prefixCount = 2U;
+    gates.elements[0].stateValue = true;
+    gates.elements[1].stateValue = false;
+    debugState->arrays.push_back({"gates", gates});
+    inputweaver::debug::DebugArrayValue values{};
+    values.elementType = inputweaver::ArrayElementType::Number;
+    values.length = 10U;
+    values.prefixCount = 4U;
+    values.suffixCount = 4U;
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        values.elements[index].numberValue = static_cast<double>(index + 1U);
+        values.elements[index + 4U].numberValue = static_cast<double>(index + 7U);
+    }
+    debugState->arrays.push_back({"values", values});
+    inputweaver::debug::DebugInputEvent againInput{};
+    againInput.captureUnixTimeMilliseconds = 1'725'000'000'100LL;
+    againInput.control.virtualKey = 0x41U;
+    againInput.transition = inputweaver::Transition::Down;
+    againInput.origin = inputweaver::InputOrigin::PhysicalCandidate;
+    againInput.disposition = inputweaver::debug::InputDisposition::Forward;
+    againInput.againDown = true;
+    debugState->recentInputEvents.push_back(againInput);
     inputweaver::debug::DebugPressedControl pressed{};
     pressed.control.virtualKey = 0xa2U;
     debugState->pressedControls.push_back(pressed);
@@ -743,7 +980,7 @@ void TestController()
     execution.triggerInput.origin = inputweaver::InputOrigin::PhysicalCandidate;
     execution.triggerInput.disposition =
         inputweaver::debug::InputDisposition::Suppress;
-    execution.conditionText = "combat[on] and LCtrl[held]";
+    execution.conditionText = "combat == on and LCtrl == held";
     execution.actionText = "tap(B) | set(count, count + 1)";
     execution.result = inputweaver::RuntimeExecutionResult::Completed;
     debugState->ruleExecutions.push_back(std::move(execution));
@@ -768,7 +1005,7 @@ void TestController()
             && debugText.find("MATCH ") != std::string::npos
             && debugText.find("LCtrl down (DROP)") != std::string::npos
             && debugText.find("LCtrl down PHY") == std::string::npos
-            && debugText.find("AS   combat[on] and LCtrl[held]")
+            && debugText.find("AS   combat == on and LCtrl == held")
                 != std::string::npos
             && debugText.find("ACT  tap(B) | set(count, count + 1)")
                 != std::string::npos,
@@ -777,8 +1014,8 @@ void TestController()
     const std::size_t event = FindAscii(minimumDebug, "EVENT ");
     const std::size_t conditionLabel = FindAscii(
         minimumDebug,
-        "AS   combat[on] and LCtrl[held]");
-    const std::size_t condition = FindAscii(minimumDebug, "combat[on]");
+        "AS   combat == on and LCtrl == held");
+    const std::size_t condition = FindAscii(minimumDebug, "combat == on");
     const std::size_t actionLabel = FindAscii(
         minimumDebug,
         "ACT  tap(B) | set(count, count + 1)");
@@ -809,8 +1046,36 @@ void TestController()
             && debugText.find("STATE") != std::string::npos
             && debugText.find("combat=off") != std::string::npos
             && debugText.find("count=2") != std::string::npos
-            && debugText.find("delay=80ms") != std::string::npos,
-        "HEALTH renders PAUSE and STATE renders all user value types");
+            && debugText.find("delay=80ms") != std::string::npos
+            && debugText.find("[gates=[") != std::string::npos,
+        "HEALTH renders PAUSE and STATE renders all scalar and array values");
+    const auto wideDebug = controller.Render(120U, 30U);
+    const std::string wideDebugText = CanvasText(wideDebug);
+    Check(
+        wideDebugText.find("[empty=[]]") != std::string::npos
+            && wideDebugText.find("[gates=[on, off]]") != std::string::npos
+            && wideDebugText.find("AGAIN") != std::string::npos,
+        "STATE shows short arrays and EVENTS uses the again transition label");
+    const std::size_t gatesPosition = FindAscii(wideDebug, "[gates=[on, off]]");
+    const std::size_t valuesPosition = FindAscii(wideDebug, "[values=[");
+    const std::size_t stateRightBorder = valuesPosition < wideDebug.Cells().size()
+        ? (valuesPosition / wideDebug.Width() + 1U) * wideDebug.Width() - 1U
+        : wideDebug.Cells().size();
+    Check(
+        gatesPosition < wideDebug.Cells().size()
+            && valuesPosition < wideDebug.Cells().size()
+            && gatesPosition / wideDebug.Width()
+                == valuesPosition / wideDebug.Width()
+            && valuesPosition - gatesPosition == 19U
+            && valuesPosition + 19U == stateRightBorder
+            && wideDebug.Cells()[stateRightBorder].codePoint == U'│',
+        "STATE array cells respect half-width columns and preserve the border");
+    const std::string veryWideDebugText = CanvasText(controller.Render(360U, 30U));
+    Check(
+        veryWideDebugText.find(
+            "[values=[1, 2, 3, 4, ..., 7, 8, 9, 10] length=10]")
+            != std::string::npos,
+        "STATE renders exact length with bounded prefix and suffix for long arrays");
     Check(
         stateNumber < stateControl
             && stateControl < minimumDebug.Cells().size(),

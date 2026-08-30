@@ -2,13 +2,11 @@
 
 #include "program/program_validator.hpp"
 
-#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -80,11 +78,20 @@ private:
         storage.settings.tapDuration = program_.tapDuration;
         storage.settings.actionGap = program_.actionGap;
         storage.userValues = std::move(program_.userValues);
+        storage.arrays = std::move(program_.arrays);
+        storage.initialArrayStates = std::move(program_.initialArrayStates);
+        storage.initialArrayNumbers = std::move(program_.initialArrayNumbers);
         for (const BoundVariableDebug& variable : program_.variables) {
             storage.debugInfo.variables.push_back({
                 InternString(variable.name),
                 InternValue(variable.value),
                 variable.declaration});
+        }
+        for (const BoundArrayDebug& array : program_.arrayDebug) {
+            storage.debugInfo.arrays.push_back({
+                InternString(array.name),
+                array.array,
+                array.declaration});
         }
     }
 
@@ -175,6 +182,13 @@ private:
                 expression.stateValue,
                 0U});
             break;
+        case BoundExpression::Kind::ControlStateConstant:
+            emit({
+                ExpressionOpcode::PushControlState,
+                ExpressionType::ControlState,
+                static_cast<std::uint32_t>(expression.controlStateValue),
+                0U});
+            break;
         case BoundExpression::Kind::NumberConstant:
             emit({
                 ExpressionOpcode::PushNumber,
@@ -196,11 +210,26 @@ private:
                 InternValue(expression.value).value,
                 0U});
             break;
-        case BoundExpression::Kind::ReadControlHeld:
+        case BoundExpression::Kind::ReadControlState:
             emit({
-                ExpressionOpcode::ReadControlHeld,
-                ExpressionType::Boolean,
+                ExpressionOpcode::ReadControlState,
+                ExpressionType::ControlState,
                 InternControl(expression.control).value,
+                0U});
+            break;
+        case BoundExpression::Kind::LoadArrayLength:
+            emit({
+                ExpressionOpcode::LoadArrayLength,
+                ExpressionType::Number,
+                expression.array.value,
+                0U});
+            break;
+        case BoundExpression::Kind::LoadArrayElement:
+            EmitExpression(*expression.left, code);
+            emit({
+                ExpressionOpcode::LoadArrayElement,
+                expression.type,
+                expression.array.value,
                 0U});
             break;
         case BoundExpression::Kind::Unary:
@@ -250,68 +279,6 @@ private:
         }
     }
 
-    [[nodiscard]] std::uint32_t ComputeMaximumExpressionStack(
-        const std::vector<ExpressionInstruction>& code) const
-    {
-        std::vector<std::optional<std::uint32_t>> depths(code.size());
-        depths[0] = 0U;
-        std::uint32_t maximum = 0U;
-        for (std::size_t index = 0U; index < code.size(); ++index) {
-            if (!depths[index].has_value()) {
-                continue;
-            }
-            std::uint32_t depth = *depths[index];
-            const ExpressionInstruction& instruction = code[index];
-            bool fallthrough = true;
-            switch (instruction.opcode) {
-            case ExpressionOpcode::PushBoolean:
-            case ExpressionOpcode::PushState:
-            case ExpressionOpcode::PushNumber:
-            case ExpressionOpcode::PushDuration:
-            case ExpressionOpcode::LoadValue:
-            case ExpressionOpcode::ReadControlHeld:
-                ++depth;
-                break;
-            case ExpressionOpcode::Unary:
-                break;
-            case ExpressionOpcode::Binary:
-                --depth;
-                break;
-            case ExpressionOpcode::Jump:
-                fallthrough = false;
-                MergeDepth(depths, instruction.operand0, depth);
-                break;
-            case ExpressionOpcode::JumpIfFalse:
-            case ExpressionOpcode::JumpIfTrue:
-                --depth;
-                MergeDepth(depths, instruction.operand0, depth);
-                break;
-            case ExpressionOpcode::Return:
-                --depth;
-                fallthrough = false;
-                break;
-            }
-            maximum = (std::max)(maximum, depth);
-            if (fallthrough && index + 1U < code.size()) {
-                MergeDepth(
-                    depths,
-                    static_cast<std::uint32_t>(index + 1U),
-                    depth);
-            }
-        }
-        return maximum;
-    }
-
-    static void MergeDepth(
-        std::vector<std::optional<std::uint32_t>>& depths,
-        std::uint32_t target,
-        std::uint32_t depth)
-    {
-        if (target < depths.size() && !depths[target].has_value()) {
-            depths[target] = depth;
-        }
-    }
-
     [[nodiscard]] ExpressionId LowerExpression(const BoundExpression& expression)
     {
         LocalExpressionCode local;
@@ -327,7 +294,7 @@ private:
             storage.expressionCode.size());
         const std::uint32_t count = static_cast<std::uint32_t>(
             local.instructions.size());
-        const std::uint32_t maximumStack = ComputeMaximumExpressionStack(
+        const std::uint32_t maximumStack = ComputeMaximumExpressionStackDepth(
             local.instructions);
         storage.expressionCode.insert(
             storage.expressionCode.end(),
@@ -352,7 +319,18 @@ private:
         std::uint32_t operand1,
         SourceSpan span)
     {
-        code.instructions.push_back({opcode, operand0, operand1});
+        EmitAction(code, opcode, operand0, operand1, 0U, span);
+    }
+
+    void EmitAction(
+        LocalActionCode& code,
+        ActionOpcode opcode,
+        std::uint32_t operand0,
+        std::uint32_t operand1,
+        std::uint32_t operand2,
+        SourceSpan span)
+    {
+        code.instructions.push_back({opcode, operand0, operand1, operand2});
         code.spans.push_back(span);
     }
 
@@ -407,6 +385,50 @@ private:
                     code,
                     ActionOpcode::Toggle,
                     InternValue(action.value).value,
+                    0U,
+                    action.span);
+                break;
+            case BoundAction::Kind::SetArrayElement: {
+                const ExpressionId index = LowerExpression(*action.index);
+                const ExpressionId value = LowerExpression(*action.expression);
+                EmitAction(
+                    code,
+                    ActionOpcode::SetArrayElement,
+                    action.array.value,
+                    index.value,
+                    value.value,
+                    action.span);
+                break;
+            }
+            case BoundAction::Kind::ToggleArrayElement:
+                EmitAction(
+                    code,
+                    ActionOpcode::ToggleArrayElement,
+                    action.array.value,
+                    LowerExpression(*action.index).value,
+                    action.span);
+                break;
+            case BoundAction::Kind::AppendArrayElement:
+                EmitAction(
+                    code,
+                    ActionOpcode::AppendArrayElement,
+                    action.array.value,
+                    LowerExpression(*action.expression).value,
+                    action.span);
+                break;
+            case BoundAction::Kind::PopArrayElement:
+                EmitAction(
+                    code,
+                    ActionOpcode::PopArrayElement,
+                    action.array.value,
+                    InternValue(action.value).value,
+                    action.span);
+                break;
+            case BoundAction::Kind::ClearArray:
+                EmitAction(
+                    code,
+                    ActionOpcode::ClearArray,
+                    action.array.value,
                     0U,
                     action.span);
                 break;
@@ -647,7 +669,7 @@ private:
                 uses[control.value] | ToControlUseBits(use));
         };
         for (const ExpressionInstruction instruction : storage.expressionCode) {
-            if (instruction.opcode == ExpressionOpcode::ReadControlHeld) {
+            if (instruction.opcode == ExpressionOpcode::ReadControlState) {
                 add(ControlRefId{instruction.operand0}, ControlUse::PhysicalState);
             }
         }
@@ -672,7 +694,7 @@ private:
         }
         for (const MappingDescriptor mapping : storage.mappings) {
             add(mapping.target, ControlUse::OutputDownUp);
-            add(mapping.target, ControlUse::OutputRepeat);
+            add(mapping.target, ControlUse::OutputAgain);
         }
         for (std::size_t index = 0U; index < uses.size(); ++index) {
             if (uses[index] != 0U) {

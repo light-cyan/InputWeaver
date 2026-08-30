@@ -402,6 +402,28 @@ void TestDiagnosticPrivacyAndBounds() {
                 != std::string::npos,
         "runtime launch JSON preserves the portable category and platform error");
 
+    inputweaver::RuntimeDiagnosticRecord activationFailure{};
+    activationFailure.kind = inputweaver::RuntimeDiagnosticKind::ActivationFailure;
+    activationFailure.subject = static_cast<std::uint32_t>(
+        inputweaver::RuntimeActivationSubject::ArrayBytes);
+    activationFailure.detail = static_cast<std::uint32_t>(
+        inputweaver::RuntimeActivationErrorCode::ArrayByteCapacity);
+    activationFailure.required = 8192U;
+    activationFailure.available = 4096U;
+    const std::string activationJson =
+        inputweaver::FormatRuntimeDiagnosticJson(activationFailure);
+    Check(
+        activationJson.find("\"event\":\"ActivationFailure\"")
+                != std::string::npos
+            && activationJson.find("\"subject\":5") != std::string::npos
+            && activationJson.find("\"activation_code\":5")
+                != std::string::npos
+            && activationJson.find("\"required\":8192")
+                != std::string::npos
+            && activationJson.find("\"available\":4096")
+                != std::string::npos,
+        "array activation JSON preserves its capacity dimension and values");
+
     inputweaver::DiagnosticLog disabledLog;
     std::wstring errorMessage;
     Check(

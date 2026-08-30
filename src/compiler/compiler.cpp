@@ -40,10 +40,8 @@ enum class RequestedProduct : std::uint8_t {
     RequestedProduct products)
 {
     DiagnosticSink diagnostics(&source);
-    const std::vector<Token> tokens = LexSource(source, limits, diagnostics);
-    const std::optional<SyntaxTree> syntax = ParseTokens(
+    const std::optional<SyntaxTree> syntax = ParseSource(
         source,
-        tokens,
         limits,
         diagnostics);
     if (!syntax.has_value() || diagnostics.HasErrors()) {

@@ -255,6 +255,85 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     return false;
 }
 
+[[nodiscard]] bool ValidArrayValue(const DebugArrayValue& value) noexcept
+{
+    const std::size_t prefix = value.prefixCount;
+    const std::size_t suffix = value.suffixCount;
+    if (prefix + suffix > kRuntimeDebugArrayPreviewCount) {
+        return false;
+    }
+    if (value.length <= kRuntimeDebugArrayPreviewCount) {
+        if (prefix != value.length || suffix != 0U) {
+            return false;
+        }
+    } else if (prefix != kRuntimeDebugArrayPreviewCount / 2U
+        || suffix != kRuntimeDebugArrayPreviewCount / 2U) {
+        return false;
+    }
+    if (value.elementType == ArrayElementType::Number) {
+        for (std::size_t index = 0U; index < prefix + suffix; ++index) {
+            if (std::isfinite(value.elements[index].numberValue) == 0) {
+                return false;
+            }
+        }
+    }
+    return value.elementType == ArrayElementType::State
+        || value.elementType == ArrayElementType::Number;
+}
+
+[[nodiscard]] bool WriteArrayValue(
+    ByteWriter& writer,
+    const DebugArrayValue& value)
+{
+    if (!ValidArrayValue(value)) {
+        return false;
+    }
+    WriteEnum(writer, value.elementType);
+    writer.U64(value.length);
+    writer.U8(value.prefixCount);
+    writer.U8(value.suffixCount);
+    const std::size_t count = static_cast<std::size_t>(value.prefixCount)
+        + static_cast<std::size_t>(value.suffixCount);
+    for (std::size_t index = 0U; index < count; ++index) {
+        if (value.elementType == ArrayElementType::State) {
+            writer.Boolean(value.elements[index].stateValue);
+        } else {
+            writer.Number(value.elements[index].numberValue);
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool ReadArrayValue(
+    ByteReader& reader,
+    DebugArrayValue& value) noexcept
+{
+    if (!ReadEnum(
+            reader,
+            value.elementType,
+            static_cast<std::uint16_t>(ArrayElementType::Number))
+        || !reader.U64(value.length)
+        || !reader.U8(value.prefixCount)
+        || !reader.U8(value.suffixCount)) {
+        return false;
+    }
+    const std::size_t count = static_cast<std::size_t>(value.prefixCount)
+        + static_cast<std::size_t>(value.suffixCount);
+    if (count > kRuntimeDebugArrayPreviewCount) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < count; ++index) {
+        if (value.elementType == ArrayElementType::State) {
+            if (!reader.Boolean(value.elements[index].stateValue)) {
+                return false;
+            }
+        } else if (!reader.Number(value.elements[index].numberValue)) {
+            return false;
+        }
+    }
+    return ValidArrayValue(value);
+}
+
 [[nodiscard]] bool EncodePayload(
     const Message& message,
     std::vector<std::uint8_t>& payload)
@@ -274,7 +353,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::RequestExecutorStop:
         return true;
     case MessageKind::CaptureStarted:
-        if (message.captureStarted.values.size() > kMaximumDebugValues) {
+        if (message.captureStarted.values.size() > kMaximumDebugValues
+            || message.captureStarted.arrays.size() > kMaximumDebugArrays) {
             return false;
         }
         writer.I64(message.captureStarted.captureUnixTimeMilliseconds);
@@ -286,6 +366,17 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
             }
             writer.String(value.name);
             if (!WriteValue(writer, value.value)) {
+                return false;
+            }
+        }
+        writer.U32(static_cast<std::uint32_t>(
+            message.captureStarted.arrays.size()));
+        for (const DebugNamedArray& array : message.captureStarted.arrays) {
+            if (array.name.size() > kMaximumDebugTextBytes) {
+                return false;
+            }
+            writer.String(array.name);
+            if (!WriteArrayValue(writer, array.value)) {
                 return false;
             }
         }
@@ -335,6 +426,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StateChanged:
         writer.U32(message.stateChanged.valueIndex);
         return WriteValue(writer, message.stateChanged.value);
+    case MessageKind::ArrayChanged:
+        writer.U32(message.arrayChanged.arrayIndex);
+        return WriteArrayValue(writer, message.arrayChanged.value);
     }
     return false;
 }
@@ -363,6 +457,17 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         message.captureStarted.values.resize(valueCount);
         for (DebugNamedValue& value : message.captureStarted.values) {
             if (!reader.String(value.name) || !ReadValue(reader, value.value)) {
+                return false;
+            }
+        }
+        std::uint32_t arrayCount{};
+        if (!reader.U32(arrayCount) || arrayCount > kMaximumDebugArrays) {
+            return false;
+        }
+        message.captureStarted.arrays.resize(arrayCount);
+        for (DebugNamedArray& array : message.captureStarted.arrays) {
+            if (!reader.String(array.name)
+                || !ReadArrayValue(reader, array.value)) {
                 return false;
             }
         }
@@ -405,6 +510,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StateChanged:
         return reader.U32(message.stateChanged.valueIndex)
             && ReadValue(reader, message.stateChanged.value);
+    case MessageKind::ArrayChanged:
+        return reader.U32(message.arrayChanged.arrayIndex)
+            && ReadArrayValue(reader, message.arrayChanged.value);
     }
     return false;
 }
@@ -423,6 +531,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::ExecutionEnded:
     case MessageKind::RuntimeIssue:
     case MessageKind::StateChanged:
+    case MessageKind::ArrayChanged:
         return true;
     }
     return false;

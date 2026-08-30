@@ -41,6 +41,17 @@ constexpr std::array<std::uint8_t, 8U> kWeavecMagicV2{
     0x02U,
 };
 
+constexpr std::array<std::uint8_t, 8U> kWeavecMagicV3{
+    0x57U,
+    0x45U,
+    0x41U,
+    0x56U,
+    0x45U,
+    0x43U,
+    0x00U,
+    0x03U,
+};
+
 class ByteWriter final {
 public:
     void U8(std::uint8_t value)
@@ -288,6 +299,8 @@ void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requiremen
     writer.U32(requirements.stateSlotCount);
     writer.U32(requirements.numberSlotCount);
     writer.U32(requirements.durationSlotCount);
+    writer.U32(requirements.arrayCount);
+    writer.U64(requirements.initialArrayElementBytes);
     writer.U32(requirements.mappingSlotCount);
     writer.U32(requirements.maximumExitRulesPerEvent);
     writer.U32(requirements.maximumPauseRulesPerEvent);
@@ -412,13 +425,21 @@ template <typename Value, typename ReadElement>
 
 [[nodiscard]] bool ReadRequirements(
     ByteReader& reader,
-    ProgramRequirements& requirements)
+    ProgramRequirements& requirements,
+    std::uint8_t formatVersion)
 {
     std::uint8_t requiresProcessLaunch = 0U;
     if (!reader.U32(requirements.stateSlotCount)
         || !reader.U32(requirements.numberSlotCount)
-        || !reader.U32(requirements.durationSlotCount)
-        || !reader.U32(requirements.mappingSlotCount)
+        || !reader.U32(requirements.durationSlotCount)) {
+        return false;
+    }
+    if (formatVersion >= 3U
+        && (!reader.U32(requirements.arrayCount)
+            || !reader.U64(requirements.initialArrayElementBytes))) {
+        return false;
+    }
+    if (!reader.U32(requirements.mappingSlotCount)
         || !reader.U32(requirements.maximumExitRulesPerEvent)
         || !reader.U32(requirements.maximumPauseRulesPerEvent)
         || !reader.U32(requirements.maximumRulesPerEvent)
@@ -487,6 +508,25 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         [](ByteWriter& output, DurationValue value) {
             WriteDuration(output, value);
         });
+    WriteVector(
+        writer,
+        program.Arrays(),
+        [](ByteWriter& output, const ArrayDescriptor& value) {
+            WriteEnum(output, value.elementType);
+            WriteRange(output, value.initialValues);
+        });
+    WriteVector(
+        writer,
+        program.InitialArrayStates(),
+        [](ByteWriter& output, std::uint8_t value) {
+            output.U8(value);
+        });
+    WriteVector(
+        writer,
+        program.InitialArrayNumbers(),
+        [](ByteWriter& output, double value) {
+            output.Number(value);
+        });
 
     WriteVector(writer, program.NumberConstants(), [](ByteWriter& output, double value) {
         output.Number(value);
@@ -532,6 +572,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             WriteEnum(output, value.opcode);
             output.U32(value.operand0);
             output.U32(value.operand1);
+            output.U32(value.operand2);
         });
 
     WriteVector(
@@ -608,6 +649,14 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         });
     WriteVector(
         writer,
+        program.DebugInfo().arrays,
+        [](ByteWriter& output, const ArrayDebugRecord& value) {
+            WriteId(output, value.name);
+            WriteId(output, value.array);
+            WriteSpan(output, value.declaration);
+        });
+    WriteVector(
+        writer,
         program.DebugInfo().expressionInstructionSpans,
         [](ByteWriter& output, SourceSpan value) {
             WriteSpan(output, value);
@@ -636,7 +685,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 {
     if (!ReadSource(reader, storage.source)
         || !ReadSettings(reader, storage.settings)
-        || !ReadRequirements(reader, storage.requirements)) {
+        || !ReadRequirements(reader, storage.requirements, formatVersion)) {
         return false;
     }
 
@@ -712,6 +761,44 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         return false;
     }
 
+    if (formatVersion >= 3U
+        && (!ReadVector(
+                reader,
+                storage.arrays,
+                limits,
+                9U,
+                [](ByteReader& input, ArrayDescriptor& value) {
+                    return ReadEnum(
+                               input,
+                               value.elementType,
+                               ArrayElementType::Number)
+                        && ReadRange(input, value.initialValues);
+                })
+            || !ReadVector(
+                reader,
+                storage.initialArrayStates,
+                limits,
+                1U,
+                [](ByteReader& input, std::uint8_t& value) {
+                    return input.U8(value);
+                })
+            || !ReadVector(
+                reader,
+                storage.initialArrayNumbers,
+                limits,
+                8U,
+                [](ByteReader& input, double& value) {
+                    return input.Number(value);
+                }))) {
+        return false;
+    }
+
+    const ExpressionType lastExpressionType = formatVersion >= 3U
+        ? ExpressionType::ControlState
+        : ExpressionType::Duration;
+    const ExpressionOpcode lastExpressionOpcode = formatVersion >= 3U
+        ? ExpressionOpcode::LoadArrayElement
+        : ExpressionOpcode::Return;
     if (!ReadVector(
             reader,
             storage.numberConstants,
@@ -733,9 +820,9 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             storage.expressions,
             limits,
             21U,
-            [](ByteReader& input, ExpressionDescriptor& value) {
+            [lastExpressionType](ByteReader& input, ExpressionDescriptor& value) {
                 return ReadRange(input, value.code)
-                    && ReadEnum(input, value.resultType, ExpressionType::Duration)
+                    && ReadEnum(input, value.resultType, lastExpressionType)
                     && input.U32(value.maximumStackDepth)
                     && ReadSpan(input, value.source);
             })
@@ -744,15 +831,31 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             storage.expressionCode,
             limits,
             10U,
-            [](ByteReader& input, ExpressionInstruction& value) {
-                return ReadEnum(input, value.opcode, ExpressionOpcode::Return)
-                    && ReadEnum(input, value.type, ExpressionType::Duration)
-                    && input.U32(value.operand0)
-                    && input.U32(value.operand1);
+            [formatVersion, lastExpressionOpcode, lastExpressionType](
+                ByteReader& input,
+                ExpressionInstruction& value) {
+                if (!ReadEnum(input, value.opcode, lastExpressionOpcode)
+                    || !ReadEnum(input, value.type, lastExpressionType)
+                    || !input.U32(value.operand0)
+                    || !input.U32(value.operand1)) {
+                    return false;
+                }
+                if (formatVersion >= 3U
+                    && value.opcode == ExpressionOpcode::ReadControlState
+                    && value.type != ExpressionType::ControlState) {
+                    return input.Fail(
+                        WeavecDecodeErrorCode::InvalidScalar,
+                        "V3 control-state reads require the ControlState result type");
+                }
+                return true;
             })) {
         return false;
     }
 
+    const ActionOpcode lastActionOpcode = formatVersion >= 3U
+        ? ActionOpcode::ClearArray
+        : ActionOpcode::End;
+    const std::size_t actionInstructionBytes = formatVersion >= 3U ? 13U : 9U;
     if (!ReadVector(
             reader,
             storage.actionPrograms,
@@ -768,11 +871,14 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             reader,
             storage.actionCode,
             limits,
-            9U,
-            [](ByteReader& input, ActionInstruction& value) {
-                return ReadEnum(input, value.opcode, ActionOpcode::End)
-                    && input.U32(value.operand0)
-                    && input.U32(value.operand1);
+            actionInstructionBytes,
+            [formatVersion, lastActionOpcode](ByteReader& input, ActionInstruction& value) {
+                if (!ReadEnum(input, value.opcode, lastActionOpcode)
+                    || !input.U32(value.operand0)
+                    || !input.U32(value.operand1)) {
+                    return false;
+                }
+                return formatVersion < 3U || input.U32(value.operand2);
             })) {
         return false;
     }
@@ -863,16 +969,31 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
     }
 
     if (!ReadVector(
-               reader,
-               storage.debugInfo.variables,
-               limits,
-               16U,
-               [](ByteReader& input, VariableDebugRecord& value) {
-                   return ReadId(input, value.name)
-                       && ReadId(input, value.value)
-                       && ReadSpan(input, value.declaration);
-            })
-        || !ReadVector(
+            reader,
+            storage.debugInfo.variables,
+            limits,
+            16U,
+            [](ByteReader& input, VariableDebugRecord& value) {
+                return ReadId(input, value.name)
+                    && ReadId(input, value.value)
+                    && ReadSpan(input, value.declaration);
+            })) {
+        return false;
+    }
+    if (formatVersion >= 3U
+        && !ReadVector(
+            reader,
+            storage.debugInfo.arrays,
+            limits,
+            16U,
+            [](ByteReader& input, ArrayDebugRecord& value) {
+                return ReadId(input, value.name)
+                    && ReadId(input, value.array)
+                    && ReadSpan(input, value.declaration);
+            })) {
+        return false;
+    }
+    if (!ReadVector(
             reader,
             storage.debugInfo.expressionInstructionSpans,
             limits,
@@ -919,7 +1040,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 std::vector<std::uint8_t> EncodeWeavec(const CompiledProgram& program)
 {
     ByteWriter writer;
-    writer.Raw(kWeavecMagicV2);
+    writer.Raw(kWeavecMagicV3);
     writer.U64(0U);
     EncodePayload(writer, program);
     const std::uint64_t payloadSize = static_cast<std::uint64_t>(
@@ -948,10 +1069,15 @@ DecodeWeavecResult DecodeWeavec(
                    kWeavecMagicV2.end(),
                    bytes.begin())) {
         formatVersion = 2U;
+    } else if (std::equal(
+                   kWeavecMagicV3.begin(),
+                   kWeavecMagicV3.end(),
+                   bytes.begin())) {
+        formatVersion = 3U;
     } else {
         std::size_t mismatch = 0U;
-        while (mismatch < kWeavecMagicV2.size()
-            && bytes[mismatch] == kWeavecMagicV2[mismatch]) {
+        while (mismatch < kWeavecMagicV3.size()
+            && bytes[mismatch] == kWeavecMagicV3[mismatch]) {
             ++mismatch;
         }
             result.decodeError = WeavecDecodeError{

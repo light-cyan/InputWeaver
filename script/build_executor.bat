@@ -33,6 +33,7 @@ echo [2/2] Building InputWeaver.exe...
     "src\platform\windows\diagnostics\diagnostic_log.cpp" ^
     "src\debug\debug_protocol.cpp" ^
     "src\runtime\artifact_loader.cpp" ^
+    "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
     "src\program\compiled_program.cpp" ^

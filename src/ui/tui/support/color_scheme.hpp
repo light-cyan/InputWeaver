@@ -41,7 +41,7 @@ struct ColorScheme final {
     RgbColor syntaxType{};
     RgbColor syntaxVariable{};
     RgbColor syntaxControl{};
-    RgbColor syntaxFunction{};
+    RgbColor syntaxAction{};
     RgbColor syntaxOperator{};
     RgbColor syntaxString{};
     RgbColor syntaxConstant{};

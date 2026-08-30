@@ -41,6 +41,7 @@ echo [3/4] Building InputWeaverHost.exe...
     "src\platform\windows\support\atomic_file.cpp" ^
     "src\platform\windows\support\command_line.cpp" ^
     "src\platform\windows\support\text_encoding.cpp" ^
+    "src\language\lexer.cpp" ^
     "src\platform\windows\debug\debug_client.cpp" ^
     "src\app\application.cpp" ^
     "src\app\entry_codec.cpp" ^

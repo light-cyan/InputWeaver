@@ -126,33 +126,49 @@ void AddExitControl(CompiledProgramStorage& storage)
     const std::uint32_t begin = static_cast<std::uint32_t>(
         storage.expressionCode.size());
     storage.expressions.push_back({
-        {begin, 14U},
+        {begin, 22U},
         ExpressionType::Boolean,
-        1U,
+        2U,
         {}});
     storage.expressionCode.insert(storage.expressionCode.end(), {
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
             leftControl.value, 0U},
-        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 4U, 0U},
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 8U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
             rightControl.value, 0U},
-        {ExpressionOpcode::Jump, ExpressionType::None, 5U, 0U},
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 9U, 0U},
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
-        {ExpressionOpcode::JumpIfFalse, ExpressionType::None, 12U, 0U},
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+        {ExpressionOpcode::JumpIfFalse, ExpressionType::None, 20U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
             leftShift.value, 0U},
-        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 10U, 0U},
-        {ExpressionOpcode::ReadControlHeld, ExpressionType::Boolean,
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::JumpIfTrue, ExpressionType::None, 18U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
             rightShift.value, 0U},
-        {ExpressionOpcode::Jump, ExpressionType::None, 11U, 0U},
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 19U, 0U},
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
-        {ExpressionOpcode::Jump, ExpressionType::None, 13U, 0U},
+        {ExpressionOpcode::Jump, ExpressionType::None, 21U, 0U},
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 0U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     });
     storage.debugInfo.expressionInstructionSpans.insert(
         storage.debugInfo.expressionInstructionSpans.end(),
-        14U,
+        22U,
         SourceSpan{});
 
     for (const ControlRefId control : {
@@ -224,7 +240,7 @@ CompiledProgramStorage MakeMappingFixtureStorage()
     storage.controlRequirements = {
         {ControlRefId{0U}, static_cast<std::uint8_t>(
             ToControlUseBits(ControlUse::OutputDownUp)
-            | ToControlUseBits(ControlUse::OutputRepeat))},
+            | ToControlUseBits(ControlUse::OutputAgain))},
         {ControlRefId{1U}, ToControlUseBits(ControlUse::EventSource)},
     };
     storage.mappingSlots.push_back({
@@ -255,7 +271,7 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
     static const std::string source =
         "TARGET = GLOBAL;\n"
         "state enabled = on;\n"
-        "F6:down when enabled[on] => repeat 2 do tap(F7) | end;\n";
+        "F6:down when enabled == on => repeat 2 do tap(F7) | end;\n";
     CompiledProgramStorage storage{};
     SetCommonSource(storage, "fixture.conditional-repeat.weave", source);
     storage.strings.push_back("enabled");
@@ -273,8 +289,9 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         SpanOf(source, "state enabled = on;")});
 
     storage.numberConstants.push_back(2.0);
-    const SourceSpan condition = SpanOf(source, "enabled[on]");
+    const SourceSpan condition = SpanOf(source, "enabled == on");
     const SourceSpan conditionValue{condition.beginByte, 7U};
+    const SourceSpan conditionConstant{condition.beginByte + 11U, 2U};
     const SourceSpan repeatLimit = SpanOf(source, "2");
     storage.expressions = {
         {{0U, 4U}, ExpressionType::Boolean, 2U, condition},
@@ -291,7 +308,7 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
     };
     storage.debugInfo.expressionInstructionSpans = {
         conditionValue,
-        condition,
+        conditionConstant,
         condition,
         condition,
         repeatLimit,
@@ -336,7 +353,7 @@ CompiledProgramStorage MakeConditionalRepeatFixtureStorage()
         RuleKind::Event,
         0U,
         SpanOf(source,
-            "F6:down when enabled[on] => repeat 2 do tap(F7) | end;")});
+        "F6:down when enabled == on => repeat 2 do tap(F7) | end;")});
     storage.eventBuckets.push_back({
         {ControlRefId{1U}, EventTransition::Down},
         {0U, 1U}});

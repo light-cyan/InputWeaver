@@ -21,6 +21,7 @@ echo [2/2] Building InputWeaverCompiler.exe...
     "src\platform\windows\compiler\artifact_file.cpp" ^
     "src\platform\windows\support\atomic_file.cpp" ^
     "src\ui\cli\compiler_cli.cpp" ^
+    "src\language\lexer.cpp" ^
     "src\compiler\compiler.cpp" ^
     "src\compiler\source.cpp" ^
     "src\compiler\frontend.cpp" ^

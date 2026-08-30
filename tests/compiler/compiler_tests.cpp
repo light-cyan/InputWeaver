@@ -87,7 +87,7 @@ void Check(bool condition, std::string_view name)
     return result.program;
 }
 
-void TestSourceAndLexer()
+void TestSourceAndLexicalDiagnostics()
 {
     using namespace inputweaver;
     using namespace inputweaver::compiler;
@@ -107,20 +107,8 @@ void TestSourceAndLexer()
     }
     Check(source->lineStarts.size() == 3U, "CRLF and CR line starts are derived");
     diagnostics.SetSource(&*source);
-    const std::vector<Token> tokens = LexSource(*source, {}, diagnostics);
-    Check(!diagnostics.HasErrors(), "UTF-8 comments are accepted");
-    Check(std::count_if(tokens.begin(), tokens.end(), [](const Token& token) {
-        return token.kind == TokenKind::ConsumeContinue;
-    }) == 1, "consume-continue arrow uses longest match");
-    Check(std::count_if(tokens.begin(), tokens.end(), [](const Token& token) {
-        return token.kind == TokenKind::ObserveContinue;
-    }) == 1, "observe-continue arrow uses longest match");
-    Check(std::count_if(tokens.begin(), tokens.end(), [](const Token& token) {
-        return token.kind == TokenKind::ConsumeStop;
-    }) == 1, "consume-stop arrow tokenizes");
-    Check(std::count_if(tokens.begin(), tokens.end(), [](const Token& token) {
-        return token.kind == TokenKind::ObserveStop;
-    }) == 1, "observe-stop arrow tokenizes");
+    const CompileOutput valid = CompileSource("lexer.weave", sourceBytes);
+    Check(valid.Succeeded(), "UTF-8 comments and all rule arrows compile");
 
     std::string invalidUtf8 = "// ";
     invalidUtf8.push_back(static_cast<char>(0xc0U));
@@ -161,28 +149,6 @@ void TestSourceAndLexer()
         CompileDiagnosticCode::UnterminatedString),
         "unterminated strings are rejected");
 
-    DiagnosticSink escapedDiagnostics;
-    const std::optional<SourceFile> escapedSource = MakeSourceFile(
-        "escaped.weave",
-        R"weave(TARGET = "a\\b\"c\nd\re\tf";)weave",
-        {},
-        escapedDiagnostics);
-    Check(escapedSource.has_value(), "escaped string source loads");
-    if (escapedSource.has_value()) {
-        escapedDiagnostics.SetSource(&*escapedSource);
-        const std::vector<Token> escapedTokens = LexSource(
-            *escapedSource,
-            {},
-            escapedDiagnostics);
-        const auto token = std::find_if(
-            escapedTokens.begin(),
-            escapedTokens.end(),
-            [](const Token& candidate) { return candidate.kind == TokenKind::String; });
-        Check(!escapedDiagnostics.HasErrors()
-                && token != escapedTokens.end()
-                && token->text == "a\\b\"c\nd\re\tf",
-            "the complete cooked string escape set decodes exactly");
-    }
     const CompileOutput invalidEscape = CompileSource(
         "escape.weave",
         "TARGET = \"bad\\q\";");
@@ -262,10 +228,10 @@ void TestParserAndRecovery()
         "state enabled = on;\n"
         "number count = -2.5;\n"
         "duration delay = 1.5s;\n"
-        "A -> B when enabled[on];\n"
-        "pause Pause:down when LCtrl[held] ~> toggle;\n"
+        "A -> B when enabled == on;\n"
+        "pause Pause:down when LCtrl == held ~> toggle;\n"
         "F1:down => | tap(A)tap(B) || gap()\n"
-        "if enabled[on] then repeat count do tap(C) end else while F1[held] do | end end;\n",
+        "if enabled == on then repeat count do tap(C) end else while F1 == held do | end end;\n",
         "complete parser grammar");
     Check(valid.Succeeded(), "adjacent and nested action syntax is accepted");
 
@@ -335,7 +301,7 @@ void TestParserAndRecovery()
     const CompileOutput explicitExit = CompileGood(
         "explicit-exit.weave",
         "TARGET=GLOBAL; state enabled=on; "
-        "exit F10:down when enabled[on]; exit F10:down; F1:down =>;",
+        "exit F10:down when enabled == on; exit F10:down; F1:down =>;",
         "explicit exit rule");
     const auto explicitExitProgram = DecodeGood(explicitExit, "explicit exit rule");
     if (explicitExitProgram != nullptr) {
@@ -405,7 +371,9 @@ void TestBindingDiagnostics()
             CompileDiagnosticCode::DuplicateSymbol},
         {"reserved variable", "state F1=on;",
             CompileDiagnosticCode::ReservedName},
-        {"unknown value", "F1:down when missing[on] =>;",
+        {"reserved expression operator", "state and=on;",
+            CompileDiagnosticCode::ReservedName},
+        {"unknown value", "F1:down when missing[0] == on =>;",
             CompileDiagnosticCode::UnknownValue},
         {"unknown control", "Unknown.Key:down =>;",
             CompileDiagnosticCode::UnknownControl},
@@ -428,7 +396,7 @@ void TestBindingDiagnostics()
         {"reachable or fault", "F1:down when (1 == 2) or (1 / 0 > 0) =>;",
             CompileDiagnosticCode::ConstantEvaluation},
         {"dynamic short-circuit fault",
-            "state enabled=on; F1:down when enabled[on] and (1 / 0 > 0) =>;",
+            "state enabled=on; F1:down when enabled == on and (1 / 0 > 0) =>;",
             CompileDiagnosticCode::ConstantEvaluation},
         {"empty target", "TARGET=\"\";",
             CompileDiagnosticCode::EmptyString},
@@ -541,7 +509,7 @@ void TestControlCatalogAndV2()
 
     const CompileOutput namespaceVariables = CompileGood(
         "namespace-values.weave",
-        "state Keyboard=on; state Windows=off; F1:down when Keyboard[on] => toggle(Windows);",
+        "state Keyboard=on; state Windows=off; F1:down when Keyboard == on => toggle(Windows);",
         "namespace-prefix variable names");
     Check(namespaceVariables.Succeeded(),
         "control namespace prefixes remain available as user identifiers");
@@ -617,16 +585,20 @@ void TestLoweringCoverage()
     const std::string source =
         "TARGET=GLOBAL; TAP_DURATION=0ms; ACTION_GAP=1ms;\n"
         "state s=on; state t=off; number n=4; duration d=2s;\n"
-        "A -> B when s[on];\n"
+        "state[] flags=[off,on]; number[] values=[1,2.5];\n"
+        "A -> B when s == on;\n"
         "pause F12:down ~> toggle;\n"
-        "F1:down when not t[on] and (n < 5 or n <= 5) =>>\n"
+        "F1:down when not (t == on) and (n < 5 or n <= 5) "
+        "and flags[0] == off and values.length == 2 =>>\n"
         "press(C) release(C) tap(D) wait(d) wait(1ms) | gap()\n"
         "set(n, +n + -n - n * n / n % n)\n"
         "set(d, d + d - d) set(d, d * n) set(d, n * d) set(d, d / n)\n"
         "set(s, on) toggle(t) exec(\"tool.exe\")\n"
+        "set(flags[0.9], on) toggle(flags[1]) append(flags, off) pop(flags, s) clear(flags)\n"
+        "set(values[0], n) append(values, n) pop(values, n) clear(values)\n"
         "if n > 0 and n >= 0 and n != 1 and d == d then tap(E) else tap(F) end\n"
-        "repeat n do tap(G) end while A[idle] do tap(H) end;\n"
-        "F1:repeat ~>>; F1:up ~>; F2:down =>;\n";
+        "repeat n do tap(G) end while A == idle do tap(H) end;\n"
+        "F1:again ~>>; F1:up ~>; F2:down =>;\n";
     const auto output = CompileGood("coverage.weave", source, "lowering coverage");
     const auto program = DecodeGood(output, "lowering coverage");
     if (program == nullptr) {
@@ -646,7 +618,7 @@ void TestLoweringCoverage()
         }
     }
     for (std::uint32_t value = 0U;
-         value <= static_cast<std::uint32_t>(ExpressionOpcode::Return);
+         value <= static_cast<std::uint32_t>(ExpressionOpcode::LoadArrayElement);
          ++value) {
         Check(expressionOpcodes.contains(static_cast<ExpressionOpcode>(value)),
             "every expression opcode is lowered");
@@ -669,7 +641,7 @@ void TestLoweringCoverage()
         actionOpcodes.insert(instruction.opcode);
     }
     for (std::uint32_t value = 0U;
-         value <= static_cast<std::uint32_t>(ActionOpcode::End);
+         value <= static_cast<std::uint32_t>(ActionOpcode::ClearArray);
          ++value) {
         Check(actionOpcodes.contains(static_cast<ActionOpcode>(value)),
             "every action opcode is lowered");
@@ -690,6 +662,11 @@ void TestLoweringCoverage()
         "exec derives the process-launch requirement");
     Check(program->Requirements().maximumRepeatFramesPerTask == 1U,
         "repeat frame requirement is derived");
+    Check(program->Arrays().size() == 2U
+            && program->InitialArrayStates().size() == 2U
+            && program->InitialArrayNumbers().size() == 2U
+            && program->DebugInfo().arrays.size() == 2U,
+        "array declarations and debug names lower into the V3 artifact");
 
     std::set<std::uint32_t> ordinals;
     for (const CompiledRule& rule : program->Rules()) {
@@ -701,6 +678,39 @@ void TestLoweringCoverage()
     Check(ordinals.size() == program->Rules().size()
             + program->PauseControlRules().size(),
         "source ordinals are globally unique across rule channels");
+}
+
+void TestArrayDiagnostics()
+{
+    using namespace inputweaver::compiler;
+    struct Case final {
+        std::string_view name;
+        std::string source;
+        CompileDiagnosticCode code;
+    };
+    const std::vector<Case> cases{
+        {"duration array", "duration[] delays=[1ms];",
+            CompileDiagnosticCode::ExpectedToken},
+        {"state bracket query", "state combat=off; F1:down when combat[on] == on =>;",
+            CompileDiagnosticCode::TypeMismatch},
+        {"duration index", "state[] flags=[off]; duration d=1ms; F1:down when flags[d] == off =>;",
+            CompileDiagnosticCode::TypeMismatch},
+        {"append mismatch", "state[] flags=[]; F1:down => append(flags, 1);",
+            CompileDiagnosticCode::TypeMismatch},
+        {"pop mismatch", "state[] flags=[on]; number n=0; F1:down => pop(flags, n);",
+            CompileDiagnosticCode::TypeMismatch},
+        {"clear scalar", "state flag=off; F1:down => clear(flag);",
+            CompileDiagnosticCode::TypeMismatch},
+    };
+    for (const Case& test : cases) {
+        const CompileOutput output = CompileSource(
+            std::string(test.name) + ".weave",
+            test.source);
+        Check(!output.Succeeded(), std::string(test.name) + " fails");
+        Check(HasDiagnostic(output.diagnostics, test.code),
+            std::string(test.name) + " has the expected diagnostic family");
+        Check(output.artifact.empty(), std::string(test.name) + " emits no artifact");
+    }
 }
 
 void TestGapAndEmptyActionSemantics()
@@ -723,7 +733,7 @@ void TestGapAndEmptyActionSemantics()
 
     const auto empty = CompileGood(
         "empty.weave",
-        "F1:down =>; F1:repeat =>>; F1:up ~>; F2:down ~>>;",
+        "F1:down =>; F1:again =>>; F1:up ~>; F2:down ~>>;",
         "empty action rules");
     const auto emptyProgram = DecodeGood(empty, "empty action rules");
     if (emptyProgram != nullptr) {
@@ -773,7 +783,7 @@ void TestGoldenFixtureSemantics()
         test::MakeConditionalRepeatFixtureStorage();
     repeatStorage.strings.insert(
         repeatStorage.strings.end(),
-        {"repeat 2 do tap(F7) | end", "enabled[on]"});
+        {"repeat 2 do tap(F7) | end", "enabled == on"});
     repeatStorage.debugInfo.rules.push_back({
         0U,
         StringId{3U},
@@ -782,7 +792,7 @@ void TestGoldenFixtureSemantics()
         "conditional repeat",
         "fixture.conditional-repeat.weave",
         "TARGET = GLOBAL;\nstate enabled = on;\n"
-        "F6:down when enabled[on] => repeat 2 do tap(F7) | end;\n",
+        "F6:down when enabled == on => repeat 2 do tap(F7) | end;\n",
         std::move(repeatStorage)});
     fixtures.push_back({
         "pause",
@@ -939,11 +949,12 @@ void TestDiagnosticFormatting()
 
 int main()
 {
-    TestSourceAndLexer();
+    TestSourceAndLexicalDiagnostics();
     TestParserAndRecovery();
     TestBindingDiagnostics();
     TestControlCatalogAndV2();
     TestLoweringCoverage();
+    TestArrayDiagnostics();
     TestGapAndEmptyActionSemantics();
     TestGoldenFixtureSemantics();
     TestArtifactAndFileCommands();

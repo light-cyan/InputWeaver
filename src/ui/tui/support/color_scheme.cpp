@@ -207,7 +207,7 @@ private:
     INPUTWEAVER_COLOR_FIELD(23U, "syntax_type", syntaxType)
     INPUTWEAVER_COLOR_FIELD(24U, "syntax_variable", syntaxVariable)
     INPUTWEAVER_COLOR_FIELD(25U, "syntax_control", syntaxControl)
-    INPUTWEAVER_COLOR_FIELD(26U, "syntax_function", syntaxFunction)
+    INPUTWEAVER_COLOR_FIELD(26U, "syntax_action", syntaxAction)
     INPUTWEAVER_COLOR_FIELD(27U, "syntax_operator", syntaxOperator)
     INPUTWEAVER_COLOR_FIELD(28U, "syntax_string", syntaxString)
     INPUTWEAVER_COLOR_FIELD(29U, "syntax_constant", syntaxConstant)

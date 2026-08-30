@@ -13,22 +13,28 @@ ACTION_GAP = 10ms;
 
 state combat = off;
 number count = 0;
+number popped = 0;
 duration fireGap = 80ms;
+number[] values = [2, 4, 8];
+state[] gates = [on, off];
 
-A -> B when combat[on];
+A -> B when combat == on;
 
-A:down when count < 5 ~> tap(B) | set(count, count + 1);
+A:down when count < values.length ~> tap(B) | set(count, count + values[count]);
 A:down when count >= 5 ~> tap(C) | set(count, count - 1);
 
 F1:down =>
-    if combat[on] then
+    if combat == on and F1 == held then
         repeat 3 do tap(Mouse.Left) | end
     else
-        toggle(combat)
+        append(values, count)
     end;
 
+F2:down => set(gates[0], on) | toggle(gates[1]);
+F3:down => pop(values, popped);
+
 pause Pause:down ~> toggle;
-exit F12:down when LCtrl[held] and LShift[held];
+exit F12:down when LCtrl == held and LShift == held;
 ```
 
 ## 词法规则
@@ -43,9 +49,11 @@ exit F12:down when LCtrl[held] and LShift[held];
 
 ### 名称和保留字
 
-所有名称区分大小写。标识符以 ASCII 字母开头，后续字符可以是 ASCII 字母、十进制数字或 `_`。用户变量不能使用语言关键字、内蕴名称、扫描码限定符或无前缀的命名控制名。
+所有名称区分大小写。标识符以 ASCII 字母开头，后续字符可以是 ASCII 字母、十进制数字或 `_`。用户变量和数组不能使用语言关键字、内蕴名称、扫描码限定符或无前缀的命名控制名。
 
-保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`exit`、`pause`、`when`、`on`、`off`、`toggle`、`down`、`repeat`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`held`、`idle`、`E0` 和 `E1`。
+保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`exit`、`pause`、`when`、`on`、`off`、`held`、`idle`、`toggle`、`down`、`again`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`append`、`pop`、`clear`、`length`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`repeat`、`E0` 和 `E1`。
+
+`on`、`off`、`held` 和 `idle` 都是常量。
 
 ### 字面量
 
@@ -56,6 +64,8 @@ exit F12:down when LCtrl[held] and LShift[held];
 十六进制整数只允许作为原始控制构造器的参数，使用小写 `0x` 前缀，后面至少有一个十六进制数字。
 
 字符串字面量使用双引号。完整的转义集合是 `\\`、`\"`、`\n`、`\r` 和 `\t`。字符串中不能出现物理换行或非 ASCII 源字符。
+
+数组字面量使用方括号，包含以逗号分隔的同类型字面量；`[]` 表示空数组。
 
 ## 形式语法
 
@@ -71,6 +81,8 @@ top-level-item =
     | state-declaration
     | number-declaration
     | duration-declaration
+    | state-array-declaration
+    | number-array-declaration
     | mapping
     | exit-rule
     | pause-rule
@@ -85,6 +97,10 @@ action-gap-setting   = "ACTION_GAP", "=", duration-literal, ";" ;
 state-declaration    = "state", identifier, "=", state-literal, ";" ;
 number-declaration   = "number", identifier, "=", signed-number-literal, ";" ;
 duration-declaration = "duration", identifier, "=", duration-literal, ";" ;
+state-array-declaration  = "state", "[", "]", identifier, "=", state-array-literal, ";" ;
+number-array-declaration = "number", "[", "]", identifier, "=", number-array-literal, ";" ;
+state-array-literal      = "[", [ state-literal, { ",", state-literal } ], "]" ;
+number-array-literal     = "[", [ signed-number-literal, { ",", signed-number-literal } ], "]" ;
 
 mapping = control-reference, "->", control-reference, [ condition ], ";" ;
 
@@ -96,7 +112,7 @@ pause-effect = "on" | "off" | "toggle" ;
 
 event-rule       = event, [ condition ], rule-arrow, action-flow, ";" ;
 event            = control-reference, ":", event-transition ;
-event-transition = "down" | "repeat" | "up" ;
+event-transition = "down" | "again" | "up" ;
 condition        = "when", expression ;
 rule-arrow       = "=>" | "=>>" | "~>" | "~>>" ;
 
@@ -108,8 +124,10 @@ action-item =
     | gap-action
     | set-action
     | toggle-action
+    | append-action
+    | pop-action
+    | clear-action
     | exec-action
-    | gap-marker
     | if-action
     | repeat-action
     | while-action
@@ -118,11 +136,13 @@ action-item =
 input-action      = input-action-name, "(", control-reference, ")" ;
 input-action-name = "press" | "release" | "tap" ;
 wait-action       = "wait", "(", expression, ")" ;
-gap-action        = "gap", "(", ")" ;
-set-action        = "set", "(", value-reference, ",", expression, ")" ;
-toggle-action     = "toggle", "(", value-reference, ")" ;
+gap-action        = "gap", "(", ")" | "|" ;
+set-action        = "set", "(", writable-target, ",", expression, ")" ;
+toggle-action     = "toggle", "(", writable-state-target, ")" ;
+append-action     = "append", "(", array-reference, ",", expression, ")" ;
+pop-action        = "pop", "(", array-reference, ",", writable-scalar-reference, ")" ;
+clear-action      = "clear", "(", array-reference, ")" ;
 exec-action       = "exec", "(", string-literal, ")" ;
-gap-marker        = "|" ;
 
 if-action =
     "if", expression, "then", action-flow,
@@ -149,22 +169,28 @@ unary-operator          = "+" | "-" | "not" ;
 
 primary-expression =
       state-literal
+    | control-state-literal
     | number-literal
     | duration-literal
-    | value-reference
-    | control-state-query
-    | value-state-query
+    | scalar-value-reference
+    | control-reference
+    | array-element
+    | array-length
     | "(", expression, ")"
     ;
 
-control-state-query = control-reference, "[", physical-state-test, "]" ;
-value-state-query   = value-reference, "[", logical-state-test, "]" ;
-physical-state-test = "held" | "idle" ;
-logical-state-test  = "on" | "off" ;
-
-value-reference = identifier | builtin-value ;
-builtin-value   = "TAP_DURATION" | "ACTION_GAP" | "PAUSE" ;
-state-literal   = "on" | "off" ;
+writable-target           = writable-scalar-reference | array-element ;
+writable-state-target     = writable-state-reference | state-array-element ;
+writable-scalar-reference = identifier ;
+writable-state-reference  = identifier ;
+scalar-value-reference    = identifier | builtin-value ;
+builtin-value             = "TAP_DURATION" | "ACTION_GAP" | "PAUSE" ;
+array-reference           = identifier ;
+array-element             = identifier, "[", expression, "]" ;
+state-array-element       = identifier, "[", expression, "]" ;
+array-length              = identifier, ".", "length" ;
+state-literal             = "on" | "off" ;
+control-state-literal     = "held" | "idle" ;
 
 control-reference = raw-control | named-control ;
 named-control      = control-segment, { ".", control-segment } ;
@@ -222,6 +248,10 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 | `number` | 有限 binary64 数值 | `number count = -2.5;` |
 | `duration` | 非负 64 位有符号整数纳秒 | `duration delay = 80ms;` |
 
+用户数组的元素类型是 `state` 或 `number`。数组是具名、程序级的可变存储对象，使用同类型字面量列表初始化；数组身份在声明时固定，逻辑长度可以由数组动作改变。数组不支持 `duration` 元素。
+
+数组元素表达式产生一个标量值，`.length` 产生 `number`。数组本身不是表达式值。
+
 `PAUSE` 是初始值为 `on` 的内蕴 `state`。`TAP_DURATION` 和 `ACTION_GAP` 是内蕴 `duration`。内蕴值可以读取，但不能作为 `set` 或 `toggle` 的目标。
 
 ## 表达式和类型
@@ -237,12 +267,18 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 | `*` | `duration`、`number` 或 `number`、`duration` | `duration` |
 | `/` | `duration`、`number` | `duration` |
 | `<`、`<=`、`>`、`>=` | `number`、`number` | 布尔值 |
-| `==`、`!=` | 两个类型相同的 `state`、`number` 或 `duration` 值 | 布尔值 |
+| `==`、`!=` | 两个类型相同的 `state`、`number`、`duration` 或控制状态值 | 布尔值 |
 | `and`、`or` | 布尔值、布尔值 | 布尔值 |
 
-布尔值是表达式结果类型，不是用户可以声明的变量类型。`control[held]`、`control[idle]`、`stateValue[on]` 和 `stateValue[off]` 都产生布尔值。
+布尔值和控制状态都是表达式专用类型，不能声明为用户变量。`on` 和 `off` 是 `state` 常量，`held` 和 `idle` 是控制状态常量。控制引用求得当前控制状态，因此 `A == held`、`Mouse.Left == idle` 和 `A == B` 都是普通表达式。
 
 `and` 和 `or` 从左到右短路求值。只有左操作数是编译期常量并能证明右操作数不可到达时，右侧的编译期常量故障才会被抑制。
+
+数组索引表达式求值一次，结果必须是有限且非负的 `number`，向下取整后必须小于数组当前逻辑长度。`index < values.length and values[index] > 0` 这样的短路条件可以先完成边界保护。数组索引和长度不引入独立的整数类型。
+
+`.length` 可以出现在映射、事件、PAUSE、退出规则和动作控制流的任何表达式中。数组声明不设置固定长度上限，实际增长受运行时数组存储容量约束。
+
+`set(array[index], value)` 在同一任务状态下各求值一次索引和右值并原子提交；`toggle`、`append`、`pop` 和 `clear` 也各自作为一次原子数组修改，其中 `pop` 同时把末项写入同类型可写标量。一个物理事件的所有规则条件读取同一事件起始标量和数组状态，动作执行时读取当前任务执行状态。
 
 数字运算结果必须保持有限，除数或模数不能为零。时间减法以 `0ms` 为下限；时间缩放把小数纳秒向零截断，并把负结果限制为 `0ms`；溢出属于错误。
 
@@ -284,9 +320,9 @@ NumpadAdd NumpadSubtract NumpadMultiply NumpadDivide NumpadDecimal
 
 编译器只验证控制身份和数值范围，不保证所选运行时后端能够观察、查询或注入该控制。后端支持情况在编译程序激活时检查。
 
-## 事件和状态查询
+## 事件和控制状态
 
-事件转换是 `down`、`repeat` 或 `up`。`down` 表示第一次物理按下边缘，`repeat` 表示保持按下期间的重复按下，`up` 表示物理释放边缘。
+事件转换是 `down`、`again` 或 `up`。`down` 表示第一次物理按下边缘，`again` 表示保持按下期间再次出现的 Down，`up` 表示物理释放边缘。
 
 运行时先更新物理状态，再计算当前事件的条件。因此当前控制在 `down` 条件中已经是 `held`，在 `up` 条件中已经是 `idle`。
 
@@ -294,9 +330,9 @@ NumpadAdd NumpadSubtract NumpadMultiply NumpadDivide NumpadDecimal
 
 ## 完整映射
 
-`source -> target;` 映射完整的按下、重复和释放生命周期。可选的 `when` 条件只在来源控制的 `down` 边缘求值。第一个匹配的映射会锁存到释放，即使条件随后发生变化也不会改换目标。
+`source -> target;` 映射完整的 `down`、`again` 和 `up` 生命周期。可选的 `when` 条件只在来源控制的 `down` 边缘求值。第一个匹配的映射会锁存到释放，即使条件随后发生变化也不会改换目标。
 
-映射按照源码顺序检查，在来源 `down` 上等价于消费并在匹配后停止的规则。活跃映射的重复和释放处理早于同一事件的普通事件规则；普通规则可以附加动作，但不能撤销映射生命周期或消费决定。
+映射按照源码顺序检查，在来源 `down` 上等价于消费并在匹配后停止的规则。活跃映射的 `again` 和 `up` 处理早于同一事件的普通事件规则；普通规则可以附加动作，但不能撤销映射生命周期或消费决定。
 
 ## 事件规则
 
@@ -311,7 +347,7 @@ NumpadAdd NumpadSubtract NumpadMultiply NumpadDivide NumpadDecimal
 
 条件为假时总是继续扫描。多个继续型规则匹配时，任务按照源码顺序创建。只要任意匹配规则要求消费，最终决定就是消费；后续观察型规则不能撤销消费。
 
-同一个物理事件的全部条件读取相同的事件开始状态。动作在匹配完成后才进入异步任务，因此前一条匹配规则创建的 `set` 或 `toggle` 不会影响同一事件的后续规则条件。
+同一个物理事件的全部条件读取相同的事件开始标量和数组状态。动作在匹配完成后才进入异步任务，因此前一条匹配规则创建的状态修改不会影响同一事件的后续规则条件。
 
 多条规则可以使用相同事件和相同条件。哪些规则实际匹配只由源码顺序和箭头决定；编译器不会静态选择唯一规则。
 
@@ -330,7 +366,7 @@ PAUSE 规则按照源码顺序在普通映射和事件规则之前求值。第�
 源码没有显式退出规则时，编译器自动加入下列规则：
 
 ```weave
-exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held]);
+exit F12:down when (LCtrl == held or RCtrl == held) and (LShift == held or RShift == held);
 ```
 
 ## 动作
@@ -344,9 +380,12 @@ exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held
 | `tap(control)` | 取得所有权，等待 `TAP_DURATION`，再释放所有权。 |
 | `wait(expression)` | 要求 `duration` 表达式并进行可取消等待。 |
 | `gap()` | 按照 `ACTION_GAP` 进行可取消等待。 |
-| `|` | 与 `gap()` 完全等价；允许出现在开头、结尾或连续出现。 |
-| `set(value, expression)` | 要求可写用户变量，表达式类型必须与目标相同。 |
-| `toggle(value)` | 要求可写的用户 `state`。 |
+| `|` | 在动作流中加入由 `ACTION_GAP` 指定的分隔间隔；允许出现在开头、结尾或连续出现。 |
+| `set(target, expression)` | 把同类型值写入可写标量或现有数组元素。 |
+| `toggle(target)` | 切换可写标量 `state` 或现有 `state` 数组元素。 |
+| `append(array, expression)` | 向数组末尾追加一个同类型元素。 |
+| `pop(array, target)` | 移除数组末项，并把它写入同类型可写标量；空数组会使当前任务失败。 |
+| `clear(array)` | 把数组逻辑长度设为零。 |
 | `exec("command")` | 要求非空命令并请求平台启动进程；运行时必须显式授权。 |
 
 不同任务和映射共享输出所有权。重叠持有不会重复发送按下，只有最后一个所有者释放时才发送最终释放。任务正常结束、取消或失败时都会释放它仍然持有的全部输出。
@@ -357,7 +396,7 @@ exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held
 
 `if condition then ... [else ...] end` 要求布尔条件，并在任务执行到该动作时求值。
 
-`repeat limit do ... end` 要求有限的 `number`。上限只在进入循环时求值一次；整数索引从零开始，每次迭代在 `index < limit` 时运行。因此上限 `5.8` 会运行六次，零和负数运行零次。
+`repeat limit do ... end` 要求有限的 `number`。上限只在进入循环时求值一次，并按 `max(0, floor(limit))` 规范化。因此 `5.8` 运行五次，零和负数运行零次。
 
 `while condition do ... end` 要求布尔条件，并在每次迭代开始前重新求值。
 
@@ -365,7 +404,7 @@ exit F12:down when (LCtrl[held] or RCtrl[held]) and (LShift[held] or RShift[held
 
 ## 任务和取消
 
-每条匹配且动作流非空的事件规则创建一个独立任务。任务共享不可变的编译后动作程序，但各自持有指令位置、循环状态、等待、取消代次和输出所有权。
+每条匹配且动作流非空的事件规则创建一个独立任务。任务共享不可变的编译后动作程序以及程序级标量和数组状态，但各自持有指令位置、循环状态、等待、取消代次和输出所有权。
 
 同一事件产生的任务按照源码顺序提交，并可在等待和循环让步处交错运行。目标失效、PAUSE 转换、致命停止、退出规则或应用关闭会取消相应任务并释放其输出。被取消的任务不会因为目标或 PAUSE 后来恢复资格而继续运行。
 
