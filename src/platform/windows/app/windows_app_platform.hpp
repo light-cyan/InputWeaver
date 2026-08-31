@@ -39,11 +39,14 @@ public:
         app::ProgramEntryId id,
         std::string_view source) override;
     [[nodiscard]] app::SourceValidationResult ValidateSource(
-        const app::ProgramEntry& entry) override;
+        const app::ProgramEntry& entry,
+        std::string_view source) override;
     [[nodiscard]] app::OperationResult CompileProgram(
-        const app::ProgramEntry& entry) override;
+        const app::ProgramEntry& entry,
+        std::string_view source) override;
     [[nodiscard]] app::OperationResult GenerateDump(
-        const app::ProgramEntry& entry) override;
+        const app::ProgramEntry& entry,
+        std::string_view source) override;
 
     [[nodiscard]] app::OperationResult LaunchExecutor(
         const app::LaunchRequest& request) override;

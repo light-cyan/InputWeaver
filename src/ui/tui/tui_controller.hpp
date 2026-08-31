@@ -5,6 +5,7 @@
 #include "support/color_scheme.hpp"
 #include "support/interaction.hpp"
 #include "support/source_editor.hpp"
+#include "support/source_highlighter.hpp"
 #include "tui_input.hpp"
 
 #include <chrono>
@@ -123,6 +124,7 @@ private:
     };
     DocumentView documentView_{DocumentView::Source};
     SourceEditor sourceEditor_;
+    SourceHighlightDocument sourceHighlights_;
     std::vector<app::SourceDiagnostic> sourceDiagnostics_;
     app::ProgramEntryId loadedSourceId_{app::kInvalidProgramEntryId};
     std::string dumpText_;

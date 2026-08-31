@@ -17,7 +17,7 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [2/2] Building InputWeaverCompiler.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
-    "src\platform\windows\cli\compiler_main.cpp" ^
+    "src\platform\windows\ui\cli\compiler_main.cpp" ^
     "src\platform\windows\compiler\artifact_file.cpp" ^
     "src\platform\windows\support\atomic_file.cpp" ^
     "src\ui\cli\compiler_cli.cpp" ^

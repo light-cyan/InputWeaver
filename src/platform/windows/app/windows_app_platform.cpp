@@ -2,6 +2,7 @@
 
 #include "child_process.hpp"
 #include "platform/windows/debug/debug_client.hpp"
+#include "platform/windows/support/atomic_file.hpp"
 #include "platform/windows/support/text_encoding.hpp"
 #include "program_library.hpp"
 #include "support/utf8.hpp"
@@ -22,6 +23,14 @@ namespace inputweaver::win32 {
 namespace {
 
 inline constexpr DWORD kExecutorStopTimeoutMilliseconds = 5'000U;
+inline constexpr std::size_t kMaximumCapturedLineBytes = 64U * 1024U;
+inline constexpr std::size_t kMaximumQueuedEventCount = 4096U;
+inline constexpr std::size_t kMaximumQueuedEventBytes = 4U * 1024U * 1024U;
+
+[[nodiscard]] std::size_t EventBytes(const app::PlatformEvent& event) noexcept
+{
+    return event.programName.size() + event.text.size();
+}
 
 [[nodiscard]] std::string DebugClientErrorText(debug::DebugClientError error)
 {
@@ -97,6 +106,36 @@ void RemoveTemporary(const std::filesystem::path& path) noexcept
 {
     std::error_code ignored;
     (void)std::filesystem::remove(path, ignored);
+}
+
+class TemporaryFileGuard final {
+public:
+    explicit TemporaryFileGuard(
+        const std::filesystem::path& path) noexcept
+        : path_(path)
+    {
+    }
+
+    ~TemporaryFileGuard()
+    {
+        RemoveTemporary(path_);
+    }
+
+    TemporaryFileGuard(const TemporaryFileGuard&) = delete;
+    TemporaryFileGuard& operator=(const TemporaryFileGuard&) = delete;
+
+private:
+    const std::filesystem::path& path_;
+};
+
+[[nodiscard]] bool FreezeSource(
+    const std::filesystem::path& sourcePath,
+    std::string_view source,
+    std::filesystem::path& snapshot,
+    std::string& error)
+{
+    snapshot = MakeSiblingTemporaryPath(sourcePath);
+    return WriteNewFile(snapshot, source, error);
 }
 
 [[nodiscard]] std::vector<app::SourceDiagnostic> ParseDiagnostics(
@@ -194,6 +233,37 @@ struct WindowsAppPlatform::Impl final {
         std::thread outputReader;
         std::thread errorReader;
         std::unique_ptr<WindowsDebugClient> debugClient;
+        bool stopped{};
+
+        void StopAndJoin() noexcept
+        {
+            if (stopped) {
+                return;
+            }
+            stopped = true;
+            if (debugClient != nullptr) {
+                debugClient->Disconnect();
+            }
+            if (child.process) {
+                DWORD exitCode{};
+                if (GetExitCodeProcess(child.process.Get(), &exitCode) != FALSE
+                    && exitCode == STILL_ACTIVE) {
+                    (void)TerminateProcess(child.process.Get(), 1U);
+                    (void)WaitForSingleObject(child.process.Get(), INFINITE);
+                }
+            }
+            if (outputReader.joinable()) {
+                outputReader.join();
+            }
+            if (errorReader.joinable()) {
+                errorReader.join();
+            }
+        }
+
+        ~ManagedExecutor()
+        {
+            StopAndJoin();
+        }
     };
 
     explicit Impl(std::filesystem::path executableDirectory)
@@ -201,10 +271,32 @@ struct WindowsAppPlatform::Impl final {
     {
     }
 
-    void QueueEvent(app::PlatformEvent event)
+    void QueueEvent(app::PlatformEvent event) noexcept
     {
-        std::lock_guard lock(eventMutex);
-        events.push_back(std::move(event));
+        try {
+            std::lock_guard lock(eventMutex);
+            const std::size_t bytes = EventBytes(event);
+            if (event.kind == app::PlatformEventKind::Output
+                && (events.size() >= kMaximumQueuedEventCount
+                    || bytes > kMaximumQueuedEventBytes
+                    || queuedEventBytes > kMaximumQueuedEventBytes - bytes)) {
+                ++droppedOutputEvents;
+                return;
+            }
+            while (!events.empty()
+                && (events.size() >= kMaximumQueuedEventCount
+                    || bytes > kMaximumQueuedEventBytes
+                    || queuedEventBytes > kMaximumQueuedEventBytes - bytes)) {
+                queuedEventBytes -= EventBytes(events.front());
+                if (events.front().kind == app::PlatformEventKind::Output) {
+                    ++droppedOutputEvents;
+                }
+                events.pop_front();
+            }
+            events.push_back(std::move(event));
+            queuedEventBytes += bytes;
+        } catch (...) {
+        }
     }
 
     void QueueOutput(
@@ -278,6 +370,16 @@ struct WindowsAppPlatform::Impl final {
                         std::string_view{pending}.substr(0U, lineEnd + 1U));
                     pending.erase(0U, lineEnd + 1U);
                 }
+                while (pending.size() > kMaximumCapturedLineBytes) {
+                    QueueOutput(
+                        id,
+                        name,
+                        app::ConsoleSource::Runtime,
+                        std::string_view{pending}.substr(
+                            0U,
+                            kMaximumCapturedLineBytes));
+                    pending.erase(0U, kMaximumCapturedLineBytes);
+                }
             }
             if (!pending.empty()) {
                 QueueOutput(id, name, app::ConsoleSource::Runtime, pending);
@@ -323,20 +425,7 @@ struct WindowsAppPlatform::Impl final {
 
     void FinishExecutor(std::unique_ptr<ManagedExecutor> executor)
     {
-        if (WaitForSingleObject(executor->child.process.Get(), 0U)
-            != WAIT_OBJECT_0) {
-            (void)TerminateProcess(executor->child.process.Get(), 1U);
-            (void)WaitForSingleObject(executor->child.process.Get(), INFINITE);
-        }
-        if (executor->debugClient != nullptr) {
-            executor->debugClient->Disconnect();
-        }
-        if (executor->outputReader.joinable()) {
-            executor->outputReader.join();
-        }
-        if (executor->errorReader.joinable()) {
-            executor->errorReader.join();
-        }
+        executor->StopAndJoin();
         DWORD exitCode{};
         if (GetExitCodeProcess(executor->child.process.Get(), &exitCode) == FALSE
             || exitCode == STILL_ACTIVE) {
@@ -403,6 +492,8 @@ struct WindowsAppPlatform::Impl final {
     app::ProgramEntryId debugProgramId{app::kInvalidProgramEntryId};
     std::mutex eventMutex;
     std::deque<app::PlatformEvent> events;
+    std::size_t queuedEventBytes{};
+    std::uint64_t droppedOutputEvents{};
 };
 
 WindowsAppPlatform::WindowsAppPlatform(
@@ -437,15 +528,21 @@ bool WindowsAppPlatform::NamesEqual(
 app::OperationResult WindowsAppPlatform::PublishImport(
     const app::ImportPublishRequest& request)
 {
-    std::wstring source;
-    if (!Utf8ToWide(request.sourcePath, source)) {
-        return app::OperationResult::Failure("The source path is invalid.");
+    std::string error;
+    std::filesystem::path sourceSnapshot;
+    if (!FreezeSource(
+            impl_->library.SourcePath(request.entry.id),
+            request.sourceText,
+            sourceSnapshot,
+            error)) {
+        return app::OperationResult::Failure(std::move(error));
     }
+    const TemporaryFileGuard sourceGuard(sourceSnapshot);
     const std::filesystem::path temporary =
         impl_->library.ArtifactTemporaryPath(request.entry.id);
     const std::vector<std::wstring> compileArguments{
         L"compile",
-        source,
+        sourceSnapshot.wstring(),
         temporary.wstring()};
     CapturedProcessResult compile = impl_->RunCompiler(
         request.entry,
@@ -456,7 +553,9 @@ app::OperationResult WindowsAppPlatform::PublishImport(
         return ProcessFailure(compile, "Compiler");
     }
 
-    const std::vector<std::wstring> dumpArguments{L"dump", source};
+    const std::vector<std::wstring> dumpArguments{
+        L"dump",
+        sourceSnapshot.wstring()};
     CapturedProcessResult dump = impl_->RunCompiler(
         request.entry,
         dumpArguments,
@@ -465,7 +564,11 @@ app::OperationResult WindowsAppPlatform::PublishImport(
         RemoveTemporary(temporary);
         return ProcessFailure(dump, "Compiler dump");
     }
-    return impl_->library.PublishImport(request, temporary, dump.standardOutput);
+    return impl_->library.PublishImport(
+        request,
+        sourceSnapshot,
+        temporary,
+        dump.standardOutput);
 }
 
 app::OperationResult WindowsAppPlatform::PublishNew(
@@ -510,11 +613,22 @@ app::OperationResult WindowsAppPlatform::SaveSource(
 }
 
 app::SourceValidationResult WindowsAppPlatform::ValidateSource(
-    const app::ProgramEntry& entry)
+    const app::ProgramEntry& entry,
+    std::string_view source)
 {
+    std::string error;
+    std::filesystem::path sourceSnapshot;
+    if (!FreezeSource(
+            impl_->library.SourcePath(entry.id),
+            source,
+            sourceSnapshot,
+            error)) {
+        return {false, false, {}, std::move(error)};
+    }
+    const TemporaryFileGuard sourceGuard(sourceSnapshot);
     const CapturedProcessResult result = impl_->RunCompiler(
         entry,
-        {L"validate", impl_->library.SourcePath(entry.id).wstring()},
+        {L"validate", sourceSnapshot.wstring()},
         false);
     if (!result.started || !result.error.empty()) {
         return {false, false, {}, ProcessFailure(result, "Validation").error};
@@ -533,14 +647,24 @@ app::SourceValidationResult WindowsAppPlatform::ValidateSource(
 }
 
 app::OperationResult WindowsAppPlatform::CompileProgram(
-    const app::ProgramEntry& entry)
+    const app::ProgramEntry& entry,
+    std::string_view sourceText)
 {
-    const std::filesystem::path source = impl_->library.SourcePath(entry.id);
+    std::string error;
+    std::filesystem::path sourceSnapshot;
+    if (!FreezeSource(
+            impl_->library.SourcePath(entry.id),
+            sourceText,
+            sourceSnapshot,
+            error)) {
+        return app::OperationResult::Failure(std::move(error));
+    }
+    const TemporaryFileGuard sourceGuard(sourceSnapshot);
     const std::filesystem::path temporary =
         impl_->library.ArtifactTemporaryPath(entry.id);
     CapturedProcessResult compile = impl_->RunCompiler(
         entry,
-        {L"compile", source.wstring(), temporary.wstring()},
+        {L"compile", sourceSnapshot.wstring(), temporary.wstring()},
         true);
     if (!compile.started || !compile.error.empty() || compile.exitCode != 0U) {
         RemoveTemporary(temporary);
@@ -548,7 +672,7 @@ app::OperationResult WindowsAppPlatform::CompileProgram(
     }
     CapturedProcessResult dump = impl_->RunCompiler(
         entry,
-        {L"dump", source.wstring()},
+        {L"dump", sourceSnapshot.wstring()},
         true);
     if (!dump.started || !dump.error.empty() || dump.exitCode != 0U) {
         RemoveTemporary(temporary);
@@ -556,21 +680,33 @@ app::OperationResult WindowsAppPlatform::CompileProgram(
     }
     return impl_->library.PublishCompilation(
         entry,
+        sourceText,
         temporary,
         dump.standardOutput);
 }
 
 app::OperationResult WindowsAppPlatform::GenerateDump(
-    const app::ProgramEntry& entry)
+    const app::ProgramEntry& entry,
+    std::string_view source)
 {
+    std::string error;
+    std::filesystem::path sourceSnapshot;
+    if (!FreezeSource(
+            impl_->library.SourcePath(entry.id),
+            source,
+            sourceSnapshot,
+            error)) {
+        return app::OperationResult::Failure(std::move(error));
+    }
+    const TemporaryFileGuard sourceGuard(sourceSnapshot);
     const CapturedProcessResult dump = impl_->RunCompiler(
         entry,
-        {L"dump", impl_->library.SourcePath(entry.id).wstring()},
+        {L"dump", sourceSnapshot.wstring()},
         true);
     if (!dump.started || !dump.error.empty() || dump.exitCode != 0U) {
         return ProcessFailure(dump, "Compiler dump");
     }
-    return impl_->library.SaveDump(entry.id, dump.standardOutput);
+    return impl_->library.PublishDump(entry.id, source, dump.standardOutput);
 }
 
 app::OperationResult WindowsAppPlatform::LaunchExecutor(
@@ -650,9 +786,19 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
             error)) {
         return app::OperationResult::Failure(std::move(error));
     }
-    impl_->StartOutputReaders(*executor);
+    try {
+        impl_->StartOutputReaders(*executor);
+    } catch (...) {
+        return app::OperationResult::Failure(
+            "Cannot create executor output readers.");
+    }
     if (request.options.debug) {
-        executor->debugClient = std::make_unique<WindowsDebugClient>();
+        try {
+            executor->debugClient = std::make_unique<WindowsDebugClient>();
+        } catch (...) {
+            return app::OperationResult::Failure(
+                "Cannot allocate the debug client.");
+        }
         const debug::DebugClientResult connected = executor->debugClient->Connect(
             {executor->child.processId},
             token);
@@ -688,10 +834,15 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
     }
     {
         std::lock_guard lock(impl_->executorMutex);
+        try {
+            impl_->executors.push_back(std::move(executor));
+        } catch (...) {
+            return app::OperationResult::Failure(
+                "Cannot retain the executor session.");
+        }
         if (request.options.debug) {
             impl_->debugProgramId = request.entry.id;
         }
-        impl_->executors.push_back(std::move(executor));
     }
     return app::OperationResult::Success();
 }
@@ -769,8 +920,21 @@ std::vector<app::PlatformEvent> WindowsAppPlatform::PollEvents()
     impl_->CollectExited();
     std::lock_guard lock(impl_->eventMutex);
     std::vector<app::PlatformEvent> result;
-    result.reserve(impl_->events.size());
+    result.reserve(
+        impl_->events.size() + (impl_->droppedOutputEvents == 0U ? 0U : 1U));
+    if (impl_->droppedOutputEvents != 0U) {
+        result.push_back({
+            app::PlatformEventKind::Error,
+            app::kInvalidProgramEntryId,
+            "InputWeaver",
+            app::ConsoleSource::App,
+            "Dropped " + std::to_string(impl_->droppedOutputEvents)
+                + " queued child-output event(s).",
+            0U});
+        impl_->droppedOutputEvents = 0U;
+    }
     while (!impl_->events.empty()) {
+        impl_->queuedEventBytes -= EventBytes(impl_->events.front());
         result.push_back(std::move(impl_->events.front()));
         impl_->events.pop_front();
     }

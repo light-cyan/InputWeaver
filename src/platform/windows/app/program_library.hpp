@@ -23,12 +23,14 @@ public:
 
     [[nodiscard]] app::OperationResult PublishImport(
         const app::ImportPublishRequest& request,
+        const std::filesystem::path& sourceTemporary,
         const std::filesystem::path& compiledTemporary,
         std::string_view dumpText);
     [[nodiscard]] app::OperationResult PublishNew(
         const app::ProgramPublishRequest& request);
     [[nodiscard]] app::OperationResult PublishCompilation(
         const app::ProgramEntry& entry,
+        std::string_view sourceText,
         const std::filesystem::path& compiledTemporary,
         std::string_view dumpText);
     [[nodiscard]] app::OperationResult SaveEntry(
@@ -44,6 +46,10 @@ public:
         std::string_view source);
     [[nodiscard]] app::OperationResult SaveDump(
         app::ProgramEntryId id,
+        std::string_view dump);
+    [[nodiscard]] app::OperationResult PublishDump(
+        app::ProgramEntryId id,
+        std::string_view sourceText,
         std::string_view dump);
 
     [[nodiscard]] const std::filesystem::path& ExecutableDirectory()

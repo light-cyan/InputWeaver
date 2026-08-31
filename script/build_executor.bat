@@ -17,7 +17,7 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [2/2] Building InputWeaver.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -municode ^
-    "src\platform\windows\cli\runtime_main.cpp" ^
+    "src\platform\windows\ui\cli\runtime_main.cpp" ^
     "src\ui\cli\runtime_cli.cpp" ^
     "src\platform\windows\runtime\windows_executor.cpp" ^
     "src\platform\windows\runtime\compiled_target_resolver.cpp" ^

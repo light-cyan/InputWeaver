@@ -631,7 +631,8 @@ void WindowsTuiWindow::QueueEvent(ui::tui::KeyEvent event) noexcept
 
 void WindowsTuiWindow::QueueText(
     const wchar_t* text,
-    std::size_t length) noexcept
+    std::size_t length,
+    ui::tui::KeyEventSource source) noexcept
 {
     wchar_t highSurrogate{};
     for (std::size_t index = 0U; index < length; ++index) {
@@ -641,18 +642,18 @@ void WindowsTuiWindow::QueueText(
                 && text[index + 1U] == L'\n') {
                 ++index;
             }
-            QueueEvent({ui::tui::Key::Enter, 0U, false});
+            QueueEvent({ui::tui::Key::Enter, 0U, false, source});
             continue;
         }
         if (character == L'\t') {
-            QueueEvent({ui::tui::Key::Tab, 0U, false});
+            QueueEvent({ui::tui::Key::Tab, 0U, false, source});
             continue;
         }
         const char32_t codePoint = DecodeUtf16CodeUnit(
             character,
             highSurrogate);
         if (codePoint >= 0x20U) {
-            QueueEvent({ui::tui::Key::Character, codePoint, false});
+            QueueEvent({ui::tui::Key::Character, codePoint, false, source});
         }
     }
 }
@@ -667,7 +668,10 @@ void WindowsTuiWindow::PasteClipboard() noexcept
         ? nullptr
         : static_cast<const wchar_t*>(GlobalLock(data));
     if (text != nullptr) {
-        QueueText(text, std::char_traits<wchar_t>::length(text));
+        QueueText(
+            text,
+            std::char_traits<wchar_t>::length(text),
+            ui::tui::KeyEventSource::Paste);
         GlobalUnlock(data);
     }
     CloseClipboard();
@@ -689,7 +693,7 @@ void WindowsTuiWindow::AcceptDroppedFiles(HDROP drop) noexcept
             }
             if (index != 0U) {
                 constexpr wchar_t separator[] = L" ";
-                QueueText(separator, 1U);
+                QueueText(separator, 1U, ui::tui::KeyEventSource::Drop);
             }
             const std::span<const wchar_t> value(path.data(), length);
             const bool quoted = std::find_if(
@@ -700,12 +704,12 @@ void WindowsTuiWindow::AcceptDroppedFiles(HDROP drop) noexcept
                 }) != value.end();
             if (quoted) {
                 constexpr wchar_t quote[] = L"\"";
-                QueueText(quote, 1U);
+                QueueText(quote, 1U, ui::tui::KeyEventSource::Drop);
             }
-            QueueText(path.data(), length);
+            QueueText(path.data(), length, ui::tui::KeyEventSource::Drop);
             if (quoted) {
                 constexpr wchar_t quote[] = L"\"";
-                QueueText(quote, 1U);
+                QueueText(quote, 1U, ui::tui::KeyEventSource::Drop);
             }
         } catch (...) {
             running_ = false;

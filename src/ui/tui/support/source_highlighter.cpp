@@ -1,9 +1,11 @@
 #include "source_highlighter.hpp"
 
 #include "language/word_catalog.hpp"
+#include "source_editor.hpp"
 
 #include <cstddef>
 #include <string_view>
+#include <utility>
 
 namespace inputweaver::ui::tui {
 namespace {
@@ -215,6 +217,30 @@ std::vector<SourceTokenSpan> HighlightWeaveLine(
         }
     }
     return spans;
+}
+
+bool SourceHighlightDocument::Update(const SourceEditor& editor)
+{
+    if (revision_ == editor.Revision()
+        && lines_.size() == editor.LineCount()) {
+        return false;
+    }
+    SourceHighlightState state{};
+    std::vector<std::vector<SourceTokenSpan>> lines(editor.LineCount());
+    for (std::size_t index = 0U; index < lines.size(); ++index) {
+        lines[index] = HighlightWeaveLine(editor.Line(index), state);
+    }
+    lines_ = std::move(lines);
+    revision_ = editor.Revision();
+    return true;
+}
+
+std::span<const SourceTokenSpan> SourceHighlightDocument::Line(
+    std::size_t index) const noexcept
+{
+    return index < lines_.size()
+        ? std::span<const SourceTokenSpan>{lines_[index]}
+        : std::span<const SourceTokenSpan>{};
 }
 
 } // namespace inputweaver::ui::tui

@@ -507,8 +507,7 @@ void ValidateExpressionDescriptor(
             }
             break;
         case ExpressionOpcode::ReadControlState:
-            if ((instruction.type != ExpressionType::Boolean
-                 && instruction.type != ExpressionType::ControlState)
+            if (instruction.type != ExpressionType::ControlState
                 || instruction.operand0 >= storage.controls.size()
                 || instruction.operand1 != 0U) {
                 context.Add(
@@ -516,11 +515,7 @@ void ValidateExpressionDescriptor(
                     location,
                     "ReadControlState operands or type are invalid");
             }
-            stack = stacks.Push(
-                stack,
-                instruction.type == ExpressionType::Boolean
-                    ? ExpressionType::Boolean
-                    : ExpressionType::ControlState);
+            stack = stacks.Push(stack, ExpressionType::ControlState);
             break;
         case ExpressionOpcode::PushControlState:
             if (instruction.type != ExpressionType::ControlState

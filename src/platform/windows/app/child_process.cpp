@@ -2,14 +2,20 @@
 
 #include "platform/windows/support/command_line.hpp"
 
+#include <algorithm>
 #include <array>
 #include <functional>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
 
 namespace inputweaver::win32 {
 namespace {
+
+inline constexpr std::size_t kMaximumCapturedOutputBytes = 4U * 1024U * 1024U;
+inline constexpr std::string_view kOutputTruncated =
+    "\n[child output truncated]\n";
 
 struct PipePair final {
     UniqueHandle read;
@@ -107,14 +113,30 @@ CapturedProcessResult RunChildProcess(
         return result;
     }
     result.started = true;
-    std::thread outputReader(
-        &ReadChildPipe,
-        process.standardOutput.Get(),
-        std::ref(result.standardOutput));
-    std::thread errorReader(
-        &ReadChildPipe,
-        process.standardError.Get(),
-        std::ref(result.standardError));
+    std::thread outputReader;
+    std::thread errorReader;
+    try {
+        outputReader = std::thread(
+            &ReadChildPipe,
+            process.standardOutput.Get(),
+            std::ref(result.standardOutput));
+        errorReader = std::thread(
+            &ReadChildPipe,
+            process.standardError.Get(),
+            std::ref(result.standardError));
+    } catch (...) {
+        result.error = "Cannot create child-process output readers.";
+        result.exitCode = 1U;
+        (void)TerminateProcess(process.process.Get(), 1U);
+        (void)WaitForSingleObject(process.process.Get(), INFINITE);
+        if (outputReader.joinable()) {
+            outputReader.join();
+        }
+        if (errorReader.joinable()) {
+            errorReader.join();
+        }
+        return result;
+    }
     const DWORD waited = WaitForSingleObject(process.process.Get(), INFINITE);
     DWORD exitCode{};
     if (waited != WAIT_OBJECT_0
@@ -136,6 +158,7 @@ void ReadChildPipe(HANDLE handle, std::string& output) noexcept
 {
     try {
         std::array<char, 4'096U> buffer{};
+        bool truncated = false;
         for (;;) {
             DWORD read{};
             if (ReadFile(
@@ -147,7 +170,18 @@ void ReadChildPipe(HANDLE handle, std::string& output) noexcept
                 || read == 0U) {
                 break;
             }
-            output.append(buffer.data(), static_cast<std::size_t>(read));
+            const std::size_t available = output.size()
+                    < kMaximumCapturedOutputBytes
+                ? kMaximumCapturedOutputBytes - output.size()
+                : 0U;
+            const std::size_t accepted = (std::min)(
+                available,
+                static_cast<std::size_t>(read));
+            output.append(buffer.data(), accepted);
+            truncated = truncated || accepted != static_cast<std::size_t>(read);
+        }
+        if (truncated) {
+            output.append(kOutputTruncated);
         }
     } catch (...) {
     }

@@ -238,10 +238,11 @@ void CheckSingleCatalogBinding(
     if (binding == nullptr) {
         return;
     }
-    if (activated.device == DeviceKind::Keyboard) {
+    if ((uses & (ToControlUseBits(ControlUse::EventSource)
+            | ToControlUseBits(ControlUse::PhysicalState))) != 0U) {
         Check(
             activated.initialStateQueryable && binding->initialStateQueryable,
-            "keyboard binding exposes initial-state query support");
+            "physical input binding exposes initial-state query support");
     }
     WindowsNativeInputEvent native{};
     native.device = activated.device;
@@ -608,13 +609,21 @@ void TestModifierStateSeeding()
     storage.rules.clear();
     storage.eventBuckets.clear();
     storage.expressions = {
-        {{0U, 2U}, ExpressionType::Boolean, 1U, source},
-        {{2U, 2U}, ExpressionType::Boolean, 1U, source},
+        {{0U, 4U}, ExpressionType::Boolean, 2U, source},
+        {{4U, 4U}, ExpressionType::Boolean, 2U, source},
     };
     storage.expressionCode = {
-        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 0U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState, 0U, 0U},
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
-        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 1U, 0U},
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState, 1U, 0U},
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     };
     storage.exitControlRules = {
@@ -630,7 +639,7 @@ void TestModifierStateSeeding()
         {ControlRefId{1U}, ToControlUseBits(ControlUse::PhysicalState)},
     };
     storage.debugInfo.actionInstructionSpans.clear();
-    storage.debugInfo.expressionInstructionSpans.assign(4U, source);
+    storage.debugInfo.expressionInstructionSpans.assign(8U, source);
     storage.requirements = ComputeProgramRequirements(storage);
     const auto program = Finalize(std::move(storage));
     win32::WindowsControlCatalog catalog;

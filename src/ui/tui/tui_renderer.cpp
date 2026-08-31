@@ -419,7 +419,8 @@ void AppendExecutionField(
 [[nodiscard]] std::string DebugArrayText(
     const debug::DebugArrayState& array)
 {
-    std::string text = '[' + array.name + "=[";
+    std::string text = '[' + array.name + '['
+        + std::to_string(array.value.length) + "]=[";
     const std::size_t prefix = array.value.prefixCount;
     const std::size_t suffix = array.value.suffixCount;
     for (std::size_t index = 0U; index < prefix + suffix; ++index) {
@@ -433,9 +434,7 @@ void AppendExecutionField(
             ? (array.value.elements[index].stateValue ? "on" : "off")
             : DebugNumberText(array.value.elements[index].numberValue);
     }
-    text += suffix == 0U
-        ? "]]"
-        : "] length=" + std::to_string(array.value.length) + ']';
+    text += "]]";
     return text;
 }
 
@@ -677,6 +676,7 @@ void RenderViewportRows(
 void RenderSource(
     Canvas& canvas,
     SourceEditor& editor,
+    SourceHighlightDocument& highlights,
     std::span<const app::SourceDiagnostic> diagnostics,
     Rectangle body,
     bool editing,
@@ -693,10 +693,7 @@ void RenderSource(
         : 1U;
     editor.PrepareView(body.height, codeWidth);
 
-    SourceHighlightState highlightState{};
-    for (std::size_t line = 0U; line < editor.TopLine(); ++line) {
-        (void)HighlightWeaveLine(editor.Line(line), highlightState);
-    }
+    (void)highlights.Update(editor);
     for (std::size_t row = 0U; row < body.height; ++row) {
         const std::size_t lineIndex = editor.TopLine() + row;
         if (lineIndex >= editor.LineCount()) {
@@ -732,11 +729,10 @@ void RenderSource(
             gutter);
 
         const std::string_view line = editor.Line(lineIndex);
-        const std::vector<SourceTokenSpan> spans = HighlightWeaveLine(
-            line,
-            highlightState);
+        const std::span<const SourceTokenSpan> spans = highlights.Line(lineIndex);
         std::size_t offset{};
         std::size_t displayColumn{};
+        std::size_t spanIndex{};
         Utf8CodePoint codePoint{};
         while (NextUtf8CodePoint(line, offset, codePoint)) {
             const std::size_t characterWidth = codePoint.displayWidth;
@@ -750,12 +746,13 @@ void RenderSource(
                 break;
             }
             TextStyle style = base;
-            for (const SourceTokenSpan& span : spans) {
-                if (codePoint.byteOffset >= span.beginByte
-                    && codePoint.byteOffset < span.endByte) {
-                    style.foreground = SourceTokenColor(span.kind, colors);
-                    break;
-                }
+            while (spanIndex < spans.size()
+                && codePoint.byteOffset >= spans[spanIndex].endByte) {
+                ++spanIndex;
+            }
+            if (spanIndex < spans.size()
+                && codePoint.byteOffset >= spans[spanIndex].beginByte) {
+                style.foreground = SourceTokenColor(spans[spanIndex].kind, colors);
             }
             if (editing
                 && editor.IsSelected(lineIndex, codePoint.byteOffset)) {
@@ -1105,6 +1102,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 RenderSource(
                     canvas,
                     sourceEditor_,
+                    sourceHighlights_,
                     sourceDiagnostics_,
                     body,
                     SourceEditing(),
@@ -1449,53 +1447,64 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
 
             const std::size_t pressedWidth = width - leftWidth - 2U;
             std::vector<std::string> stateCells;
-            std::size_t cellWidth = 1U;
             for (const debug::DebugVariableState& value : debugState->values) {
                 if (value.name == "PAUSE") {
                     continue;
                 }
                 std::string cell = '[' + value.name + '='
                     + DebugValueText(value.value) + ']';
-                cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
                 stateCells.push_back(std::move(cell));
             }
             for (const debug::DebugArrayState& array : debugState->arrays) {
-                std::string cell = DebugArrayText(array);
-                cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
-                stateCells.push_back(std::move(cell));
+                stateCells.push_back(DebugArrayText(array));
             }
             for (const debug::DebugPressedControl& pressed
                  : debugState->pressedControls) {
                 std::string cell = '[' + ControlName(pressed.control) + ' '
                     + std::string{debug::InputOriginLabel(pressed.origin)} + ']';
-                cellWidth = (std::max)(cellWidth, Utf8DisplayWidth(cell) + 2U);
                 stateCells.push_back(std::move(cell));
             }
-            if (pressedWidth >= 2U) {
-                cellWidth = (std::min)(cellWidth, pressedWidth / 2U);
+            using StateLine = std::vector<std::pair<std::size_t, std::string>>;
+            std::vector<StateLine> stateRows;
+            const std::size_t columnOffset = pressedWidth / 2U;
+            const std::size_t columnWidth = columnOffset > 1U
+                ? columnOffset - 1U
+                : 0U;
+            for (std::size_t index = 0U; index < stateCells.size();) {
+                if (columnWidth != 0U
+                    && Utf8DisplayWidth(stateCells[index]) <= columnWidth) {
+                    StateLine line;
+                    line.emplace_back(0U, std::move(stateCells[index++]));
+                    if (index < stateCells.size()
+                        && Utf8DisplayWidth(stateCells[index]) <= columnWidth) {
+                        line.emplace_back(
+                            columnOffset,
+                            std::move(stateCells[index++]));
+                    }
+                    stateRows.push_back(std::move(line));
+                    continue;
+                }
+                for (std::string& line : WrapUtf8(
+                         stateCells[index++],
+                         pressedWidth,
+                         2U)) {
+                    StateLine wrapped;
+                    wrapped.emplace_back(0U, std::move(line));
+                    stateRows.push_back(std::move(wrapped));
+                }
             }
-            const std::size_t columns = (std::max)(
-                static_cast<std::size_t>(1U),
-                pressedWidth / cellWidth);
-            const std::size_t pressedRows = stateCells.empty()
-                ? 0U
-                : (stateCells.size() + columns - 1U) / columns;
             const std::size_t pressedVisible = topHeight - 2U;
             RenderViewportRows(
                 pressedViewport_,
-                pressedRows,
+                stateRows.size(),
                 pressedVisible,
                 [&](std::size_t row, std::size_t sourceRow) {
-                    for (std::size_t column = 0U; column < columns; ++column) {
-                        const std::size_t index = sourceRow * columns + column;
-                        if (index >= stateCells.size()) {
-                            break;
-                        }
+                    for (const auto& [offset, text] : stateRows[sourceRow]) {
                         canvas.Text(
-                            leftWidth + 1U + column * cellWidth,
+                            leftWidth + 1U + offset,
                             bodyTop + 1U + row,
-                            stateCells[index],
-                            cellWidth,
+                            text,
+                            pressedWidth - offset,
                             Foreground(colors_.text));
                     }
                 });

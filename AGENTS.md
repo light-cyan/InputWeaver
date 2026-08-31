@@ -69,19 +69,19 @@ program  -> standard library
 ui/cli/compiler_cli -> compiler
 ui/cli/runtime_cli -> standard library
 ui/tui -> language + app + debug
-platform/windows/cli/compiler_main -> ui/cli/compiler_cli
-platform/windows/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
+platform/windows/ui/cli/compiler_main -> ui/cli/compiler_cli
+platform/windows/ui/cli/runtime_main -> ui/cli/runtime_cli + platform/windows/runtime executor interface
 platform/windows/compiler -> compiler artifact-file interface + platform/windows/support
 platform/windows/app -> app + debug + platform/windows/debug + platform/windows/support
 platform/windows/diagnostics -> input + runtime diagnostic types
 platform/windows/debug -> debug + runtime + program + input + platform/windows/support
 platform/windows/support -> Windows API
-platform/windows/tui -> ui/tui + app + platform/windows/app + platform/windows/support
+platform/windows/ui/tui -> ui/tui + app + platform/windows/app + platform/windows/support
 platform/windows/runtime -> runtime + program + input + platform/windows/debug + platform/windows/diagnostics + platform/windows/support
 all modules except language -> support only for domain-independent primitives
 ```
 
-`program` is the shared definition of the compiled artifact, not a call path between compiler and runtime. The platform-independent CLI layer owns option models, parsing, help, and compiler command presentation. Platform paths place the platform first and the owning module second. The Windows CLI module adapts `wmain` arguments and invokes the appropriate platform-independent CLI or Windows executor interface; the Windows runtime module owns target discovery and session assembly, while the platform-independent `runtime` module owns artifact activation and executable state.
+`program` is the shared definition of the compiled artifact, not a call path between compiler and runtime. The platform-independent CLI layer owns option models, parsing, help, and compiler command presentation. Platform paths place the platform first and the owning module second, with platform UI adapters mirroring `src/ui/` under `src/platform/<platform>/ui/`. The Windows CLI adapter invokes the appropriate platform-independent CLI or Windows executor interface; the Windows runtime module owns target discovery and session assembly, while the platform-independent `runtime` module owns artifact activation and executable state.
 
 ## File Layout
 
@@ -94,15 +94,15 @@ all modules except language -> support only for domain-independent primitives
 - `src/app/` owns platform-independent program catalog state, import decisions, executor policy, console history, and debug-session orchestration through an abstract platform port.
 - `src/ui/cli/` owns platform-independent command-line option models, parsing, help output, and compiler command presentation.
 - `src/ui/tui/` owns platform-independent page state, keyboard intents, viewport behavior, text layout, color-scheme parsing, and cell-based rendering.
-- `src/platform/<platform>/<module>/` is the required layout for platform-specific code.
-- `src/platform/windows/cli/` owns only the Windows command-line entry points, native argument adaptation, and invocation of the platform-independent CLI or Windows executor interface.
+- `src/platform/<platform>/<module>/` is the required layout for non-UI platform-specific code; platform UI adapters live under `src/platform/<platform>/ui/<frontend>/` and mirror `src/ui/<frontend>/`.
+- `src/platform/windows/ui/cli/` owns only the Windows command-line entry points, native argument adaptation, and invocation of the platform-independent CLI or Windows executor interface.
 - `src/platform/windows/app/` owns the Windows program library, compiler and executor child processes, redirected output, and `WindowsDebugClient` lifecycle used by the application port.
 - `src/platform/windows/compiler/` owns Windows sibling-temporary naming and atomic destination replacement for compiled artifacts.
 - `src/platform/windows/diagnostics/` owns bounded Windows diagnostic records, privacy redaction, JSONL formatting, transport, and file output.
 - `src/platform/windows/debug/` owns the local same-user named-pipe server and client, capture commands, process and endpoint validation, cancellable pipe I/O, and bounded debug event transport.
 - `src/platform/windows/support/` owns Windows resource and API primitives that are independent of compiler, runtime, debug, diagnostics, and application policy.
-- `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the CLI module.
-- `src/platform/windows/tui/` owns the tray-host and native-frontend entry points, their inherited-pipe IPC, the Win32 TUI window, GDI cell rendering, keyboard and clipboard input, resize handling, notification icon, and color-resource loading.
+- `src/platform/windows/runtime/` owns Windows executor assembly, hooks, native input normalization, `SendInput` injection, process discovery and validation, process launch, and runtime platform interfaces; it depends on Windows debug and diagnostics but not on the Windows UI CLI adapter.
+- `src/platform/windows/ui/tui/` owns the tray-host and native-frontend entry points, their inherited-pipe IPC, the Win32 TUI window, GDI cell rendering, keyboard and clipboard input, resize handling, notification icon, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
 - `docs/grammar.md` contains the current Weave language definition; the other direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.

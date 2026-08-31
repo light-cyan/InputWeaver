@@ -83,6 +83,26 @@ void TuiController::Tick()
 void TuiController::Handle(const KeyEvent& event)
 {
     statusMessage_.clear();
+    if (event.source != KeyEventSource::Keyboard) {
+        if (mode_ != Mode::None) {
+            if ((mode_ == Mode::AddPath
+                    || mode_ == Mode::NewName
+                    || mode_ == Mode::Rename
+                    || mode_ == Mode::ExecutableInput
+                    || mode_ == Mode::ConflictRename)
+                && event.key == Key::Character) {
+                HandleModal(event);
+            }
+            return;
+        }
+        if (SourceEditing()
+            && (event.key == Key::Character
+                || event.key == Key::Enter
+                || event.key == Key::Tab)) {
+            HandlePrograms(event);
+        }
+        return;
+    }
     if (mode_ != Mode::None) {
         HandleModal(event);
         return;

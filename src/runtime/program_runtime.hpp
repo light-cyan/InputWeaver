@@ -17,7 +17,8 @@ public:
         RuntimeRoutePort& routePort,
         RuntimeProcessLauncher& processLauncher,
         RuntimeClock& clock,
-        RuntimeDebugEventPort* debugPort = nullptr);
+        RuntimeDebugEventPort* debugPort = nullptr,
+        support::CallbackRef<void() noexcept> fatalStopRequest = {});
     ~ProgramRuntime();
 
     ProgramRuntime(const ProgramRuntime&) = delete;

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "platform/windows/support/unique_handle.hpp"
-#include "platform/windows/tui/tui_ipc.hpp"
+#include "platform/windows/ui/tui/tui_ipc.hpp"
 
 #include <cstddef>
 #include <filesystem>

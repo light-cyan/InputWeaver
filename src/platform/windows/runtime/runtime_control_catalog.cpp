@@ -243,6 +243,7 @@ void FillMouseRecipe(
     }
     binding.capabilities = static_cast<std::uint8_t>(
         kInputCapabilities | kOutputCapabilities);
+    binding.initialStateQueryable = virtualKey != 0U;
 }
 
 [[nodiscard]] bool RequiresInput(std::uint8_t uses) noexcept

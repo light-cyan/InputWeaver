@@ -1,5 +1,5 @@
 #include "platform/windows/support/unique_handle.hpp"
-#include "platform/windows/tui/tui_ipc.hpp"
+#include "platform/windows/ui/tui/tui_ipc.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -47,7 +47,8 @@ void TestCodecs()
     const inputweaver::ui::tui::KeyEvent source{
         inputweaver::ui::tui::Key::Character,
         U'\u4e2d',
-        true};
+        true,
+        inputweaver::ui::tui::KeyEventSource::Paste};
     const std::vector<std::uint8_t> keyBytes =
         inputweaver::win32::EncodeKeyEvent(source);
     inputweaver::ui::tui::KeyEvent decoded{};
@@ -57,7 +58,8 @@ void TestCodecs()
     Require(
         decoded.key == source.key
             && decoded.character == source.character
-            && decoded.shift == source.shift,
+            && decoded.shift == source.shift
+            && decoded.source == source.source,
         "key event round trip");
     const std::vector<std::uint8_t> surrogateKeyBytes =
         inputweaver::win32::EncodeKeyEvent({

@@ -47,7 +47,7 @@ if errorlevel 1 exit /b %errorlevel%
 echo [4/4] Building WindowsTuiIpcTests.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% ^
     "tests\ui\windows_tui_ipc_tests.cpp" ^
-    "src\platform\windows\tui\tui_ipc.cpp" ^
+    "src\platform\windows\ui\tui\tui_ipc.cpp" ^
     "src\ui\tui\support\canvas.cpp" ^
     "src\ui\tui\support\text_layout.cpp" ^
     -o "bin\WindowsTuiIpcTests.exe"

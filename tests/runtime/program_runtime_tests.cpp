@@ -221,11 +221,27 @@ struct RuntimeHarness final {
     FakeRoutePort route;
     FakeLauncher launcher;
     FakeDebugPort debug;
+    std::atomic<bool> fatalStopRequested{false};
     inputweaver::ProgramRuntime runtime;
 
     explicit RuntimeHarness(inputweaver::RuntimeCapacities capacities = {})
-        : runtime(capacities, controls, output, route, launcher, clock, &debug)
+        : runtime(
+              capacities,
+              controls,
+              output,
+              route,
+              launcher,
+              clock,
+              &debug,
+              {this, &RuntimeHarness::RequestFatalStop})
     {
+    }
+
+    static void RequestFatalStop(void* context) noexcept
+    {
+        static_cast<RuntimeHarness*>(context)->fatalStopRequested.store(
+            true,
+            std::memory_order_release);
     }
 };
 
@@ -841,8 +857,12 @@ void AppendExpression(
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     });
-    AppendExpression(storage, ExpressionType::Boolean, 1U, {
-        {ExpressionOpcode::ReadControlState, ExpressionType::Boolean, 0U, 0U},
+    AppendExpression(storage, ExpressionType::Boolean, 2U, {
+        {ExpressionOpcode::ReadControlState, ExpressionType::ControlState, 0U, 0U},
+        {ExpressionOpcode::PushControlState, ExpressionType::ControlState,
+            static_cast<std::uint32_t>(ControlState::Held), 0U},
+        {ExpressionOpcode::Binary, ExpressionType::Boolean,
+            static_cast<std::uint32_t>(BinaryOperator::Equal), 0U},
         {ExpressionOpcode::Return, ExpressionType::Boolean, 0U, 0U},
     });
     AppendExpression(storage, ExpressionType::State, 1U, {
@@ -2566,8 +2586,9 @@ void TestOwnershipFaultsAndOutputFailure()
     (void)failedOutput.runtime.Pump();
     Check(
         failedOutput.runtime.FatalShutdownRequested()
+            && failedOutput.fatalStopRequested.load(std::memory_order_acquire)
             && !failedOutput.runtime.HasOwnedOutputs(),
-        "output publication failure requests controlled fatal shutdown without ownership leak");
+        "output publication failure notifies the host and releases ownership");
 
     RuntimeHarness retriedCleanup;
     Check(

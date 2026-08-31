@@ -229,10 +229,11 @@ bool TuiIpcChannel::Poll(
 std::vector<std::uint8_t> EncodeKeyEvent(const ui::tui::KeyEvent& event)
 {
     std::vector<std::uint8_t> payload;
-    payload.reserve(12U);
+    payload.reserve(16U);
     AppendU32(payload, static_cast<std::uint32_t>(event.key));
     AppendU32(payload, static_cast<std::uint32_t>(event.character));
     AppendU32(payload, event.shift ? 1U : 0U);
+    AppendU32(payload, static_cast<std::uint32_t>(event.source));
     return payload;
 }
 
@@ -240,21 +241,24 @@ bool DecodeKeyEvent(
     std::span<const std::uint8_t> payload,
     ui::tui::KeyEvent& event) noexcept
 {
-    if (payload.size() != 12U) {
+    if (payload.size() != 16U) {
         return false;
     }
     const std::uint32_t key = ReadU32(payload, 0U);
     const std::uint32_t character = ReadU32(payload, 4U);
     const std::uint32_t shift = ReadU32(payload, 8U);
+    const std::uint32_t source = ReadU32(payload, 12U);
     if (key > static_cast<std::uint32_t>(ui::tui::Key::Redo)
         || character > 0x10ffffU
         || (character >= 0xd800U && character <= 0xdfffU)
-        || shift > 1U) {
+        || shift > 1U
+        || source > static_cast<std::uint32_t>(ui::tui::KeyEventSource::Drop)) {
         return false;
     }
     event.key = static_cast<ui::tui::Key>(key);
     event.character = static_cast<char32_t>(character);
     event.shift = shift != 0U;
+    event.source = static_cast<ui::tui::KeyEventSource>(source);
     return true;
 }
 

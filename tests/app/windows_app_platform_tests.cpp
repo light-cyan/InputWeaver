@@ -72,11 +72,19 @@ void TestProgramLibrary()
             {},
             inspected.sourceHash};
         const std::filesystem::path temporary = library.ArtifactTemporaryPath(1U);
+        const std::filesystem::path sourceSnapshot = directory / "source.snapshot";
         Write(temporary, "compiled");
+        Write(sourceSnapshot, inspected.sourceText);
+        Write(source, "TARGET \"changed.exe\"\n");
         const std::vector<inputweaver::app::ProgramEntryId> order{1U};
         Check(
             library.PublishImport(
-                       {inspected.normalizedPath, entry, order, false},
+                       {
+                           entry,
+                           order,
+                           false,
+                           inspected.sourceText},
+                       sourceSnapshot,
                        temporary,
                        "compiled dump\n")
                 .succeeded,
@@ -87,7 +95,7 @@ void TestProgramLibrary()
                 && loaded.entries[0] == entry
                 && library.LoadDump(1U) == "compiled dump\n"
                 && library.LoadSource(1U).text == "TARGET GLOBAL\n",
-            "published program library reloads");
+            "published import uses the inspected source snapshot");
         Check(
             library.NamesEqual("Game", "game"),
             "display names use ordinal case-insensitive comparison");
@@ -118,6 +126,14 @@ void TestProgramLibrary()
                 && library.SaveDump(2U, "generated dump\n").succeeded
                 && library.LoadDump(2U) == "generated dump\n",
             "editable source and generated dumps persist independently");
+        Check(
+            library.SaveSource(2U, "A:down => tap(C);\n").succeeded
+                && library.LoadDump(2U).empty(),
+            "saving source atomically retires its stale dump");
+        Check(
+            library.DeleteEntry(2U).succeeded
+                && !library.LoadSource(2U).succeeded,
+            "deleting a program removes its published files and index entry");
     }
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);

@@ -453,7 +453,7 @@ void TestBindingDiagnostics()
         "compile diagnostics stop at the fixed limit");
 }
 
-void TestControlCatalogAndV2()
+void TestControlCatalogAndRawControls()
 {
     using namespace inputweaver;
     using namespace inputweaver::compiler;
@@ -520,8 +520,8 @@ void TestControlCatalogAndV2()
         "HID.Usage(0x000C,0x00E9):down => tap(Consumer.VolumeUp);\n"
         "Windows.VirtualKey(0x41):down => tap(Windows.ScanCode(0x1E,E0));\n"
         "Linux.Key(30):down => tap(MacOS.KeyCode(0));\n",
-        "v2 controls");
-    const auto program = DecodeGood(output, "v2 controls");
+        "raw controls");
+    const auto program = DecodeGood(output, "raw controls");
     if (program == nullptr) {
         return;
     }
@@ -952,7 +952,7 @@ int main()
     TestSourceAndLexicalDiagnostics();
     TestParserAndRecovery();
     TestBindingDiagnostics();
-    TestControlCatalogAndV2();
+    TestControlCatalogAndRawControls();
     TestLoweringCoverage();
     TestArrayDiagnostics();
     TestGapAndEmptyActionSemantics();

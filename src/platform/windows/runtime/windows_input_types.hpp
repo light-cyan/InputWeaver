@@ -51,7 +51,7 @@ struct WindowsOutputRecipe final {
     bool extendedScanCode{};
 };
 
-inline constexpr std::size_t kWindowsOutputQueueCapacity = 256U;
+inline constexpr std::size_t kWindowsOutputQueueCapacity = 8192U;
 
 struct WindowsOutputItem final {
     std::uint64_t sourceSequence{};

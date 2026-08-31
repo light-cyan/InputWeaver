@@ -75,6 +75,10 @@ void PrintProgramMetrics(
                << L" injection_failures=" << metrics.injectionFailures
                << L" outside_target_forwarded=" << metrics.forwardedOutsideTarget
                << L" max_hook_us=" << metrics.maximumHookMicroseconds
+               << L" circuit_breaker="
+               << (metrics.circuitBreakerOpen ? L"true" : L"false")
+               << L" fatal_shutdown="
+               << (metrics.fatalShutdown ? L"true" : L"false")
                << L" hook_log_drops=" << diagnosticLog.DroppedHookRecords()
                << L" injection_log_drops=" << diagnosticLog.DroppedInjectionRecords()
                << L" runtime_log_drops=" << diagnosticLog.DroppedRuntimeRecords()
@@ -181,7 +185,9 @@ int RunCompiledInstance(
                    << waitError << L".\n";
         return 7;
     }
-    return metrics.circuitBreakerOpen || metrics.injectionFailures != 0U
+    return metrics.fatalShutdown
+            || metrics.circuitBreakerOpen
+            || metrics.injectionFailures != 0U
         ? 8
         : 0;
 }

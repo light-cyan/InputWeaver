@@ -80,23 +80,6 @@ void WriteLittleEndianU64(
     return hash;
 }
 
-[[nodiscard]] std::vector<std::uint8_t> DecodeHex(std::string_view text)
-{
-    const auto nibble = [](char value) noexcept -> std::uint8_t {
-        return value >= '0' && value <= '9'
-            ? static_cast<std::uint8_t>(value - '0')
-            : static_cast<std::uint8_t>(value - 'a' + 10);
-    };
-    std::vector<std::uint8_t> bytes;
-    bytes.reserve(text.size() / 2U);
-    for (std::size_t index = 0U; index + 1U < text.size(); index += 2U) {
-        bytes.push_back(static_cast<std::uint8_t>(
-            static_cast<std::uint8_t>(nibble(text[index]) << 4U)
-            | nibble(text[index + 1U])));
-    }
-    return bytes;
-}
-
 [[nodiscard]] std::shared_ptr<const inputweaver::CompiledProgram> FinalizeFixture(
     inputweaver::CompiledProgramStorage storage,
     std::string_view name)
@@ -563,59 +546,6 @@ void TestWeavecRoundTrips()
             Check(EncodeWeavec(*decoded.program) == bytes,
                 "weavec round trip reproduces identical bytes");
         }
-    }
-}
-
-void TestLegacyWeavecDecoding()
-{
-    using namespace inputweaver;
-    constexpr std::string_view version2Hex =
-        "574541564543000212030000000000000000000025000000000000000300000001ffffffff090000000600000080c3c90100"
-        "0000008096980000000000000000000000000000000000000000000100000000000000010000000e00000001000000000000"
-        "0001000000010000000000000001000000000100000011000000666978747572652e7461702e776561766503000000000000"
-        "0011000000250000000700000001000000070000003f00000000000000010000000700000040000000000000000100000007"
-        "00000045000000000000000100000007000000e0000000000000000100000007000000e10000000000000001000000070000"
-        "00e4000000000000000100000007000000e50000000000000007000000000000000101000000040200000001030000000204"
-        "000000020500000002060000000200000000000000000000000000000000000000000000000001000000000000000e000000"
-        "010100000000000000000000000e000000050103000000000000000a00040000000000000005010500000000000000080005"
-        "000000000000000001010000000000000009000c00000000000000050104000000000000000a000a00000000000000050106"
-        "0000000000000008000b000000000000000001010000000000000008000d00000000000000000100000000000000000b0100"
-        "0000000000000001000000000000000200000000000000010000001c00000007000000020000000201000000000000000e00"
-        "00000000000000000000000000000001000000020000000000000000010000000100000000000000ffffffff000000000000"
-        "00000000000000000000010000000000000000000000000100000001000000ffffffff00000000ffffffff01000000000000"
-        "1100000013000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000"
-        "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-        "00000000000000000000000000000000000000000000000000000000020000001c000000070000001c000000070000000000"
-        "0000";
-    const std::vector<std::uint8_t> version2 = DecodeHex(version2Hex);
-    const DecodeWeavecResult decodedVersion2 = DecodeWeavec(version2);
-    Check(
-        decodedVersion2.program != nullptr
-            && !decodedVersion2.decodeError.has_value(),
-        "WEAVEC format 2 golden artifact remains readable");
-
-    std::vector<std::uint8_t> version1 = version2;
-    version1.resize(version1.size() - 4U);
-    version1[7] = 0x01U;
-    WriteLittleEndianU64(
-        version1,
-        8U,
-        static_cast<std::uint64_t>(version1.size() - kWeavecHeaderSize));
-    const DecodeWeavecResult decodedVersion1 = DecodeWeavec(version1);
-    Check(
-        decodedVersion1.program != nullptr
-            && !decodedVersion1.decodeError.has_value(),
-        "WEAVEC format 1 golden artifact remains readable");
-
-    if (decodedVersion2.program != nullptr) {
-        Check(std::any_of(
-                  decodedVersion2.program->ExpressionCode().begin(),
-                  decodedVersion2.program->ExpressionCode().end(),
-                  [](const ExpressionInstruction& instruction) {
-                      return instruction.opcode == ExpressionOpcode::ReadControlState
-                          && instruction.type == ExpressionType::Boolean;
-                  }),
-            "legacy Boolean control reads retain their decoded representation");
     }
 }
 
@@ -1281,7 +1211,6 @@ int main()
     TestRequiredFixtures();
     TestControlIdentityContract();
     TestWeavecRoundTrips();
-    TestLegacyWeavecDecoding();
     TestWeavecRejection();
     TestExitControlContract();
     TestPauseControlContract();

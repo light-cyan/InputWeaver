@@ -24,6 +24,11 @@
 namespace inputweaver {
 namespace {
 
+static_assert(
+    kWindowsOutputQueueCapacity
+    >= static_cast<std::size_t>(RuntimeCapacities{}.maximumControls)
+        + RuntimeCapacities{}.maximumTaskOutputsWithoutSuspension);
+
 [[nodiscard]] std::int64_t ReadPerformanceCounter() noexcept
 {
     LARGE_INTEGER counter{};
@@ -245,41 +250,45 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     void Wait() noexcept
     {
-        if (waitCompleted.exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-        RequestStop();
-        if (lowLevelHooks != nullptr) {
-            lowLevelHooks->Wait();
-        } else if (hookProducerDoneEvent != nullptr) {
-            SetEvent(hookProducerDoneEvent);
-        }
-
-        if (runtime != nullptr) {
-            const std::lock_guard runtimeLock(runtimeCallMutex);
-            NotifyRuntimeShutdownLocked();
-            runtime->StopTaskThread();
-            for (unsigned int attempt = 0U; attempt < 3U; ++attempt) {
-                (void)runtime->Pump(1024U);
+        std::call_once(waitOnce, [this] {
+            const std::lock_guard metricsLock(metricsMutex);
+            RequestStop();
+            if (lowLevelHooks != nullptr) {
+                lowLevelHooks->Wait();
+            } else if (hookProducerDoneEvent != nullptr) {
+                SetEvent(hookProducerDoneEvent);
             }
-            metricsSnapshot.runtime = runtime->Metrics();
-            DrainRuntimeDiagnostics();
-            runtime->Deactivate();
-            DrainRuntimeDiagnostics();
-        }
-        if (debugServer != nullptr) {
-            debugServer->Stop();
-        }
-        if (outputProducerDoneEvent != nullptr) {
-            SetEvent(outputProducerDoneEvent);
-        }
-        if (outputWakeEvent != nullptr) {
-            SetEvent(outputWakeEvent);
-        }
-        if (outputThread.joinable()) {
-            outputThread.join();
-        }
-        CaptureSessionMetrics();
+
+            if (runtime != nullptr) {
+                const std::lock_guard runtimeLock(runtimeCallMutex);
+                NotifyRuntimeShutdownLocked();
+                runtime->StopTaskThread();
+                for (unsigned int attempt = 0U; attempt < 3U; ++attempt) {
+                    (void)runtime->Pump(1024U);
+                }
+                metricsSnapshot.runtime = runtime->Metrics();
+                metricsSnapshot.fatalShutdown =
+                    fatalShutdownObserved.load(std::memory_order_acquire)
+                    || runtime->FatalShutdownRequested();
+                DrainRuntimeDiagnostics();
+                runtime->Deactivate();
+                DrainRuntimeDiagnostics();
+            }
+            if (debugServer != nullptr) {
+                debugServer->Stop();
+            }
+            if (outputProducerDoneEvent != nullptr) {
+                SetEvent(outputProducerDoneEvent);
+            }
+            if (outputWakeEvent != nullptr) {
+                SetEvent(outputWakeEvent);
+            }
+            if (outputThread.joinable()) {
+                outputThread.join();
+            }
+            CaptureSessionMetrics();
+            waitCompleted = true;
+        });
     }
 
     [[nodiscard]] HANDLE StoppedEvent() const noexcept
@@ -289,9 +298,13 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     [[nodiscard]] WindowsProgramRuntimeSessionMetrics Metrics() const noexcept
     {
+        const std::lock_guard metricsLock(metricsMutex);
         WindowsProgramRuntimeSessionMetrics result = metricsSnapshot;
-        if (!waitCompleted.load(std::memory_order_acquire) && runtime != nullptr) {
+        if (!waitCompleted && runtime != nullptr) {
             result.runtime = runtime->Metrics();
+            result.fatalShutdown =
+                fatalShutdownObserved.load(std::memory_order_acquire)
+                || runtime->FatalShutdownRequested();
         }
         result.hookEvents = hookEvents.load(std::memory_order_relaxed);
         result.queuedOutputs = queuedOutputs.load(std::memory_order_relaxed);
@@ -356,7 +369,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             (void)debugServer->PublishInput(debugCorrelation, input);
         }
         DrainRuntimeDiagnostics();
-        if (runtime->ExitRequested() || runtime->FatalShutdownRequested()) {
+        if (runtime->FatalShutdownRequested()) {
+            fatalShutdownObserved.store(true, std::memory_order_release);
+            RequestStop();
+        } else if (runtime->ExitRequested()) {
             RequestStop();
         }
         PublishHookDiagnostic(
@@ -384,7 +400,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     [[nodiscard]] bool SeedActivatedPhysicalState() noexcept override
     {
-        return SeedActivatedKeyboardState();
+        return SeedActivatedPhysicalControls();
     }
 
     void ProcessControlRequests() noexcept override
@@ -431,6 +447,16 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         }
     }
 
+    static void FatalStopThunk(void* context) noexcept
+    {
+        if (context == nullptr) {
+            return;
+        }
+        Impl& session = *static_cast<Impl*>(context);
+        session.fatalShutdownObserved.store(true, std::memory_order_release);
+        session.SignalStopOnly();
+    }
+
     static void WakeDebugInputThreadThunk(void* context) noexcept
     {
         if (context == nullptr) {
@@ -469,7 +495,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         return RuntimeOutputResult::Accepted;
     }
 
-    bool SeedActivatedKeyboardState() noexcept
+    bool SeedActivatedPhysicalControls() noexcept
     {
         for (std::size_t token = 0U;
              token < controlCatalog->BindingCount();
@@ -477,7 +503,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             const win32::WindowsControlBinding* const binding =
                 controlCatalog->Binding(token);
             if (binding == nullptr
-                || binding->kind != win32::WindowsControlKind::Keyboard
                 || (binding->requiredUses
                     & (ToControlUseBits(ControlUse::EventSource)
                         | ToControlUseBits(ControlUse::PhysicalState))) == 0U) {
@@ -657,7 +682,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *routePort,
                 *processLauncher,
                 *clock,
-                debugServer.get());
+                debugServer.get(),
+                support::CallbackRef<void() noexcept>{this, &Impl::FatalStopThunk});
             inputAdapter = std::make_unique<win32::WindowsRuntimeInputAdapter>(
                 *controlCatalog);
             const StopRequest stopRequest{this, &Impl::RequestStopThunk};
@@ -877,7 +903,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::atomic<bool> shutdownRequested{false};
     std::atomic<bool> runtimeShutdownNotified{false};
     std::mutex runtimeCallMutex;
-    std::atomic<bool> waitCompleted{false};
+    mutable std::mutex metricsMutex;
+    std::once_flag waitOnce;
+    bool waitCompleted{};
+    std::atomic<bool> fatalShutdownObserved{false};
     std::atomic<std::uint64_t> currentGeneration{0U};
     std::atomic<std::uint64_t> nextHookSequence{1U};
     std::atomic<std::uint64_t> hookEvents{0U};

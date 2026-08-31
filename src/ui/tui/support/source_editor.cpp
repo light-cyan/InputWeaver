@@ -20,6 +20,7 @@ inline constexpr std::size_t kMaximumHistoryEntries = 256U;
 
 void SourceEditor::Set(std::string_view source)
 {
+    AdvanceRevision();
     lines_.clear();
     std::size_t offset{};
     while (offset <= source.size()) {
@@ -322,6 +323,11 @@ std::size_t SourceEditor::LeftColumn() const noexcept
     return leftColumn_;
 }
 
+std::uint64_t SourceEditor::Revision() const noexcept
+{
+    return revision_;
+}
+
 bool SourceEditor::HasSelection() const noexcept
 {
     return selectionAnchor_.has_value()
@@ -466,6 +472,7 @@ void SourceEditor::Restore(Snapshot snapshot) noexcept
 
 void SourceEditor::RecordEdit()
 {
+    AdvanceRevision();
     PushHistory(undoHistory_, Capture());
     redoHistory_ = {};
 }
@@ -482,6 +489,7 @@ bool SourceEditor::RestoreHistory(
     source.states.pop_back();
     source.bytes -= snapshot.sourceBytes;
     Restore(std::move(snapshot));
+    AdvanceRevision();
     return true;
 }
 
@@ -515,6 +523,14 @@ void SourceEditor::MoveVertical(std::ptrdiff_t lines) noexcept
 void SourceEditor::RememberColumn() noexcept
 {
     preferredByte_ = cursorByte_;
+}
+
+void SourceEditor::AdvanceRevision() noexcept
+{
+    ++revision_;
+    if (revision_ == 0U) {
+        ++revision_;
+    }
 }
 
 } // namespace inputweaver::ui::tui

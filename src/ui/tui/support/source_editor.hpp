@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +43,7 @@ public:
     [[nodiscard]] std::size_t CursorDisplayColumn() const noexcept;
     [[nodiscard]] std::size_t TopLine() const noexcept;
     [[nodiscard]] std::size_t LeftColumn() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept;
     [[nodiscard]] bool HasSelection() const noexcept;
     [[nodiscard]] bool IsSelected(
         std::size_t line,
@@ -84,6 +86,7 @@ private:
     static void PushHistory(History& history, Snapshot snapshot);
     void MoveVertical(std::ptrdiff_t lines) noexcept;
     void RememberColumn() noexcept;
+    void AdvanceRevision() noexcept;
 
     std::vector<std::string> lines_{1U};
     std::size_t cursorLine_{};
@@ -93,6 +96,7 @@ private:
     std::size_t topLine_{};
     std::size_t leftColumn_{};
     std::size_t visibleLines_{};
+    std::uint64_t revision_{1U};
     std::optional<Position> selectionAnchor_;
     History undoHistory_;
     History redoHistory_;

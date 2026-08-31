@@ -41,7 +41,7 @@ public:
         std::string_view sourcePath) const override
     {
         if (!sourcePath.ends_with(".weave")) {
-            return {false, {}, {}, 0U, "A .weave file is required."};
+            return {false, {}, {}, 0U, "A .weave file is required.", {}};
         }
         const std::size_t slash = sourcePath.find_last_of("/\\");
         const std::size_t begin = slash == std::string_view::npos
@@ -54,7 +54,8 @@ public:
                 begin,
                 sourcePath.size() - begin - 6U)},
             inputweaver::app::SourceHash(source),
-            {}};
+            {},
+            source};
     }
 
     [[nodiscard]] bool NamesEqual(
@@ -139,13 +140,15 @@ public:
     }
 
     [[nodiscard]] inputweaver::app::SourceValidationResult ValidateSource(
-        const inputweaver::app::ProgramEntry&) override
+        const inputweaver::app::ProgramEntry&,
+        std::string_view) override
     {
         return {true, true, {}, {}};
     }
 
     [[nodiscard]] inputweaver::app::OperationResult CompileProgram(
-        const inputweaver::app::ProgramEntry& entry) override
+        const inputweaver::app::ProgramEntry& entry,
+        std::string_view) override
     {
         ++compileCount;
         savedEntry = entry;
@@ -153,7 +156,8 @@ public:
     }
 
     [[nodiscard]] inputweaver::app::OperationResult GenerateDump(
-        const inputweaver::app::ProgramEntry&) override
+        const inputweaver::app::ProgramEntry&,
+        std::string_view) override
     {
         ++dumpCount;
         return inputweaver::app::OperationResult::Success();

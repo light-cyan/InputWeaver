@@ -33,9 +33,8 @@ namespace {
         result.nanoseconds = 0;
         return true;
     }
-    const double maximum = static_cast<double>(
-        (std::numeric_limits<std::int64_t>::max)());
-    if (value > maximum) {
+    constexpr double exclusiveMaximum = 9'223'372'036'854'775'808.0;
+    if (value >= exclusiveMaximum) {
         return false;
     }
     result.nanoseconds = static_cast<std::int64_t>(value);
@@ -416,19 +415,14 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
             if (instruction.operand0 >= state.physicalHeld.size()) {
                 return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
             }
-            if (instruction.type == ExpressionType::Boolean) {
-                value.type = ExpressionType::Boolean;
-                value.booleanValue = state.physicalHeld[instruction.operand0].load(
-                    std::memory_order_acquire) != 0U;
-            } else if (instruction.type == ExpressionType::ControlState) {
-                value.type = ExpressionType::ControlState;
-                value.controlStateValue = state.physicalHeld[instruction.operand0].load(
-                    std::memory_order_acquire) != 0U
-                    ? ControlState::Held
-                    : ControlState::Idle;
-            } else {
+            if (instruction.type != ExpressionType::ControlState) {
                 return Fault(RuntimeEvaluationFault::TypeMismatch, position);
             }
+            value.type = ExpressionType::ControlState;
+            value.controlStateValue = state.physicalHeld[instruction.operand0].load(
+                std::memory_order_acquire) != 0U
+                ? ControlState::Held
+                : ControlState::Idle;
             if (!push(value)) {
                 return Fault(RuntimeEvaluationFault::StackOverflow, position);
             }

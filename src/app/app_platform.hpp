@@ -24,13 +24,14 @@ struct ImportSourceInfo final {
     std::string defaultName;
     std::uint64_t sourceHash{};
     std::string error;
+    std::string sourceText;
 };
 
 struct ImportPublishRequest final {
-    std::string sourcePath;
     ProgramEntry entry;
     std::vector<ProgramEntryId> order;
     bool overwrite{};
+    std::string sourceText;
 };
 
 struct ProgramPublishRequest final {
@@ -84,11 +85,14 @@ public:
         ProgramEntryId id,
         std::string_view source) = 0;
     [[nodiscard]] virtual SourceValidationResult ValidateSource(
-        const ProgramEntry& entry) = 0;
+        const ProgramEntry& entry,
+        std::string_view source) = 0;
     [[nodiscard]] virtual OperationResult CompileProgram(
-        const ProgramEntry& entry) = 0;
+        const ProgramEntry& entry,
+        std::string_view source) = 0;
     [[nodiscard]] virtual OperationResult GenerateDump(
-        const ProgramEntry& entry) = 0;
+        const ProgramEntry& entry,
+        std::string_view source) = 0;
 
     [[nodiscard]] virtual OperationResult LaunchExecutor(
         const LaunchRequest& request) = 0;

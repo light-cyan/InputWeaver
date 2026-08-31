@@ -59,6 +59,12 @@ namespace {
         input.seekg(0, std::ios::beg);
         if (!bytes.empty()) {
             input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
+                bytes.clear();
+                error = "File changed while it was being read: "
+                    + path.string() + ".";
+                return false;
+            }
         }
         if (!input && !input.eof()) {
             error = "Cannot read " + path.string() + ".";
@@ -101,6 +107,69 @@ void RemoveIfPresent(const std::filesystem::path& path) noexcept
 {
     std::error_code ignored;
     (void)std::filesystem::remove(path, ignored);
+}
+
+struct StagedRemoval final {
+    std::filesystem::path original;
+    std::filesystem::path staged;
+    bool moved{};
+};
+
+[[nodiscard]] bool StageRemoval(
+    StagedRemoval& removal,
+    std::string& error)
+{
+    const DWORD attributes = GetFileAttributesW(removal.original.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        const DWORD status = GetLastError();
+        if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) {
+            return true;
+        }
+        error = std::system_category().message(static_cast<int>(status));
+        return false;
+    }
+    if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) {
+        error = "Cannot remove a program file because its path is a directory.";
+        return false;
+    }
+    removal.staged = MakeSiblingTemporaryPath(removal.original);
+    if (MoveFileExW(
+            removal.original.c_str(),
+            removal.staged.c_str(),
+            MOVEFILE_WRITE_THROUGH) == FALSE) {
+        error = std::system_category().message(
+            static_cast<int>(GetLastError()));
+        return false;
+    }
+    removal.moved = true;
+    return true;
+}
+
+void RestoreRemoval(StagedRemoval& removal) noexcept
+{
+    if (!removal.moved) {
+        return;
+    }
+    if (MoveFileExW(
+            removal.staged.c_str(),
+            removal.original.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE) {
+        removal.moved = false;
+    }
+}
+
+void DiscardRemoval(StagedRemoval& removal) noexcept
+{
+    if (!removal.moved) {
+        return;
+    }
+    if (DeleteFileW(removal.staged.c_str()) == FALSE) {
+        (void)MoveFileExW(
+            removal.staged.c_str(),
+            nullptr,
+            MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
+    removal.moved = false;
 }
 
 [[nodiscard]] std::string TrimAndUnquote(std::string_view source)
@@ -307,41 +376,43 @@ app::ImportSourceInfo WindowsProgramLibrary::InspectSource(
 {
     const std::string unquoted = TrimAndUnquote(sourcePath);
     if (unquoted.empty() || !support::IsValidUtf8(unquoted)) {
-        return {false, {}, {}, 0U, "A valid UTF-8 path is required."};
+        return {false, {}, {}, 0U, "A valid UTF-8 path is required.", {}};
     }
     std::wstring wide;
     if (!Utf8ToWide(unquoted, wide)) {
-        return {false, {}, {}, 0U, "The source path is not valid UTF-8."};
+        return {false, {}, {}, 0U, "The source path is not valid UTF-8.", {}};
     }
     try {
         std::filesystem::path path = std::filesystem::absolute(
             std::filesystem::path{wide});
         if (!IsRegularFile(path)) {
-            return {false, {}, {}, 0U, "The source file does not exist."};
+            return {false, {}, {}, 0U, "The source file does not exist.", {}};
         }
         if (!EqualOrdinalIgnoreCase(path.extension().wstring(), L".weave")) {
-            return {false, {}, {}, 0U, "A single .weave file is required."};
+            return {false, {}, {}, 0U, "A single .weave file is required.", {}};
         }
         std::string normalized;
         std::string name;
         if (!WideToUtf8(path.wstring(), normalized)
             || !WideToUtf8(path.stem().wstring(), name)
             || !app::ValidDisplayName(name)) {
-            return {false, {}, {}, 0U, "The source filename cannot be used."};
+            return {false, {}, {}, 0U, "The source filename cannot be used.", {}};
         }
         std::string source;
         std::string error;
         if (!ReadBytes(path, source, error)) {
-            return {false, {}, {}, 0U, std::move(error)};
+            return {false, {}, {}, 0U, std::move(error), {}};
         }
+        const std::uint64_t sourceHash = app::SourceHash(source);
         return {
             true,
             std::move(normalized),
             std::move(name),
-            app::SourceHash(source),
-            {}};
+            sourceHash,
+            {},
+            std::move(source)};
     } catch (const std::exception& exception) {
-        return {false, {}, {}, 0U, exception.what()};
+        return {false, {}, {}, 0U, exception.what(), {}};
     }
 }
 
@@ -358,6 +429,7 @@ bool WindowsProgramLibrary::NamesEqual(
 
 app::OperationResult WindowsProgramLibrary::PublishImport(
     const app::ImportPublishRequest& request,
+    const std::filesystem::path& sourceTemporary,
     const std::filesystem::path& compiledTemporary,
     std::string_view dumpText)
 {
@@ -365,16 +437,12 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
     if (!EnsureDirectories(error)) {
         return app::OperationResult::Failure(std::move(error));
     }
-    std::wstring sourcePath;
-    std::string sourceText;
-    if (!Utf8ToWide(request.sourcePath, sourcePath)
-        || !ReadBytes(sourcePath, sourceText, error)) {
+    if (app::SourceHash(request.sourceText)
+        != request.entry.compiledSourceHash) {
         RemoveIfPresent(compiledTemporary);
         return app::OperationResult::Failure(
-            error.empty() ? "The source path is invalid." : std::move(error));
+            "The import source changed before publication.");
     }
-    const std::filesystem::path sourceTemporary = MakeSiblingTemporaryPath(
-        SourcePath(request.entry.id));
     const std::filesystem::path entryTemporary = MakeSiblingTemporaryPath(
         EntryPath(request.entry.id));
     const std::filesystem::path dumpTemporary = MakeSiblingTemporaryPath(
@@ -392,8 +460,7 @@ app::OperationResult WindowsProgramLibrary::PublishImport(
         }
         RemoveIfPresent(compiledTemporary);
     };
-    if (!WriteNewFile(sourceTemporary, sourceText, error)
-        || !WriteNewFile(
+    if (!WriteNewFile(
             entryTemporary,
             app::EncodeEntry(request.entry),
             error)
@@ -459,10 +526,20 @@ app::OperationResult WindowsProgramLibrary::PublishNew(
 
 app::OperationResult WindowsProgramLibrary::PublishCompilation(
     const app::ProgramEntry& entry,
+    std::string_view sourceText,
     const std::filesystem::path& compiledTemporary,
     std::string_view dumpText)
 {
     std::string error;
+    std::string currentSource;
+    if (!ReadBytes(SourcePath(entry.id), currentSource, error)
+        || currentSource != sourceText) {
+        RemoveIfPresent(compiledTemporary);
+        return app::OperationResult::Failure(
+            error.empty()
+                ? "Source changed during compilation."
+                : std::move(error));
+    }
     const std::filesystem::path dumpTemporary = MakeSiblingTemporaryPath(
         DumpPath(entry.id));
     const std::filesystem::path entryTemporary = MakeSiblingTemporaryPath(
@@ -511,23 +588,40 @@ app::OperationResult WindowsProgramLibrary::SaveOrder(
 
 app::OperationResult WindowsProgramLibrary::DeleteEntry(app::ProgramEntryId id)
 {
-    std::string index;
+    std::string indexText;
     std::string error;
     std::vector<app::ProgramEntryId> order;
     if (IsRegularFile(IndexPath())
-        && (!ReadBytes(IndexPath(), index, error)
-            || !app::DecodeProgramIndex(index, order, error))) {
+        && (!ReadBytes(IndexPath(), indexText, error)
+            || !app::DecodeProgramIndex(indexText, order, error))) {
         return app::OperationResult::Failure(std::move(error));
     }
     order.erase(std::remove(order.begin(), order.end(), id), order.end());
+    std::array removals{
+        StagedRemoval{EntryPath(id), {}, false},
+        StagedRemoval{SourcePath(id), {}, false},
+        StagedRemoval{ArtifactPath(id), {}, false},
+        StagedRemoval{DumpPath(id), {}, false}};
+    for (std::size_t index = 0U; index < removals.size(); ++index) {
+        if (StageRemoval(removals[index], error)) {
+            continue;
+        }
+        while (index > 0U) {
+            --index;
+            RestoreRemoval(removals[index]);
+        }
+        return app::OperationResult::Failure(std::move(error));
+    }
     const app::OperationResult saved = SaveOrder(order);
     if (!saved.succeeded) {
+        for (auto& removal : removals) {
+            RestoreRemoval(removal);
+        }
         return saved;
     }
-    RemoveIfPresent(EntryPath(id));
-    RemoveIfPresent(SourcePath(id));
-    RemoveIfPresent(ArtifactPath(id));
-    RemoveIfPresent(DumpPath(id));
+    for (auto& removal : removals) {
+        DiscardRemoval(removal);
+    }
     return app::OperationResult::Success();
 }
 
@@ -559,10 +653,15 @@ app::OperationResult WindowsProgramLibrary::SaveSource(
             "Source must be valid UTF-8 and no larger than 16 MiB.");
     }
     std::string error;
-    if (!WriteFileAtomically(SourcePath(id), source, error)) {
+    StagedRemoval staleDump{DumpPath(id), {}, false};
+    if (!StageRemoval(staleDump, error)) {
         return app::OperationResult::Failure(std::move(error));
     }
-    RemoveIfPresent(DumpPath(id));
+    if (!WriteFileAtomically(SourcePath(id), source, error)) {
+        RestoreRemoval(staleDump);
+        return app::OperationResult::Failure(std::move(error));
+    }
+    DiscardRemoval(staleDump);
     return app::OperationResult::Success();
 }
 
@@ -574,6 +673,23 @@ app::OperationResult WindowsProgramLibrary::SaveDump(
     return WriteFileAtomically(DumpPath(id), dump, error)
         ? app::OperationResult::Success()
         : app::OperationResult::Failure(std::move(error));
+}
+
+app::OperationResult WindowsProgramLibrary::PublishDump(
+    app::ProgramEntryId id,
+    std::string_view sourceText,
+    std::string_view dump)
+{
+    std::string currentSource;
+    std::string error;
+    if (!ReadBytes(SourcePath(id), currentSource, error)
+        || currentSource != sourceText) {
+        return app::OperationResult::Failure(
+            error.empty()
+                ? "Source changed while generating the dump."
+                : std::move(error));
+    }
+    return SaveDump(id, dump);
 }
 
 const std::filesystem::path& WindowsProgramLibrary::ExecutableDirectory()

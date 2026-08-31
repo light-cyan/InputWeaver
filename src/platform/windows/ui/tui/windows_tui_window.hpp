@@ -1,6 +1,6 @@
 #pragma once
 
-#include "platform/windows/tui/tui_ipc.hpp"
+#include "platform/windows/ui/tui/tui_ipc.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -54,7 +54,10 @@ private:
     void UpdateViewport() noexcept;
     void Paint() noexcept;
     void QueueEvent(ui::tui::KeyEvent event) noexcept;
-    void QueueText(const wchar_t* text, std::size_t length) noexcept;
+    void QueueText(
+        const wchar_t* text,
+        std::size_t length,
+        ui::tui::KeyEventSource source) noexcept;
     void PasteClipboard() noexcept;
     void AcceptDroppedFiles(HDROP drop) noexcept;
 

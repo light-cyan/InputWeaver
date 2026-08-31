@@ -144,10 +144,10 @@ OperationResult Application::ImportProgram(
         order.push_back(entry.id);
     }
     const OperationResult result = platform_.PublishImport({
-        source.normalizedPath,
         entry,
         order,
-        overwrite});
+        overwrite,
+        source.sourceText});
     DrainPlatformEvents();
     if (!result.succeeded) {
         AppendAppMessage("Import failed: " + result.error);
@@ -336,10 +336,13 @@ OperationResult Application::SaveSource(
 SourceValidationResult Application::ValidateProgram(ProgramEntryId id)
 {
     const ProgramEntry* entry = FindProgram(id);
-    return entry == nullptr
-        ? SourceValidationResult{
-            false, false, {}, "The program no longer exists."}
-        : platform_.ValidateSource(*entry);
+    if (entry == nullptr) {
+        return {false, false, {}, "The program no longer exists."};
+    }
+    const SourceReadResult source = platform_.LoadSource(id);
+    return source.succeeded
+        ? platform_.ValidateSource(*entry, source.text)
+        : SourceValidationResult{false, false, {}, source.error};
 }
 
 OperationResult Application::CompileProgram(ProgramEntryId id)
@@ -356,7 +359,9 @@ OperationResult Application::CompileProgram(ProgramEntryId id)
     }
     ProgramEntry updated = *entry;
     updated.compiledSourceHash = SourceHash(source.text);
-    const OperationResult compiled = platform_.CompileProgram(updated);
+    const OperationResult compiled = platform_.CompileProgram(
+        updated,
+        source.text);
     DrainPlatformEvents();
     if (!compiled.succeeded) {
         AppendAppMessage("Compile failed: " + compiled.error);
@@ -374,7 +379,11 @@ OperationResult Application::GenerateDump(ProgramEntryId id)
     if (entry == nullptr) {
         return OperationResult::Failure("The program no longer exists.");
     }
-    const OperationResult dumped = platform_.GenerateDump(*entry);
+    const SourceReadResult source = platform_.LoadSource(id);
+    if (!source.succeeded) {
+        return OperationResult::Failure(source.error);
+    }
+    const OperationResult dumped = platform_.GenerateDump(*entry, source.text);
     DrainPlatformEvents();
     if (!dumped.succeeded) {
         AppendAppMessage("Dump failed: " + dumped.error);

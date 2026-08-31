@@ -1,10 +1,11 @@
 #include "app/application.hpp"
 #include "platform/windows/app/windows_app_platform.hpp"
 #include "platform/windows/support/text_encoding.hpp"
-#include "platform/windows/tui/tui_frontend_session.hpp"
-#include "platform/windows/tui/tui_resources.hpp"
-#include "platform/windows/tui/windows_clipboard.hpp"
-#include "platform/windows/tui/windows_tray.hpp"
+#include "platform/windows/support/unique_handle.hpp"
+#include "platform/windows/ui/tui/tui_frontend_session.hpp"
+#include "platform/windows/ui/tui/tui_resources.hpp"
+#include "platform/windows/ui/tui/windows_clipboard.hpp"
+#include "platform/windows/ui/tui/windows_tray.hpp"
 #include "ui/tui/tui_controller.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -59,6 +60,16 @@ void ShowError(std::string_view error) noexcept
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int showCommand)
 {
     try {
+        const inputweaver::win32::UniqueHandle instanceMutex{
+            CreateMutexW(nullptr, FALSE, L"Local\\InputWeaver.Host")};
+        const DWORD mutexStatus = GetLastError();
+        if (!instanceMutex) {
+            ShowError("Cannot create the InputWeaver Host instance lock.");
+            return 1;
+        }
+        if (mutexStatus == ERROR_ALREADY_EXISTS) {
+            return 0;
+        }
         const std::filesystem::path executableDirectory =
             ExecutableDirectory();
         inputweaver::ui::tui::ColorScheme colors{};

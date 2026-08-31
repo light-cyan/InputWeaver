@@ -19,28 +19,6 @@
 namespace inputweaver {
 namespace {
 
-constexpr std::array<std::uint8_t, 8U> kWeavecMagicV1{
-    0x57U,
-    0x45U,
-    0x41U,
-    0x56U,
-    0x45U,
-    0x43U,
-    0x00U,
-    0x01U,
-};
-
-constexpr std::array<std::uint8_t, 8U> kWeavecMagicV2{
-    0x57U,
-    0x45U,
-    0x41U,
-    0x56U,
-    0x45U,
-    0x43U,
-    0x00U,
-    0x02U,
-};
-
 constexpr std::array<std::uint8_t, 8U> kWeavecMagicV3{
     0x57U,
     0x45U,
@@ -425,8 +403,7 @@ template <typename Value, typename ReadElement>
 
 [[nodiscard]] bool ReadRequirements(
     ByteReader& reader,
-    ProgramRequirements& requirements,
-    std::uint8_t formatVersion)
+    ProgramRequirements& requirements)
 {
     std::uint8_t requiresProcessLaunch = 0U;
     if (!reader.U32(requirements.stateSlotCount)
@@ -434,9 +411,8 @@ template <typename Value, typename ReadElement>
         || !reader.U32(requirements.durationSlotCount)) {
         return false;
     }
-    if (formatVersion >= 3U
-        && (!reader.U32(requirements.arrayCount)
-            || !reader.U64(requirements.initialArrayElementBytes))) {
+    if (!reader.U32(requirements.arrayCount)
+        || !reader.U64(requirements.initialArrayElementBytes)) {
         return false;
     }
     if (!reader.U32(requirements.mappingSlotCount)
@@ -680,12 +656,11 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 [[nodiscard]] bool DecodePayload(
     ByteReader& reader,
     const WeavecDecodeLimits& limits,
-    CompiledProgramStorage& storage,
-    std::uint8_t formatVersion)
+    CompiledProgramStorage& storage)
 {
     if (!ReadSource(reader, storage.source)
         || !ReadSettings(reader, storage.settings)
-        || !ReadRequirements(reader, storage.requirements, formatVersion)) {
+        || !ReadRequirements(reader, storage.requirements)) {
         return false;
     }
 
@@ -761,44 +736,37 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         return false;
     }
 
-    if (formatVersion >= 3U
-        && (!ReadVector(
-                reader,
-                storage.arrays,
-                limits,
-                9U,
-                [](ByteReader& input, ArrayDescriptor& value) {
-                    return ReadEnum(
-                               input,
-                               value.elementType,
-                               ArrayElementType::Number)
-                        && ReadRange(input, value.initialValues);
-                })
-            || !ReadVector(
-                reader,
-                storage.initialArrayStates,
-                limits,
-                1U,
-                [](ByteReader& input, std::uint8_t& value) {
-                    return input.U8(value);
-                })
-            || !ReadVector(
-                reader,
-                storage.initialArrayNumbers,
-                limits,
-                8U,
-                [](ByteReader& input, double& value) {
-                    return input.Number(value);
-                }))) {
+    if (!ReadVector(
+            reader,
+            storage.arrays,
+            limits,
+            9U,
+            [](ByteReader& input, ArrayDescriptor& value) {
+                return ReadEnum(
+                           input,
+                           value.elementType,
+                           ArrayElementType::Number)
+                    && ReadRange(input, value.initialValues);
+            })
+        || !ReadVector(
+            reader,
+            storage.initialArrayStates,
+            limits,
+            1U,
+            [](ByteReader& input, std::uint8_t& value) {
+                return input.U8(value);
+            })
+        || !ReadVector(
+            reader,
+            storage.initialArrayNumbers,
+            limits,
+            8U,
+            [](ByteReader& input, double& value) {
+                return input.Number(value);
+            })) {
         return false;
     }
 
-    const ExpressionType lastExpressionType = formatVersion >= 3U
-        ? ExpressionType::ControlState
-        : ExpressionType::Duration;
-    const ExpressionOpcode lastExpressionOpcode = formatVersion >= 3U
-        ? ExpressionOpcode::LoadArrayElement
-        : ExpressionOpcode::Return;
     if (!ReadVector(
             reader,
             storage.numberConstants,
@@ -820,9 +788,12 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             storage.expressions,
             limits,
             21U,
-            [lastExpressionType](ByteReader& input, ExpressionDescriptor& value) {
+            [](ByteReader& input, ExpressionDescriptor& value) {
                 return ReadRange(input, value.code)
-                    && ReadEnum(input, value.resultType, lastExpressionType)
+                    && ReadEnum(
+                        input,
+                        value.resultType,
+                        ExpressionType::ControlState)
                     && input.U32(value.maximumStackDepth)
                     && ReadSpan(input, value.source);
             })
@@ -831,17 +802,20 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             storage.expressionCode,
             limits,
             10U,
-            [formatVersion, lastExpressionOpcode, lastExpressionType](
-                ByteReader& input,
-                ExpressionInstruction& value) {
-                if (!ReadEnum(input, value.opcode, lastExpressionOpcode)
-                    || !ReadEnum(input, value.type, lastExpressionType)
+            [](ByteReader& input, ExpressionInstruction& value) {
+                if (!ReadEnum(
+                        input,
+                        value.opcode,
+                        ExpressionOpcode::LoadArrayElement)
+                    || !ReadEnum(
+                        input,
+                        value.type,
+                        ExpressionType::ControlState)
                     || !input.U32(value.operand0)
                     || !input.U32(value.operand1)) {
                     return false;
                 }
-                if (formatVersion >= 3U
-                    && value.opcode == ExpressionOpcode::ReadControlState
+                if (value.opcode == ExpressionOpcode::ReadControlState
                     && value.type != ExpressionType::ControlState) {
                     return input.Fail(
                         WeavecDecodeErrorCode::InvalidScalar,
@@ -852,10 +826,6 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
         return false;
     }
 
-    const ActionOpcode lastActionOpcode = formatVersion >= 3U
-        ? ActionOpcode::ClearArray
-        : ActionOpcode::End;
-    const std::size_t actionInstructionBytes = formatVersion >= 3U ? 13U : 9U;
     if (!ReadVector(
             reader,
             storage.actionPrograms,
@@ -871,14 +841,14 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             reader,
             storage.actionCode,
             limits,
-            actionInstructionBytes,
-            [formatVersion, lastActionOpcode](ByteReader& input, ActionInstruction& value) {
-                if (!ReadEnum(input, value.opcode, lastActionOpcode)
+            13U,
+            [](ByteReader& input, ActionInstruction& value) {
+                if (!ReadEnum(input, value.opcode, ActionOpcode::ClearArray)
                     || !input.U32(value.operand0)
                     || !input.U32(value.operand1)) {
                     return false;
                 }
-                return formatVersion < 3U || input.U32(value.operand2);
+                return input.U32(value.operand2);
             })) {
         return false;
     }
@@ -980,8 +950,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             })) {
         return false;
     }
-    if (formatVersion >= 3U
-        && !ReadVector(
+    if (!ReadVector(
             reader,
             storage.debugInfo.arrays,
             limits,
@@ -1010,9 +979,6 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
                 return ReadSpan(input, value);
             })) {
         return false;
-    }
-    if (formatVersion == 1U) {
-        return true;
     }
     return ReadVector(
         reader,
@@ -1061,30 +1027,20 @@ DecodeWeavecResult DecodeWeavec(
             "artifact is shorter than the 16-byte header"};
         return result;
     }
-    std::uint8_t formatVersion{};
-    if (std::equal(kWeavecMagicV1.begin(), kWeavecMagicV1.end(), bytes.begin())) {
-        formatVersion = 1U;
-    } else if (std::equal(
-                   kWeavecMagicV2.begin(),
-                   kWeavecMagicV2.end(),
-                   bytes.begin())) {
-        formatVersion = 2U;
-    } else if (std::equal(
-                   kWeavecMagicV3.begin(),
-                   kWeavecMagicV3.end(),
-                   bytes.begin())) {
-        formatVersion = 3U;
-    } else {
+    if (!std::equal(
+            kWeavecMagicV3.begin(),
+            kWeavecMagicV3.end(),
+            bytes.begin())) {
         std::size_t mismatch = 0U;
         while (mismatch < kWeavecMagicV3.size()
             && bytes[mismatch] == kWeavecMagicV3[mismatch]) {
             ++mismatch;
         }
-            result.decodeError = WeavecDecodeError{
-                WeavecDecodeErrorCode::InvalidHeader,
-                mismatch,
-                "artifact magic or format version differs from supported WEAVEC formats"};
-            return result;
+        result.decodeError = WeavecDecodeError{
+            WeavecDecodeErrorCode::InvalidHeader,
+            mismatch,
+            "artifact magic or format version differs from the current WEAVEC format"};
+        return result;
     }
 
     const std::uint64_t payloadSize = ReadHeaderPayloadLength(bytes);
@@ -1110,7 +1066,7 @@ DecodeWeavecResult DecodeWeavec(
             bytes.subspan(kWeavecHeaderSize),
             kWeavecHeaderSize,
             result.decodeError);
-        if (!DecodePayload(reader, limits, storage, formatVersion)) {
+        if (!DecodePayload(reader, limits, storage)) {
             return result;
         }
         if (reader.Remaining() != 0U) {

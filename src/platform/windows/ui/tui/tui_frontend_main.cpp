@@ -1,6 +1,6 @@
 #include "platform/windows/support/unique_handle.hpp"
-#include "platform/windows/tui/tui_ipc.hpp"
-#include "platform/windows/tui/windows_tui_window.hpp"
+#include "platform/windows/ui/tui/tui_ipc.hpp"
+#include "platform/windows/ui/tui/windows_tui_window.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

@@ -91,7 +91,7 @@ public:
         std::string_view sourcePath) const override
     {
         if (!sourcePath.ends_with(".weave")) {
-            return {false, {}, {}, 0U, "A .weave file is required."};
+            return {false, {}, {}, 0U, "A .weave file is required.", {}};
         }
         const std::size_t slash = sourcePath.find_last_of("/\\");
         const std::size_t begin = slash == std::string_view::npos
@@ -104,7 +104,8 @@ public:
                 begin,
                 sourcePath.size() - begin - 6U)},
             inputweaver::app::SourceHash(source),
-            {}};
+            {},
+            source};
     }
 
     [[nodiscard]] bool NamesEqual(
@@ -177,20 +178,23 @@ public:
     }
 
     [[nodiscard]] inputweaver::app::SourceValidationResult ValidateSource(
-        const inputweaver::app::ProgramEntry&) override
+        const inputweaver::app::ProgramEntry&,
+        std::string_view) override
     {
         return validation;
     }
 
     [[nodiscard]] inputweaver::app::OperationResult CompileProgram(
-        const inputweaver::app::ProgramEntry& entry) override
+        const inputweaver::app::ProgramEntry& entry,
+        std::string_view) override
     {
         imported = entry;
         return inputweaver::app::OperationResult::Success();
     }
 
     [[nodiscard]] inputweaver::app::OperationResult GenerateDump(
-        const inputweaver::app::ProgramEntry&) override
+        const inputweaver::app::ProgramEntry&,
+        std::string_view) override
     {
         ++dumpCount;
         dump = "generated dump\n";
@@ -783,6 +787,30 @@ void TestSupport()
         allControlWords && longDottedSpans.size() == 129U
             && coloredBytes + 128U == longDottedControl.size(),
         "long dotted controls classify each word once while leaving dots ordinary");
+
+    inputweaver::ui::tui::SourceEditor cachedEditor;
+    cachedEditor.Set("state\nflag = off;\nflag");
+    inputweaver::ui::tui::SourceHighlightDocument cachedHighlights;
+    const bool builtHighlights = cachedHighlights.Update(cachedEditor);
+    cachedEditor.LastLine();
+    const bool reusedHighlights = !cachedHighlights.Update(cachedEditor);
+    cachedEditor.FirstLine();
+    cachedEditor.End();
+    const bool edited = cachedEditor.InsertSpaces(1U);
+    const bool rebuiltHighlights = cachedHighlights.Update(cachedEditor);
+    Check(
+        builtHighlights && reusedHighlights && edited && rebuiltHighlights
+            && hasSpan(
+                "flag = off;",
+                cachedHighlights.Line(1U),
+                "flag",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                "flag",
+                cachedHighlights.Line(2U),
+                "flag",
+                inputweaver::ui::tui::SourceTokenKind::Variable),
+        "document highlighting caches revisions and preserves cross-line declarations");
 }
 
 void TestController()
@@ -854,6 +882,19 @@ void TestController()
             && FindAscii(minimumPrograms, "[Space] Run") / 80U >= 20U,
         "Programs header omits document commands while NEXT RUN owns Run");
     const std::size_t offModePosition = FindAscii(minimumPrograms, "[S]");
+    controller.Handle({
+        Key::Character,
+        U'd',
+        false,
+        inputweaver::ui::tui::KeyEventSource::Paste});
+    controller.Handle({
+        Key::Enter,
+        0U,
+        false,
+        inputweaver::ui::tui::KeyEventSource::Paste});
+    Check(
+        application.ReadSnapshot().programs.size() == 1U,
+        "pasted text cannot execute Programs commands or confirmations");
     controller.Handle({Key::Character, U't'});
     const auto enabledMode = controller.Render(80U, 24U);
     Check(
@@ -920,7 +961,11 @@ void TestController()
     controller.Handle({Key::Right, 0U});
     controller.Handle({Key::Enter, 0U});
     for (const char character : std::string{"media.weave"}) {
-        controller.Handle({Key::Character, static_cast<char32_t>(character)});
+        controller.Handle({
+            Key::Character,
+            static_cast<char32_t>(character),
+            false,
+            inputweaver::ui::tui::KeyEventSource::Drop});
     }
     controller.Handle({Key::Enter, 0U});
     Check(
@@ -1020,8 +1065,6 @@ void TestController()
         minimumDebug,
         "ACT  tap(B) | set(count, count + 1)");
     const std::size_t action = FindAscii(minimumDebug, "tap(B)");
-    const std::size_t stateNumber = FindAscii(minimumDebug, "count=2");
-    const std::size_t stateControl = FindAscii(minimumDebug, "LCtrl PHY");
     Check(
         marker < minimumDebug.Cells().size()
             && minimumDebug.Cells()[marker].style.foreground == colors.mutedText
@@ -1043,42 +1086,36 @@ void TestController()
         "execution labels are muted while entry content uses one status color");
     Check(
         debugText.find("PAUSE=on") != std::string::npos
-            && debugText.find("STATE") != std::string::npos
-            && debugText.find("combat=off") != std::string::npos
-            && debugText.find("count=2") != std::string::npos
-            && debugText.find("delay=80ms") != std::string::npos
-            && debugText.find("[gates=[") != std::string::npos,
-        "HEALTH renders PAUSE and STATE renders all scalar and array values");
-    const auto wideDebug = controller.Render(120U, 30U);
+            && debugText.find("STATE") != std::string::npos,
+        "HEALTH renders PAUSE beside the STATE viewport");
+    const auto wideDebug = controller.Render(120U, 40U);
     const std::string wideDebugText = CanvasText(wideDebug);
     Check(
-        wideDebugText.find("[empty=[]]") != std::string::npos
-            && wideDebugText.find("[gates=[on, off]]") != std::string::npos
+        wideDebugText.find("combat=off") != std::string::npos
+            && wideDebugText.find("count=2") != std::string::npos
+            && wideDebugText.find("delay=80ms") != std::string::npos
+            && wideDebugText.find("[empty[0]=[]]") != std::string::npos
+            && wideDebugText.find("[gates[2]=[on, off]]") != std::string::npos
             && wideDebugText.find("AGAIN") != std::string::npos,
-        "STATE shows short arrays and EVENTS uses the again transition label");
-    const std::size_t gatesPosition = FindAscii(wideDebug, "[gates=[on, off]]");
-    const std::size_t valuesPosition = FindAscii(wideDebug, "[values=[");
-    const std::size_t stateRightBorder = valuesPosition < wideDebug.Cells().size()
-        ? (valuesPosition / wideDebug.Width() + 1U) * wideDebug.Width() - 1U
-        : wideDebug.Cells().size();
+        "STATE shows all scalars and short arrays with explicit array lengths");
+    const std::size_t gatesPosition = FindAscii(wideDebug, "[gates[2]=[on, off]]");
+    const std::size_t valuesPosition = FindAscii(wideDebug, "[values[10]=[");
     Check(
         gatesPosition < wideDebug.Cells().size()
             && valuesPosition < wideDebug.Cells().size()
-            && gatesPosition / wideDebug.Width()
-                == valuesPosition / wideDebug.Width()
-            && valuesPosition - gatesPosition == 19U
-            && valuesPosition + 19U == stateRightBorder
-            && wideDebug.Cells()[stateRightBorder].codePoint == U'│',
-        "STATE array cells respect half-width columns and preserve the border");
+            && wideDebugText.find("10]]") != std::string::npos,
+        "STATE wraps array cells without dropping their suffix");
     const std::string veryWideDebugText = CanvasText(controller.Render(360U, 30U));
     Check(
         veryWideDebugText.find(
-            "[values=[1, 2, 3, 4, ..., 7, 8, 9, 10] length=10]")
+            "[values[10]=[1, 2, 3, 4, ..., 7, 8, 9, 10]]")
             != std::string::npos,
         "STATE renders exact length with bounded prefix and suffix for long arrays");
+    const std::size_t stateNumber = FindAscii(wideDebug, "count=2");
+    const std::size_t stateControl = FindAscii(wideDebug, "LCtrl PHY");
     Check(
         stateNumber < stateControl
-            && stateControl < minimumDebug.Cells().size(),
+            && stateControl < wideDebug.Cells().size(),
         "STATE keeps user values before pressed controls");
     controller.Handle({Key::Tab, 0U});
     const auto pressedDebug = controller.Render(80U, 24U);

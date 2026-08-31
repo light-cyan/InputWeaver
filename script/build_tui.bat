@@ -18,9 +18,9 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [2/4] Building InputWeaverTUI.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -mwindows -municode ^
-    "src\platform\windows\tui\tui_frontend_main.cpp" ^
-    "src\platform\windows\tui\tui_ipc.cpp" ^
-    "src\platform\windows\tui\windows_tui_window.cpp" ^
+    "src\platform\windows\ui\tui\tui_frontend_main.cpp" ^
+    "src\platform\windows\ui\tui\tui_ipc.cpp" ^
+    "src\platform\windows\ui\tui\windows_tui_window.cpp" ^
     "bin\InputWeaverTUIResource.o" ^
     -o "bin\InputWeaverTUI.exe" ^
     %INPUTWEAVER_PRODUCT_LINK% ^
@@ -29,12 +29,12 @@ if errorlevel 1 exit /b %errorlevel%
 
 echo [3/4] Building InputWeaverHost.exe...
 %INPUTWEAVER_CXX% %INPUTWEAVER_COMMON% -mwindows -municode ^
-    "src\platform\windows\tui\host_main.cpp" ^
-    "src\platform\windows\tui\windows_tray.cpp" ^
-    "src\platform\windows\tui\tui_frontend_session.cpp" ^
-    "src\platform\windows\tui\tui_ipc.cpp" ^
-    "src\platform\windows\tui\tui_resources.cpp" ^
-    "src\platform\windows\tui\windows_clipboard.cpp" ^
+    "src\platform\windows\ui\tui\host_main.cpp" ^
+    "src\platform\windows\ui\tui\windows_tray.cpp" ^
+    "src\platform\windows\ui\tui\tui_frontend_session.cpp" ^
+    "src\platform\windows\ui\tui\tui_ipc.cpp" ^
+    "src\platform\windows\ui\tui\tui_resources.cpp" ^
+    "src\platform\windows\ui\tui\windows_clipboard.cpp" ^
     "src\platform\windows\app\windows_app_platform.cpp" ^
     "src\platform\windows\app\program_library.cpp" ^
     "src\platform\windows\app\child_process.cpp" ^

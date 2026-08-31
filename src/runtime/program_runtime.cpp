@@ -645,14 +645,16 @@ struct ProgramRuntime::Impl final {
         RuntimeRoutePort& runtimeRoutePort,
         RuntimeProcessLauncher& runtimeProcessLauncher,
         RuntimeClock& runtimeClock,
-        RuntimeDebugEventPort* runtimeDebugPort)
+        RuntimeDebugEventPort* runtimeDebugPort,
+        support::CallbackRef<void() noexcept> runtimeFatalStopRequest)
         : capacities(runtimeCapacities),
           controlPort(runtimeControlPort),
           outputPort(runtimeOutputPort),
           routePort(runtimeRoutePort),
           processLauncher(runtimeProcessLauncher),
           clock(runtimeClock),
-          debugPort(runtimeDebugPort)
+          debugPort(runtimeDebugPort),
+          fatalStopRequest(runtimeFatalStopRequest)
     {
     }
 
@@ -669,6 +671,7 @@ struct ProgramRuntime::Impl final {
     RuntimeProcessLauncher& processLauncher;
     RuntimeClock& clock;
     RuntimeDebugEventPort* debugPort;
+    support::CallbackRef<void() noexcept> fatalStopRequest;
     std::unique_ptr<State> active;
     std::atomic<std::uint64_t> observableGeneration{0U};
     std::uint64_t nextProgramSerial{1U};
@@ -1385,7 +1388,11 @@ void ProgramRuntime::Impl::Invalidate(
             std::memory_order_relaxed)) {
     }
     if (generation == (std::numeric_limits<std::uint64_t>::max)()) {
-        state.fatalShutdownRequested.store(true, std::memory_order_release);
+        if (!state.fatalShutdownRequested.exchange(
+                true,
+                std::memory_order_acq_rel)) {
+            fatalStopRequest.Invoke();
+        }
         state.accepting.store(false, std::memory_order_release);
     }
     if (reason != RuntimeCancellationReason::Pause
@@ -1425,6 +1432,7 @@ void ProgramRuntime::Impl::RequestFatal(
         detail);
     if (!state.fatalShutdownRequested.exchange(true, std::memory_order_acq_rel)) {
         Invalidate(state, RuntimeCancellationReason::FatalFailure);
+        fatalStopRequest.Invoke();
     }
 }
 
@@ -3438,7 +3446,8 @@ ProgramRuntime::ProgramRuntime(
     RuntimeRoutePort& routePort,
     RuntimeProcessLauncher& processLauncher,
     RuntimeClock& clock,
-    RuntimeDebugEventPort* debugPort)
+    RuntimeDebugEventPort* debugPort,
+    support::CallbackRef<void() noexcept> fatalStopRequest)
     : impl_(std::make_unique<Impl>(
           capacities,
           controlPort,
@@ -3446,7 +3455,8 @@ ProgramRuntime::ProgramRuntime(
           routePort,
           processLauncher,
           clock,
-          debugPort))
+          debugPort,
+          fatalStopRequest))
 {
 }
 
