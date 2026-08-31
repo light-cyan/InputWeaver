@@ -186,6 +186,9 @@ public:
             case TopLevelSyntax::Kind::ActionGapSetting:
                 BindDurationSetting(item, false);
                 break;
+            case TopLevelSyntax::Kind::RandomSeedSetting:
+                BindRandomSeedSetting(item);
+                break;
             case TopLevelSyntax::Kind::StateDeclaration:
             case TopLevelSyntax::Kind::NumberDeclaration:
             case TopLevelSyntax::Kind::DurationDeclaration:
@@ -275,6 +278,28 @@ private:
         } else {
             program_.actionGap = *value;
         }
+    }
+
+    void BindRandomSeedSetting(const TopLevelSyntax& item)
+    {
+        if (randomSeedSetting_.has_value()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::DuplicateSetting,
+                item.span,
+                "RAND_SEED may be assigned only once",
+                {{*randomSeedSetting_, "first assignment is here"}});
+            return;
+        }
+        randomSeedSetting_ = item.span;
+        const auto value = ParseUnsigned(item.literal);
+        if (!value.has_value()) {
+            diagnostics_.Add(
+                CompileDiagnosticCode::InvalidNumber,
+                item.valueSpan,
+                "RAND_SEED must be a decimal unsigned 64-bit integer");
+            return;
+        }
+        program_.randomSeed = *value;
     }
 
     void BindDeclaration(const TopLevelSyntax& item)
@@ -391,6 +416,12 @@ private:
                 ValueDomain::BuiltinDuration,
                 ValueType::Duration,
                 static_cast<std::uint32_t>(BuiltinDuration::ActionGap)};
+        }
+        if (name == "RAND01") {
+            return ValueRef{
+                ValueDomain::BuiltinNumber,
+                ValueType::Number,
+                static_cast<std::uint32_t>(BuiltinNumber::Rand01)};
         }
         const auto found = symbols_.find(std::string(name));
         if (found == symbols_.end()) {
@@ -602,6 +633,7 @@ private:
                 && (syntax.text == "PAUSE"
                     || syntax.text == "TAP_DURATION"
                     || syntax.text == "ACTION_GAP"
+                    || syntax.text == "RAND01"
                     || symbols_.contains(syntax.text));
             if (scalarCandidate) {
                 const auto value = ResolveValue(syntax.text, syntax.span);
@@ -1403,6 +1435,7 @@ private:
     std::optional<SourceSpan> targetSetting_;
     std::optional<SourceSpan> tapDurationSetting_;
     std::optional<SourceSpan> actionGapSetting_;
+    std::optional<SourceSpan> randomSeedSetting_;
     std::uint32_t nextSourceOrdinal_{};
     std::uint32_t suppressedConstantFaultDepth_{};
     bool hasExplicitExitRule_{};

@@ -329,11 +329,14 @@ struct ProgramRuntime::Impl final {
             return result;
         }
 
-        explicit MutableState(const CompiledProgram& program)
+        MutableState(
+            const CompiledProgram& program,
+            std::uint64_t randomSeed)
             : userStates(program.UserValues().initialStates),
               userNumbers(program.UserValues().initialNumbers),
               userDurations(program.UserValues().initialDurations),
               arrays(CreateArrays(program)),
+              randomStream(randomSeed),
               physicalHeld(std::make_unique<std::atomic<std::uint8_t>[]>(
                   program.Controls().size())),
               physicalSynchronized(
@@ -347,7 +350,7 @@ struct ProgramRuntime::Impl final {
         }
 
         [[nodiscard]] RuntimeExpressionState ExpressionState(
-            const CompiledProgram& program) const noexcept
+            const CompiledProgram& program) noexcept
         {
             return {
                 userStates,
@@ -355,6 +358,7 @@ struct ProgramRuntime::Impl final {
                 userDurations,
                 arrays,
                 {physicalHeld.get(), program.Controls().size()},
+                &randomStream,
                 pauseOn,
                 program.Settings().tapDuration,
                 program.Settings().actionGap};
@@ -385,6 +389,7 @@ struct ProgramRuntime::Impl final {
         std::vector<double> userNumbers;
         std::vector<DurationValue> userDurations;
         std::vector<RuntimeArrayStorage> arrays;
+        RuntimeRandomStream randomStream;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalHeld;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalSynchronized;
     };
@@ -560,13 +565,14 @@ struct ProgramRuntime::Impl final {
     struct State final {
         State(
             std::shared_ptr<const CompiledProgram> immutableProgram,
+            std::uint64_t randomSeed,
             std::uint64_t serial,
             std::atomic<std::uint64_t>& runtimeGeneration,
             const RuntimeCapacities& capacities)
             : program(std::move(immutableProgram)),
               programSerial(serial),
               activatedControls(program->Controls().size()),
-              mutableState(*program),
+              mutableState(*program, randomSeed),
               dispatch(*program, capacities),
               scheduler(*program, capacities),
               inspectionScratch((std::max)(

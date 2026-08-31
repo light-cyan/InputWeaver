@@ -492,7 +492,10 @@ void AppendExpression(
             static_cast<std::uint32_t>(BuiltinDuration::TapDuration)},
         {ValueDomain::BuiltinDuration, ValueType::Duration,
             static_cast<std::uint32_t>(BuiltinDuration::ActionGap)},
+        {ValueDomain::BuiltinNumber, ValueType::Number,
+            static_cast<std::uint32_t>(BuiltinNumber::Rand01)},
     };
+    storage.settings.randomSeed = 0x123456789abcdef0ULL;
     storage.strings.insert(storage.strings.end(), {"stateValue", "numberValue", "durationValue"});
     const SourceSpan source{0U, storage.source.byteLength};
     storage.debugInfo.variables = {
@@ -568,6 +571,10 @@ void AppendExpression(
     AppendExpression(storage, ExpressionType::Duration, 1U, {
         {ExpressionOpcode::LoadValue, ExpressionType::Duration, 5U, 0U},
         {ExpressionOpcode::Return, ExpressionType::Duration, 0U, 0U},
+    });
+    AppendExpression(storage, ExpressionType::Number, 1U, {
+        {ExpressionOpcode::LoadValue, ExpressionType::Number, 6U, 0U},
+        {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
     });
     AppendExpression(storage, ExpressionType::Boolean, 1U, {
         {ExpressionOpcode::PushBoolean, ExpressionType::Boolean, 1U, 0U},
@@ -704,6 +711,31 @@ void TestExpressionVm()
     RuntimeHarness harness;
     const auto program = Finalize(MakeExpressionFixtureStorage());
     Check(harness.runtime.Activate(program).activated, "expression fixture activates");
+    constexpr inputweaver::ExpressionId randomExpression{9U};
+    const auto firstRandom = harness.runtime.EvaluateExpression(randomExpression);
+    const auto secondRandom = harness.runtime.EvaluateExpression(randomExpression);
+    Check(
+        firstRandom.Succeeded()
+            && secondRandom.Succeeded()
+            && firstRandom.value.type == inputweaver::ExpressionType::Number
+            && secondRandom.value.type == inputweaver::ExpressionType::Number
+            && firstRandom.value.numberValue >= 0.0
+            && firstRandom.value.numberValue < 1.0
+            && secondRandom.value.numberValue >= 0.0
+            && secondRandom.value.numberValue < 1.0
+            && firstRandom.value.numberValue != secondRandom.value.numberValue,
+        "RAND01 routes through LoadValue and advances within the unit interval");
+    Check(
+        harness.runtime.Activate(program).activated,
+        "expression fixture reactivates with its fixed random seed");
+    const auto resetFirstRandom = harness.runtime.EvaluateExpression(randomExpression);
+    const auto resetSecondRandom = harness.runtime.EvaluateExpression(randomExpression);
+    Check(
+        resetFirstRandom.Succeeded()
+            && resetSecondRandom.Succeeded()
+            && resetFirstRandom.value.numberValue == firstRandom.value.numberValue
+            && resetSecondRandom.value.numberValue == secondRandom.value.numberValue,
+        "program activation resets the repeatable RAND01 stream");
     constexpr std::array expectedFaults = {
         inputweaver::RuntimeEvaluationFault::DivisionByZero,
         inputweaver::RuntimeEvaluationFault::DivisionByZero,
@@ -1085,4 +1117,3 @@ void TestArrowFlowAndOverlappingOwnership()
             && conditional.output.requests.size() == 1U,
         "a false stop rule continues to the later greater-equal match");
 }
-

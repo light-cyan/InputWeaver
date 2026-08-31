@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -129,6 +128,7 @@ struct BoundProgram final {
     SourceSpan targetSource{};
     DurationValue tapDuration{30'000'000};
     DurationValue actionGap{10'000'000};
+    std::uint64_t randomSeed{};
     UserValueLayout userValues;
     std::vector<ArrayDescriptor> arrays;
     std::vector<std::uint8_t> initialArrayStates;

@@ -163,6 +163,9 @@ template <typename Id>
     case ValueDomain::BuiltinDuration:
         return value.type == ValueType::Duration
             && value.index <= static_cast<std::uint32_t>(BuiltinDuration::ActionGap);
+    case ValueDomain::BuiltinNumber:
+        return value.type == ValueType::Number
+            && value.index == static_cast<std::uint32_t>(BuiltinNumber::Rand01);
     }
     return false;
 }
@@ -178,4 +181,3 @@ void ValidateActionDescriptor(
     ValidationContext& context);
 
 } // namespace inputweaver::program_validation
-

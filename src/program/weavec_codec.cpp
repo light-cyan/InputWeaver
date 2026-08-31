@@ -19,7 +19,7 @@
 namespace inputweaver {
 namespace {
 
-constexpr std::array<std::uint8_t, 8U> kWeavecMagicV3{
+constexpr std::array<std::uint8_t, 8U> kWeavecMagicV4{
     0x57U,
     0x45U,
     0x41U,
@@ -27,7 +27,7 @@ constexpr std::array<std::uint8_t, 8U> kWeavecMagicV3{
     0x45U,
     0x43U,
     0x00U,
-    0x03U,
+    0x04U,
 };
 
 class ByteWriter final {
@@ -270,6 +270,7 @@ void WriteSettings(ByteWriter& writer, const ProgramSettings& settings)
     WriteSpan(writer, settings.target.source);
     WriteDuration(writer, settings.tapDuration);
     WriteDuration(writer, settings.actionGap);
+    writer.U64(settings.randomSeed);
 }
 
 void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requirements)
@@ -392,13 +393,14 @@ template <typename Value, typename ReadElement>
 [[nodiscard]] bool ReadSettings(ByteReader& reader, ProgramSettings& settings)
 {
     return ReadEnum(
-               reader,
-               settings.target.kind,
-               TargetSelectorKind::Executable)
+            reader,
+            settings.target.kind,
+            TargetSelectorKind::Executable)
         && ReadId(reader, settings.target.text)
         && ReadSpan(reader, settings.target.source)
         && ReadDuration(reader, settings.tapDuration)
-        && ReadDuration(reader, settings.actionGap);
+        && ReadDuration(reader, settings.actionGap)
+        && reader.U64(settings.randomSeed);
 }
 
 [[nodiscard]] bool ReadRequirements(
@@ -702,7 +704,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             limits,
             6U,
             [](ByteReader& input, ValueRef& value) {
-                return ReadEnum(input, value.domain, ValueDomain::BuiltinDuration)
+                return ReadEnum(input, value.domain, ValueDomain::BuiltinNumber)
                     && ReadEnum(input, value.type, ValueType::Duration)
                     && input.U32(value.index);
             })) {
@@ -819,7 +821,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
                     && value.type != ExpressionType::ControlState) {
                     return input.Fail(
                         WeavecDecodeErrorCode::InvalidScalar,
-                        "V3 control-state reads require the ControlState result type");
+                        "V4 control-state reads require the ControlState result type");
                 }
                 return true;
             })) {
@@ -1006,7 +1008,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 std::vector<std::uint8_t> EncodeWeavec(const CompiledProgram& program)
 {
     ByteWriter writer;
-    writer.Raw(kWeavecMagicV3);
+    writer.Raw(kWeavecMagicV4);
     writer.U64(0U);
     EncodePayload(writer, program);
     const std::uint64_t payloadSize = static_cast<std::uint64_t>(
@@ -1028,12 +1030,12 @@ DecodeWeavecResult DecodeWeavec(
         return result;
     }
     if (!std::equal(
-            kWeavecMagicV3.begin(),
-            kWeavecMagicV3.end(),
+            kWeavecMagicV4.begin(),
+            kWeavecMagicV4.end(),
             bytes.begin())) {
         std::size_t mismatch = 0U;
-        while (mismatch < kWeavecMagicV3.size()
-            && bytes[mismatch] == kWeavecMagicV3[mismatch]) {
+        while (mismatch < kWeavecMagicV4.size()
+            && bytes[mismatch] == kWeavecMagicV4[mismatch]) {
             ++mismatch;
         }
         result.decodeError = WeavecDecodeError{

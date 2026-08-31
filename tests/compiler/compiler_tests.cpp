@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <set>
 #include <span>
@@ -367,6 +368,12 @@ void TestBindingDiagnostics()
     const std::vector<Case> cases{
         {"duplicate setting", "TARGET=GLOBAL; TARGET=GLOBAL;",
             CompileDiagnosticCode::DuplicateSetting},
+        {"duplicate random seed", "RAND_SEED=1; RAND_SEED=2;",
+            CompileDiagnosticCode::DuplicateSetting},
+        {"fractional random seed", "RAND_SEED=1.5;",
+            CompileDiagnosticCode::InvalidNumber},
+        {"overflowing random seed", "RAND_SEED=18446744073709551616;",
+            CompileDiagnosticCode::InvalidNumber},
         {"duplicate variable", "state value=on; number value=1;",
             CompileDiagnosticCode::DuplicateSymbol},
         {"reserved variable", "state F1=on;",
@@ -385,6 +392,10 @@ void TestBindingDiagnostics()
             CompileDiagnosticCode::ReadOnlyValue},
         {"readonly setting", "F1:down => set(TAP_DURATION, 1ms);",
             CompileDiagnosticCode::ReadOnlyValue},
+        {"readonly random", "F1:down => set(RAND01, 0);",
+            CompileDiagnosticCode::ReadOnlyValue},
+        {"random duration", "F1:down => wait(RAND01);",
+            CompileDiagnosticCode::TypeMismatch},
         {"inexact duration", "duration value=0.0000001ms;",
             CompileDiagnosticCode::InvalidDuration},
         {"setting range", "ACTION_GAP=61s;",
@@ -451,6 +462,62 @@ void TestBindingDiagnostics()
     const CompileOutput bounded = CompileSource("bounded.weave", manyErrors);
     Check(bounded.diagnostics.size() == kMaximumCompileDiagnostics,
         "compile diagnostics stop at the fixed limit");
+}
+
+void TestRandomIntrinsics()
+{
+    using namespace inputweaver;
+    using namespace inputweaver::compiler;
+    const CompileOutput fixed = CompileGood(
+        "random.weave",
+        "RAND_SEED=18446744073709551615; number value=0; "
+        "F1:down when RAND01 < RAND01 => set(value, RAND01);",
+        "fixed random stream");
+    const auto program = DecodeGood(fixed, "fixed random stream");
+    if (program != nullptr) {
+        Check(program->Settings().randomSeed
+                == (std::numeric_limits<std::uint64_t>::max)(),
+            "explicit RAND_SEED overwrites the zero default with the full unsigned 64-bit value");
+        std::uint32_t randomReference = kInvalidProgramIndex;
+        for (std::size_t index = 0U; index < program->ValueRefs().size(); ++index) {
+            const ValueRef& value = program->ValueRefs()[index];
+            if (value.domain == ValueDomain::BuiltinNumber
+                && value.type == ValueType::Number
+                && value.index == static_cast<std::uint32_t>(BuiltinNumber::Rand01)) {
+                randomReference = static_cast<std::uint32_t>(index);
+            }
+        }
+        Check(randomReference != kInvalidProgramIndex,
+            "RAND01 lowers to a builtin number reference");
+        const std::size_t loadCount = static_cast<std::size_t>(std::count_if(
+            program->ExpressionCode().begin(),
+            program->ExpressionCode().end(),
+            [randomReference](const ExpressionInstruction& instruction) {
+                return instruction.opcode == ExpressionOpcode::LoadValue
+                    && instruction.type == ExpressionType::Number
+                    && instruction.operand0 == randomReference;
+            }));
+        Check(loadCount == 3U,
+            "each RAND01 occurrence remains a dynamic LoadValue");
+    }
+
+    const auto omitted = DecodeGood(
+        CompileGood(
+            "default-random.weave",
+            "F1:down when RAND01 < 0.5 =>;",
+            "default random seed"),
+        "default random seed");
+    Check(omitted != nullptr && omitted->Settings().randomSeed == 0U,
+        "omitted RAND_SEED defaults to zero");
+
+    const auto zero = DecodeGood(
+        CompileGood(
+            "zero-random.weave",
+            "RAND_SEED=0; F1:down when RAND01 >= 0 =>;",
+            "zero random seed"),
+        "zero random seed");
+    Check(zero != nullptr && zero->Settings().randomSeed == 0U,
+        "explicit zero RAND_SEED is accepted");
 }
 
 void TestControlCatalogAndRawControls()
@@ -666,7 +733,7 @@ void TestLoweringCoverage()
             && program->InitialArrayStates().size() == 2U
             && program->InitialArrayNumbers().size() == 2U
             && program->DebugInfo().arrays.size() == 2U,
-        "array declarations and debug names lower into the V3 artifact");
+        "array declarations and debug names lower into the V4 artifact");
 
     std::set<std::uint32_t> ordinals;
     for (const CompiledRule& rule : program->Rules()) {
@@ -952,6 +1019,7 @@ int main()
     TestSourceAndLexicalDiagnostics();
     TestParserAndRecovery();
     TestBindingDiagnostics();
+    TestRandomIntrinsics();
     TestControlCatalogAndRawControls();
     TestLoweringCoverage();
     TestArrayDiagnostics();

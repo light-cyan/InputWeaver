@@ -10,6 +10,7 @@
 TARGET = "game.exe";
 TAP_DURATION = 30ms;
 ACTION_GAP = 10ms;
+RAND_SEED = 42;
 
 state combat = off;
 number count = 0;
@@ -32,6 +33,7 @@ F1:down =>
 
 F2:down => set(gates[0], on) | toggle(gates[1]);
 F3:down => pop(values, popped);
+F4:down => set(count, RAND01 * 10);
 
 pause Pause:down ~> toggle;
 exit F12:down when LCtrl == held and LShift == held;
@@ -51,7 +53,7 @@ exit F12:down when LCtrl == held and LShift == held;
 
 所有名称区分大小写。标识符以 ASCII 字母开头，后续字符可以是 ASCII 字母、十进制数字或 `_`。用户变量和数组不能使用语言关键字、内蕴名称、扫描码限定符或无前缀的命名控制名。
 
-保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`exit`、`pause`、`when`、`on`、`off`、`held`、`idle`、`toggle`、`down`、`again`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`append`、`pop`、`clear`、`length`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`repeat`、`E0` 和 `E1`。
+保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`RAND_SEED`、`RAND01`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`exit`、`pause`、`when`、`on`、`off`、`held`、`idle`、`toggle`、`down`、`again`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`append`、`pop`、`clear`、`length`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`repeat`、`E0` 和 `E1`。
 
 `on`、`off`、`held` 和 `idle` 都是常量。
 
@@ -78,6 +80,7 @@ top-level-item =
       target-setting
     | tap-duration-setting
     | action-gap-setting
+    | rand-seed-setting
     | state-declaration
     | number-declaration
     | duration-declaration
@@ -93,6 +96,7 @@ target-setting       = "TARGET", "=", target-selector, ";" ;
 target-selector      = string-literal | "GLOBAL" ;
 tap-duration-setting = "TAP_DURATION", "=", duration-literal, ";" ;
 action-gap-setting   = "ACTION_GAP", "=", duration-literal, ";" ;
+rand-seed-setting    = "RAND_SEED", "=", decimal-integer, ";" ;
 
 state-declaration    = "state", identifier, "=", state-literal, ";" ;
 number-declaration   = "number", identifier, "=", signed-number-literal, ";" ;
@@ -184,7 +188,7 @@ writable-state-target     = writable-state-reference | state-array-element ;
 writable-scalar-reference = identifier ;
 writable-state-reference  = identifier ;
 scalar-value-reference    = identifier | builtin-value ;
-builtin-value             = "TAP_DURATION" | "ACTION_GAP" | "PAUSE" ;
+builtin-value             = "TAP_DURATION" | "ACTION_GAP" | "RAND01" | "PAUSE" ;
 array-reference           = identifier ;
 array-element             = identifier, "[", expression, "]" ;
 state-array-element       = identifier, "[", expression, "]" ;
@@ -237,6 +241,7 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 | `TARGET` | 非空字符串或 `GLOBAL` | 未指定 | 按可执行文件名或绝对路径选择目标，或者选择全局分派；命令行目标可以覆盖它。 |
 | `TAP_DURATION` | `0ms..1min` 的时间字面量 | `30ms` | `tap` 使用的保持时间。 |
 | `ACTION_GAP` | `0ms..1min` 的时间字面量 | `10ms` | `|` 和 `gap()` 使用的等待时间。 |
+| `RAND_SEED` | `0..18446744073709551615` 的十进制整数 | `0` | 为活动程序的 `RAND01` 随机流固定 64 位无符号种子。 |
 
 编译时不强制要求 `TARGET`，但执行时必须存在编译目标或命令行目标覆盖。
 
@@ -252,7 +257,9 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 
 数组元素表达式产生一个标量值，`.length` 产生 `number`。数组本身不是表达式值。
 
-`PAUSE` 是初始值为 `on` 的内蕴 `state`。`TAP_DURATION` 和 `ACTION_GAP` 是内蕴 `duration`。内蕴值可以读取，但不能作为 `set` 或 `toggle` 的目标。
+`PAUSE` 是初始值为 `on` 的内蕴 `state`。`TAP_DURATION` 和 `ACTION_GAP` 是内蕴 `duration`。`RAND01` 是只读的内蕴 `number`。这些内蕴值可以读取，但不能作为 `set` 或 `toggle` 的目标。`RAND_SEED` 只能出现在顶层配置语句的左侧，不是表达式值，也不能作为 `set` 或任何其他动作的目标。
+
+`RAND_SEED` 未出现时等同于 `RAND_SEED = 0;`。每次激活程序都会把 `RAND01` 随机流重置到配置种子或默认种子 `0` 对应的序列起点。`PAUSE` 转换和任务取消不会重置或重新播种当前随机流。
 
 ## 表达式和类型
 
@@ -273,6 +280,10 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 布尔值和控制状态都是表达式专用类型，不能声明为用户变量。`on` 和 `off` 是 `state` 常量，`held` 和 `idle` 是控制状态常量。控制引用求得当前控制状态，因此 `A == held`、`Mouse.Left == idle` 和 `A == B` 都是普通表达式。
 
 `and` 和 `or` 从左到右短路求值。只有左操作数是编译期常量并能证明右操作数不可到达时，右侧的编译期常量故障才会被抑制。
+
+`RAND01` 每次产生一个位于 `[0,1)` 的均匀随机 `number`。每当表达式虚拟机实际执行一次 `RAND01` 读取，就立即取得并消费当前随机流的下一个样本。短路或其他控制流未执行的 `RAND01` 不会消费样本；已消费的样本不会因后续表达式故障、任务失败或任务取消而回滚。
+
+一个活动程序的并发求值共享同一条随机流，并按实际取得样本的顺序推进它。固定种子使相同程序在相同实现中的串行取样序列可重放；运行时不保证并发求值的先后次序，因此固定种子不保证并发程序的完整行为可重放。
 
 数组索引表达式求值一次，结果必须是有限且非负的 `number`，向下取整后必须小于数组当前逻辑长度。`index < values.length and values[index] > 0` 这样的短路条件可以先完成边界保护。数组索引和长度不引入独立的整数类型。
 

@@ -104,6 +104,7 @@ struct TopLevelSyntax final {
         TargetSetting,
         TapDurationSetting,
         ActionGapSetting,
+        RandomSeedSetting,
         StateDeclaration,
         NumberDeclaration,
         DurationDeclaration,

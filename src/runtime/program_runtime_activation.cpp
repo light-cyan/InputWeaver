@@ -234,11 +234,13 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
     if (capacityError.code != RuntimeActivationErrorCode::None) {
         return {false, capacityError};
     }
+    const std::uint64_t randomSeed = program->Settings().randomSeed;
 
     std::unique_ptr<State> candidate;
     try {
         candidate = std::make_unique<State>(
             std::move(program),
+            randomSeed,
             nextProgramSerial,
             observableGeneration,
             capacities);

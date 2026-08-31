@@ -77,6 +77,7 @@ private:
         }
         storage.settings.tapDuration = program_.tapDuration;
         storage.settings.actionGap = program_.actionGap;
+        storage.settings.randomSeed = program_.randomSeed;
         storage.userValues = std::move(program_.userValues);
         storage.arrays = std::move(program_.arrays);
         storage.initialArrayStates = std::move(program_.initialArrayStates);

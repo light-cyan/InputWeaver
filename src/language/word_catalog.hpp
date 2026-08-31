@@ -27,6 +27,8 @@ inline constexpr std::array kWordCatalog{
     WordEntry{"TARGET", WordRole::IntrinsicValue},
     WordEntry{"TAP_DURATION", WordRole::IntrinsicValue},
     WordEntry{"ACTION_GAP", WordRole::IntrinsicValue},
+    WordEntry{"RAND_SEED", WordRole::IntrinsicValue},
+    WordEntry{"RAND01", WordRole::IntrinsicValue},
     WordEntry{"PAUSE", WordRole::IntrinsicValue},
     WordEntry{"GLOBAL", WordRole::Constant},
     WordEntry{"state", WordRole::Type},

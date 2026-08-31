@@ -110,6 +110,7 @@ void WriteLittleEndianU64(
     storage.strings.push_back("number-array");
     storage.settings.target.kind = TargetSelectorKind::Executable;
     storage.settings.target.text = StringId{4U};
+    storage.settings.randomSeed = (std::numeric_limits<std::uint64_t>::max)();
     storage.userValues.initialStates = {1U};
     storage.userValues.initialNumbers = {3.0};
     storage.userValues.initialDurations = {{5'000'000}};
@@ -123,6 +124,8 @@ void WriteLittleEndianU64(
             static_cast<std::uint32_t>(BuiltinDuration::TapDuration)},
         {ValueDomain::BuiltinDuration, ValueType::Duration,
             static_cast<std::uint32_t>(BuiltinDuration::ActionGap)},
+        {ValueDomain::BuiltinNumber, ValueType::Number,
+            static_cast<std::uint32_t>(BuiltinNumber::Rand01)},
     };
     storage.debugInfo.variables = {
         {StringId{1U}, ValueRefId{0U}, {1U, 1U}},
@@ -198,6 +201,13 @@ void WriteLittleEndianU64(
             {ExpressionOpcode::ReadControlState, ExpressionType::ControlState,
                 1U, 0U},
             {ExpressionOpcode::Return, ExpressionType::ControlState, 0U, 0U},
+        }));
+    static_cast<void>(appendExpression(
+        ExpressionType::Number,
+        1U,
+        {
+            {ExpressionOpcode::LoadValue, ExpressionType::Number, 6U, 0U},
+            {ExpressionOpcode::Return, ExpressionType::Number, 0U, 0U},
         }));
     static_cast<void>(appendExpression(
         ExpressionType::ControlState,
@@ -379,10 +389,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        1410710887728642629ULL,
-        4282524413056078922ULL,
-        8660794663033244932ULL,
-        15510770940182174398ULL,
+        3026090136955141491ULL,
+        16667569394712554932ULL,
+        715892691562162642ULL,
+        8701880781902487440ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -513,7 +523,7 @@ void TestWeavecRoundTrips()
         MakeOpcodeCoverageStorage(),
     };
     constexpr std::array<std::uint8_t, 8U> magic{
-        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x03U};
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x04U};
 
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto original = FinalizeFixture(storages[index], "weavec source fixture");
@@ -573,6 +583,13 @@ void TestWeavecRejection()
     }
     {
         auto bytes = valid;
+        bytes[7] = 0x03U;
+        const auto result = DecodeWeavec(bytes);
+        Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidHeader),
+            "obsolete V3 artifacts are rejected");
+    }
+    {
+        auto bytes = valid;
         WriteLittleEndianU64(
             bytes,
             8U,
@@ -614,7 +631,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t requirementsBooleanOffset =
-            kWeavecHeaderSize + 16U + 29U + 68U;
+            kWeavecHeaderSize + 16U + 37U + 68U;
         bytes[requirementsBooleanOffset] = 2U;
         const auto result = DecodeWeavec(bytes);
         Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
@@ -637,7 +654,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumRulesOffset =
-            kWeavecHeaderSize + 16U + 29U + 36U;
+            kWeavecHeaderSize + 16U + 37U + 36U;
         bytes[maximumRulesOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -649,7 +666,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumTasksOffset =
-            kWeavecHeaderSize + 16U + 29U + 44U;
+            kWeavecHeaderSize + 16U + 37U + 44U;
         bytes[maximumTasksOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -661,7 +678,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t firstStringByteOffset =
-            kWeavecHeaderSize + 16U + 29U + 69U + 4U + 4U;
+            kWeavecHeaderSize + 16U + 37U + 69U + 4U + 4U;
         bytes[firstStringByteOffset] = 0xc0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -1183,6 +1200,16 @@ void TestRemainingValidationFamilies()
         const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
         Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Value),
             "invalid value reference shape is diagnosed");
+    }
+    {
+        auto storage = inputweaver::test::MakeTapFixtureStorage();
+        storage.valueRefs.push_back({
+            inputweaver::ValueDomain::BuiltinNumber,
+            inputweaver::ValueType::Number,
+            static_cast<std::uint32_t>(inputweaver::BuiltinNumber::Rand01) + 1U});
+        const auto result = inputweaver::FinalizeCompiledProgram(std::move(storage));
+        Check(HasError(result.errors, inputweaver::ProgramValidationErrorCode::Value),
+            "unknown builtin number is diagnosed");
     }
     {
         auto storage = inputweaver::test::MakeTapFixtureStorage();

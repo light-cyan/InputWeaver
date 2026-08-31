@@ -7,6 +7,17 @@
 namespace inputweaver {
 namespace {
 
+constexpr std::uint64_t kRandomStreamStep = 0x9e3779b97f4a7c15ULL;
+constexpr double kInverseNumberMantissaRange =
+    1.0 / 9'007'199'254'740'992.0;
+
+[[nodiscard]] std::uint64_t MixRandomBits(std::uint64_t value) noexcept
+{
+    value = (value ^ (value >> 30U)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27U)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31U);
+}
+
 [[nodiscard]] RuntimeEvaluationResult Fault(
     RuntimeEvaluationFault fault,
     std::uint32_t position) noexcept
@@ -260,6 +271,20 @@ namespace {
 
 } // namespace
 
+RuntimeRandomStream::RuntimeRandomStream(std::uint64_t seed) noexcept
+    : state_(seed)
+{
+}
+
+double RuntimeRandomStream::Next01() noexcept
+{
+    const std::uint64_t value = state_.fetch_add(
+        kRandomStreamStep,
+        std::memory_order_relaxed) + kRandomStreamStep;
+    return static_cast<double>(MixRandomBits(value) >> 11U)
+        * kInverseNumberMantissaRange;
+}
+
 RuntimeExpressionScratch::RuntimeExpressionScratch(std::size_t capacity)
     : storage_(capacity)
 {
@@ -403,6 +428,13 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
                 } else {
                     return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
                 }
+                break;
+            case ValueDomain::BuiltinNumber:
+                if (ref.index != static_cast<std::uint32_t>(BuiltinNumber::Rand01)
+                    || state.randomStream == nullptr) {
+                    return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
+                }
+                value.numberValue = state.randomStream->Next01();
                 break;
             }
             if (!push(value)) {

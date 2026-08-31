@@ -259,6 +259,9 @@ private:
                 begin,
                 TopLevelSyntax::Kind::ActionGapSetting);
         }
+        if (MatchWord("RAND_SEED")) {
+            return ParseRandomSeedSetting(begin);
+        }
         if (MatchWord("state")) {
             return ParseDeclaration(begin, TopLevelSyntax::Kind::StateDeclaration);
         }
@@ -307,6 +310,22 @@ private:
         item.kind = kind;
         Expect(LexemeKind::Equal, "'='");
         const ParserLexeme& value = Expect(LexemeKind::Duration, "a duration literal");
+        item.literal = value.text;
+        item.valueSpan = value.span;
+        const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");
+        item.span = MergeSpans(begin, semicolon.span);
+        CountNode(item.span);
+        return item;
+    }
+
+    [[nodiscard]] TopLevelSyntax ParseRandomSeedSetting(SourceSpan begin)
+    {
+        TopLevelSyntax item{};
+        item.kind = TopLevelSyntax::Kind::RandomSeedSetting;
+        Expect(LexemeKind::Equal, "'='");
+        const ParserLexeme& value = Expect(
+            LexemeKind::Number,
+            "a decimal unsigned integer");
         item.literal = value.text;
         item.valueSpan = value.span;
         const ParserLexeme& semicolon = Expect(LexemeKind::Semicolon, "';'");

@@ -460,7 +460,7 @@ void TestSupport()
                 == inputweaver::ui::tui::SourceTokenKind::Comment,
         "Weave highlighter classifies types, variables, constants, and comments");
     constexpr std::string_view setting =
-        "TARGET = GLOBAL; TAP_DURATION = ACTION_GAP; PAUSE";
+        "TARGET = GLOBAL; TAP_DURATION = ACTION_GAP; RAND_SEED = 42; RAND01; PAUSE";
     const auto settingSpans = inputweaver::ui::tui::HighlightWeaveLine(
         setting,
         highlightState);
@@ -484,6 +484,16 @@ void TestSupport()
                 setting,
                 settingSpans,
                 "ACTION_GAP",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "RAND_SEED",
+                inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(
+                setting,
+                settingSpans,
+                "RAND01",
                 inputweaver::ui::tui::SourceTokenKind::Variable)
             && hasSpan(
                 setting,

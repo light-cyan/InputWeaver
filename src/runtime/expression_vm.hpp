@@ -11,12 +11,23 @@
 
 namespace inputweaver {
 
+class RuntimeRandomStream final {
+public:
+    explicit RuntimeRandomStream(std::uint64_t seed) noexcept;
+
+    [[nodiscard]] double Next01() noexcept;
+
+private:
+    std::atomic<std::uint64_t> state_;
+};
+
 struct RuntimeExpressionState final {
     std::span<const std::uint8_t> userStates;
     std::span<const double> userNumbers;
     std::span<const DurationValue> userDurations;
     std::span<const RuntimeArrayStorage> arrays;
     std::span<const std::atomic<std::uint8_t>> physicalHeld;
+    RuntimeRandomStream* randomStream{};
     bool pauseOn{true};
     DurationValue tapDuration{};
     DurationValue actionGap{};

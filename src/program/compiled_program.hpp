@@ -128,6 +128,7 @@ struct ProgramSettings final {
     TargetSelector target{};
     DurationValue tapDuration{};
     DurationValue actionGap{};
+    std::uint64_t randomSeed{};
 };
 
 enum class ValueType : std::uint8_t {
@@ -162,6 +163,7 @@ enum class ValueDomain : std::uint8_t {
     UserDuration,
     BuiltinState,
     BuiltinDuration,
+    BuiltinNumber,
 };
 
 enum class BuiltinState : std::uint8_t {
@@ -171,6 +173,10 @@ enum class BuiltinState : std::uint8_t {
 enum class BuiltinDuration : std::uint8_t {
     TapDuration,
     ActionGap,
+};
+
+enum class BuiltinNumber : std::uint8_t {
+    Rand01,
 };
 
 struct ValueRef final {

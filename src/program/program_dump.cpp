@@ -148,6 +148,8 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "builtin-state";
     case ValueDomain::BuiltinDuration:
         return "builtin-duration";
+    case ValueDomain::BuiltinNumber:
+        return "builtin-number";
     }
     return "unknown";
 }
@@ -283,7 +285,8 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     output << " source=";
     WriteSpan(output, program.Settings().target.source);
     output << " tap-ns=" << program.Settings().tapDuration.nanoseconds
-           << " gap-ns=" << program.Settings().actionGap.nanoseconds << '\n';
+           << " gap-ns=" << program.Settings().actionGap.nanoseconds
+           << " rand-seed=" << program.Settings().randomSeed << '\n';
 
     const ProgramRequirements& requirements = program.Requirements();
     output << "requirements states=" << requirements.stateSlotCount
