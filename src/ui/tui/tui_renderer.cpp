@@ -1466,33 +1466,41 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             }
             using StateLine = std::vector<std::pair<std::size_t, std::string>>;
             std::vector<StateLine> stateRows;
-            const std::size_t columnOffset = pressedWidth / 2U;
-            const std::size_t columnWidth = columnOffset > 1U
-                ? columnOffset - 1U
-                : 0U;
-            for (std::size_t index = 0U; index < stateCells.size();) {
-                if (columnWidth != 0U
-                    && Utf8DisplayWidth(stateCells[index]) <= columnWidth) {
-                    StateLine line;
-                    line.emplace_back(0U, std::move(stateCells[index++]));
-                    if (index < stateCells.size()
-                        && Utf8DisplayWidth(stateCells[index]) <= columnWidth) {
-                        line.emplace_back(
-                            columnOffset,
-                            std::move(stateCells[index++]));
+            StateLine stateLine;
+            std::size_t usedWidth{};
+            const auto finishStateLine = [&]() {
+                if (!stateLine.empty()) {
+                    stateRows.push_back(std::move(stateLine));
+                    stateLine.clear();
+                    usedWidth = 0U;
+                }
+            };
+            for (std::string& cell : stateCells) {
+                const std::size_t cellWidth = Utf8DisplayWidth(cell);
+                if (cellWidth > pressedWidth) {
+                    finishStateLine();
+                    for (std::string& line : WrapUtf8(cell, pressedWidth, 2U)) {
+                        StateLine wrapped;
+                        wrapped.emplace_back(0U, std::move(line));
+                        stateRows.push_back(std::move(wrapped));
                     }
-                    stateRows.push_back(std::move(line));
                     continue;
                 }
-                for (std::string& line : WrapUtf8(
-                         stateCells[index++],
-                         pressedWidth,
-                         2U)) {
-                    StateLine wrapped;
-                    wrapped.emplace_back(0U, std::move(line));
-                    stateRows.push_back(std::move(wrapped));
+                constexpr std::size_t gap = 2U;
+                const std::size_t offset = stateLine.empty()
+                    ? 0U
+                    : usedWidth + gap;
+                if (!stateLine.empty()
+                    && offset + cellWidth > pressedWidth) {
+                    finishStateLine();
                 }
+                const std::size_t placedAt = stateLine.empty()
+                    ? 0U
+                    : usedWidth + gap;
+                stateLine.emplace_back(placedAt, std::move(cell));
+                usedWidth = placedAt + cellWidth;
             }
+            finishStateLine();
             const std::size_t pressedVisible = topHeight - 2U;
             RenderViewportRows(
                 pressedViewport_,
@@ -1536,11 +1544,19 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         const bool hasProblem = debugState != nullptr
             && (debugState->lastFault != debug::DebugClientFault::None
                 || !debugState->runtimeIssues.empty());
-        const RgbColor healthColor = hasProblem
-            ? colors_.healthFault
-            : starting || recovering
-                ? colors_.healthRecovering
-                : colors_.healthTrusted;
+        const bool debugInactive = !starting
+            && debugExecutor == nullptr
+            && debugState == nullptr;
+        const RgbColor healthColor = debugInactive
+            ? colors_.unfocusedBorder
+            : hasProblem
+                ? colors_.healthFault
+                : starting || recovering
+                    ? colors_.healthRecovering
+                    : colors_.healthTrusted;
+        const RgbColor healthTextColor = debugInactive
+            ? colors_.text
+            : healthColor;
         std::string health1;
         std::string health2;
         if (debugState == nullptr) {
@@ -1554,8 +1570,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 + (recovering
                     ? "Recovering"
                     : debugState->capturing ? "Capturing" : "Stopped")
-                + " | " + (trusted ? "Trusted" : "Untrusted")
-                + " | Epoch " + std::to_string(debugState->captureEpoch);
+                + " | " + (trusted ? "Trusted" : "Untrusted");
             if (debugExecutor != nullptr && debugExecutor->dryRun) {
                 health1 += " | Dry-run";
             }
@@ -1579,13 +1594,13 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             healthY + 1U,
             health1,
             width - 2U,
-            Foreground(healthColor));
+            Foreground(healthTextColor));
         canvas.Text(
             1U,
             healthY + 2U,
             health2,
             width - 2U,
-            Foreground(healthColor));
+            Foreground(healthTextColor));
     }
 
     const bool inlineInformationEdit = mode_ == Mode::TargetSelect

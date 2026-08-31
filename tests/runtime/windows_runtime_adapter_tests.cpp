@@ -347,6 +347,38 @@ void TestWindowsControlCatalogCoverage()
             allUses,
             "published portable keyboard usage binds on Windows");
     }
+    struct ExtendedKey final {
+        std::uint32_t usage;
+        std::uint32_t scanCode;
+    };
+    constexpr std::array<ExtendedKey, 10U> extendedKeys{{
+        {0x49U, 0x52U}, {0x4aU, 0x47U}, {0x4bU, 0x49U},
+        {0x4cU, 0x53U}, {0x4dU, 0x4fU}, {0x4eU, 0x51U},
+        {0x4fU, 0x4dU}, {0x50U, 0x4bU}, {0x51U, 0x50U},
+        {0x52U, 0x48U},
+    }};
+    for (const ExtendedKey& key : extendedKeys) {
+        win32::WindowsControlCatalog catalog;
+        catalog.BeginActivation();
+        ActivatedControl activated{};
+        const RuntimeControlBindResult result = catalog.BindControl(
+            ControlRefId{0U},
+            {kControlNamespaceUsbHid, 0x07U, key.usage, 0U},
+            allUses,
+            activated);
+        catalog.CommitActivation();
+        const win32::WindowsControlBinding* const binding =
+            catalog.Binding(activated.backendToken);
+        Check(
+            result == RuntimeControlBindResult::Bound
+                && binding != nullptr
+                && binding->scanCode == key.scanCode
+                && binding->scanQualifier == kWindowsScanCodeQualifierE0
+                && binding->outputRecipe.kind
+                    == WindowsOutputKind::KeyboardScanCode
+                && binding->outputRecipe.extendedScanCode,
+            "portable navigation key preserves its E0 output identity");
+    }
     CheckSingleCatalogBinding(
         {kControlNamespaceUsbHid, 0x07U, 0xe5U, 0U},
         allUses,

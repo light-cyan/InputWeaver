@@ -872,6 +872,17 @@ void TestController()
             && secondOutput < compilerIdentity,
         "Console renders one identity line for each consecutive source group");
     controller.Handle({Key::Escape, 0U});
+    controller.Handle({Key::Right, 0U});
+    const auto inactiveDebug = controller.Render(80U, 24U);
+    const std::string inactiveDebugText = CanvasText(inactiveDebug);
+    Check(
+        inactiveDebug.Cells()[20U * 80U].style.foreground
+                == colors.unfocusedBorder
+            && inactiveDebug.Cells()[21U * 80U + 1U].style.foreground
+                == colors.text
+            && inactiveDebugText.find("Epoch") == std::string::npos,
+        "inactive HEALTH uses ordinary colors and omits capture epochs");
+    controller.Handle({Key::Left, 0U});
     const auto canvas = controller.Render(80U, 30U);
     Check(
         canvas.Width() == 80U && canvas.Height() == 30U,
@@ -1063,7 +1074,8 @@ void TestController()
             && debugText.find("AS   combat == on and LCtrl == held")
                 != std::string::npos
             && debugText.find("ACT  tap(B) | set(count, count + 1)")
-                != std::string::npos,
+                != std::string::npos
+            && debugText.find("Epoch") == std::string::npos,
         "Debug executions render readable event, AS, and ACT lines");
     const std::size_t marker = FindAscii(minimumDebug, "#17");
     const std::size_t event = FindAscii(minimumDebug, "EVENT ");
@@ -1110,11 +1122,21 @@ void TestController()
         "STATE shows all scalars and short arrays with explicit array lengths");
     const std::size_t gatesPosition = FindAscii(wideDebug, "[gates[2]=[on, off]]");
     const std::size_t valuesPosition = FindAscii(wideDebug, "[values[10]=[");
+    const std::size_t combatPosition = FindAscii(wideDebug, "[combat=off]");
+    const std::size_t countPosition = FindAscii(wideDebug, "[count=2]");
+    const std::size_t delayPosition = FindAscii(wideDebug, "[delay=80ms]");
     Check(
         gatesPosition < wideDebug.Cells().size()
             && valuesPosition < wideDebug.Cells().size()
             && wideDebugText.find("10]]") != std::string::npos,
         "STATE wraps array cells without dropping their suffix");
+    Check(
+        combatPosition / wideDebug.Width() == countPosition / wideDebug.Width()
+            && countPosition / wideDebug.Width()
+                == delayPosition / wideDebug.Width()
+            && countPosition - combatPosition == 14U
+            && delayPosition - countPosition == 11U,
+        "STATE fills rows in order with a fixed two-cell gap");
     const std::string veryWideDebugText = CanvasText(controller.Render(360U, 30U));
     Check(
         veryWideDebugText.find(

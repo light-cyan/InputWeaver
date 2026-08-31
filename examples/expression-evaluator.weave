@@ -1,0 +1,356 @@
+// Type an arithmetic expression in Notepad and press = to append its result.
+// Supported input: non-negative integers, +, -, *, /, and parentheses.
+// Results are rounded to at most six decimal places.
+
+TARGET = "notepad.exe";
+TAP_DURATION = 10ms;
+
+// Token codes: digits 0..9, + 10, - 11, * 12, / 13, ( 14, ) 15.
+number[] tokenBuffer = [];
+number[] valueStack = [];
+number[] operatorStack = [];
+number[] outputDigits = [];
+
+number tokenIndex = 0;
+number token = 0;
+number currentValue = 0;
+number leftValue = 0;
+number rightValue = 0;
+number currentOperator = 0;
+number reductionFloor = 0;
+number result = 0;
+number outputValue = 0;
+number integerPart = 0;
+number fractionalPart = 0;
+number fractionalWidth = 0;
+number place = 0;
+number digit = 0;
+number discarded = 0;
+
+state valid = on;
+state expectingValue = on;
+state buildingNumber = off;
+
+Digit0:down when LShift == held or RShift == held ~> append(tokenBuffer, 15);
+Digit0:again when LShift == held or RShift == held ~> append(tokenBuffer, 15);
+Digit0:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 0);
+Digit0:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 0);
+Digit1:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 1);
+Digit1:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 1);
+Digit2:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 2);
+Digit2:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 2);
+Digit3:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 3);
+Digit3:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 3);
+Digit4:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 4);
+Digit4:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 4);
+Digit5:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 5);
+Digit5:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 5);
+Digit6:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 6);
+Digit6:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 6);
+Digit7:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 7);
+Digit7:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 7);
+Digit8:down when LShift == held or RShift == held ~> append(tokenBuffer, 12);
+Digit8:again when LShift == held or RShift == held ~> append(tokenBuffer, 12);
+Digit8:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 8);
+Digit8:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 8);
+Digit9:down when LShift == held or RShift == held ~> append(tokenBuffer, 14);
+Digit9:again when LShift == held or RShift == held ~> append(tokenBuffer, 14);
+Digit9:down when LShift == idle and RShift == idle ~> append(tokenBuffer, 9);
+Digit9:again when LShift == idle and RShift == idle ~> append(tokenBuffer, 9);
+Windows.VirtualKey(0xBB):down when LShift == held or RShift == held ~> append(tokenBuffer, 10);
+Windows.VirtualKey(0xBB):again when LShift == held or RShift == held ~> append(tokenBuffer, 10);
+Windows.VirtualKey(0xBD):down when LShift == idle and RShift == idle ~> append(tokenBuffer, 11);
+Windows.VirtualKey(0xBD):again when LShift == idle and RShift == idle ~> append(tokenBuffer, 11);
+Windows.VirtualKey(0xBF):down when LShift == idle and RShift == idle ~> append(tokenBuffer, 13);
+Windows.VirtualKey(0xBF):again when LShift == idle and RShift == idle ~> append(tokenBuffer, 13);
+
+Backspace:down when tokenBuffer.length > 0 ~> pop(tokenBuffer, discarded);
+Backspace:again when tokenBuffer.length > 0 ~> pop(tokenBuffer, discarded);
+Esc:down when tokenBuffer.length > 0 ~> clear(tokenBuffer);
+Enter:down when tokenBuffer.length > 0 ~> clear(tokenBuffer);
+
+Windows.VirtualKey(0xBB):down when LShift == idle and RShift == idle and tokenBuffer.length > 0 =>
+    set(tokenIndex, 0)
+    | clear(valueStack)
+    | clear(operatorStack)
+    | set(valid, on)
+    | set(expectingValue, on)
+    | set(buildingNumber, off)
+    | set(currentValue, 0)
+
+    while valid == on and tokenIndex < tokenBuffer.length do
+        set(token, tokenBuffer[tokenIndex])
+        set(tokenIndex, tokenIndex + 1)
+
+        if token < 10 then
+            if buildingNumber == on then
+                set(currentValue, currentValue * 10 + token)
+            else
+                if expectingValue == on then
+                    set(currentValue, token)
+                    set(buildingNumber, on)
+                    set(expectingValue, off)
+                else
+                    set(valid, off)
+                end
+            end
+        else
+            if token == 14 then
+                if expectingValue == on and buildingNumber == off then
+                    append(operatorStack, 0)
+                else
+                    set(valid, off)
+                end
+            else
+                if buildingNumber == on then
+                    append(valueStack, currentValue)
+                    set(buildingNumber, off)
+                    set(currentValue, 0)
+                end
+
+                if token == 15 then
+                    if expectingValue == on then
+                        set(valid, off)
+                    else
+                        set(reductionFloor, 1)
+                    end
+                else
+                    if expectingValue == on then
+                        set(valid, off)
+                    else
+                        if token == 10 or token == 11 then
+                            set(reductionFloor, 10)
+                        else
+                            set(reductionFloor, 12)
+                        end
+                    end
+                end
+
+                while valid == on and operatorStack.length > 0 and operatorStack[operatorStack.length - 1] >= reductionFloor do
+                    if valueStack.length < 2 then
+                        set(valid, off)
+                    else
+                        pop(operatorStack, currentOperator)
+                        pop(valueStack, rightValue)
+                        pop(valueStack, leftValue)
+                        if currentOperator == 10 then
+                            append(valueStack, leftValue + rightValue)
+                        else
+                            if currentOperator == 11 then
+                                append(valueStack, leftValue - rightValue)
+                            else
+                                if currentOperator == 12 then
+                                    append(valueStack, leftValue * rightValue)
+                                else
+                                    if rightValue == 0 then
+                                        set(valid, off)
+                                    else
+                                        append(valueStack, leftValue / rightValue)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if valid == on then
+                    if token == 15 then
+                        if operatorStack.length > 0 and operatorStack[operatorStack.length - 1] == 0 then
+                            pop(operatorStack, discarded)
+                            set(expectingValue, off)
+                        else
+                            set(valid, off)
+                        end
+                    else
+                        append(operatorStack, token)
+                        set(expectingValue, on)
+                    end
+                end
+            end
+        end
+    end
+
+    if valid == on and buildingNumber == on then
+        append(valueStack, currentValue)
+        set(buildingNumber, off)
+    end
+
+    if valid == on and expectingValue == on then
+        set(valid, off)
+    end
+
+    while valid == on and operatorStack.length > 0 do
+        if operatorStack[operatorStack.length - 1] == 0 then
+            set(valid, off)
+        else
+            if valueStack.length < 2 then
+                set(valid, off)
+            else
+                pop(operatorStack, currentOperator)
+                pop(valueStack, rightValue)
+                pop(valueStack, leftValue)
+                if currentOperator == 10 then
+                    append(valueStack, leftValue + rightValue)
+                else
+                    if currentOperator == 11 then
+                        append(valueStack, leftValue - rightValue)
+                    else
+                        if currentOperator == 12 then
+                            append(valueStack, leftValue * rightValue)
+                        else
+                            if rightValue == 0 then
+                                set(valid, off)
+                            else
+                                append(valueStack, leftValue / rightValue)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if valid == on and valueStack.length == 1 then
+        pop(valueStack, result)
+        if result >= 1000000000 or result <= -1000000000 then
+            set(valid, off)
+        end
+    else
+        set(valid, off)
+    end
+
+    clear(tokenBuffer)
+    clear(valueStack)
+    clear(operatorStack)
+    tap(Windows.VirtualKey(0xBB))
+
+    if valid == on then
+        set(outputValue, result)
+        if outputValue < 0 then
+            tap(Windows.VirtualKey(0xBD))
+            set(outputValue, -outputValue)
+        end
+
+        set(outputValue, outputValue * 1000000 + 0.5)
+        set(outputValue, outputValue - outputValue % 1)
+        set(integerPart, (outputValue - outputValue % 1000000) / 1000000)
+        set(fractionalPart, outputValue % 1000000)
+        clear(outputDigits)
+
+        if integerPart == 0 then
+            tap(Digit0)
+        else
+            while integerPart > 0 do
+                set(digit, integerPart % 10)
+                append(outputDigits, digit)
+                set(integerPart, (integerPart - digit) / 10)
+            end
+
+            while outputDigits.length > 0 do
+                pop(outputDigits, digit)
+                if digit == 0 then
+                    tap(Digit0)
+                else
+                    if digit == 1 then
+                        tap(Digit1)
+                    else
+                        if digit == 2 then
+                            tap(Digit2)
+                        else
+                            if digit == 3 then
+                                tap(Digit3)
+                            else
+                                if digit == 4 then
+                                    tap(Digit4)
+                                else
+                                    if digit == 5 then
+                                        tap(Digit5)
+                                    else
+                                        if digit == 6 then
+                                            tap(Digit6)
+                                        else
+                                            if digit == 7 then
+                                                tap(Digit7)
+                                            else
+                                                if digit == 8 then
+                                                    tap(Digit8)
+                                                else
+                                                    tap(Digit9)
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if fractionalPart > 0 then
+            set(fractionalWidth, 6)
+            while fractionalWidth > 0 and fractionalPart % 10 == 0 do
+                set(fractionalPart, fractionalPart / 10)
+                set(fractionalWidth, fractionalWidth - 1)
+            end
+
+            tap(Windows.VirtualKey(0xBE))
+            set(place, 1)
+            repeat fractionalWidth - 1 do
+                set(place, place * 10)
+            end
+
+            while place >= 1 do
+                set(digit, fractionalPart / place)
+                set(digit, digit - digit % 1)
+                set(fractionalPart, fractionalPart - digit * place)
+                if digit == 0 then
+                    tap(Digit0)
+                else
+                    if digit == 1 then
+                        tap(Digit1)
+                    else
+                        if digit == 2 then
+                            tap(Digit2)
+                        else
+                            if digit == 3 then
+                                tap(Digit3)
+                            else
+                                if digit == 4 then
+                                    tap(Digit4)
+                                else
+                                    if digit == 5 then
+                                        tap(Digit5)
+                                    else
+                                        if digit == 6 then
+                                            tap(Digit6)
+                                        else
+                                            if digit == 7 then
+                                                tap(Digit7)
+                                            else
+                                                if digit == 8 then
+                                                    tap(Digit8)
+                                                else
+                                                    tap(Digit9)
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                set(place, place / 10)
+            end
+        end
+    else
+        tap(E)
+        tap(R)
+        tap(R)
+        tap(O)
+        tap(R)
+    end;
+
+pause Pause:down ~> toggle;

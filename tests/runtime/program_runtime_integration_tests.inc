@@ -609,7 +609,54 @@ void TestReversibleTargetEligibility()
                 source,
                 inputweaver::Transition::Up))
                 == inputweaver::InputDecision::Forward,
-        "terminal target loss releases ownership before disabling dispatch");
+        "target loss releases ownership before suspending dispatch");
+
+    inputweaver::CompiledProgramStorage stateStorage =
+        MakeActionFixtureStorage();
+    stateStorage.actionPrograms[0].code.count = 2U;
+    stateStorage.actionPrograms[0].repeatFrameCount = 0U;
+    stateStorage.actionPrograms[0].maximumOwnedControlCount = 0U;
+    stateStorage.actionCode = {
+        {inputweaver::ActionOpcode::Toggle, 0U, 0U},
+        {inputweaver::ActionOpcode::End, 0U, 0U}};
+    stateStorage.debugInfo.actionInstructionSpans.resize(2U);
+    SelectExecutableTarget(stateStorage);
+    const auto stateProgram = Finalize(std::move(stateStorage));
+    RuntimeHarness stateHarness;
+    Check(
+        stateHarness.runtime.Activate(stateProgram).activated,
+        "target-rebind state fixture activates");
+    const std::uint32_t stateSource = TriggerControl(*stateProgram);
+    (void)stateHarness.runtime.HandleInput(KeyboardEvent(
+        stateSource,
+        inputweaver::Transition::Down));
+    (void)stateHarness.runtime.Pump();
+    bool retainedState = false;
+    Check(
+        stateHarness.runtime.ReadUserState(0U, retainedState)
+            && retainedState,
+        "target-rebind fixture changes user state before target loss");
+    stateHarness.runtime.NotifyTargetLost();
+    (void)stateHarness.runtime.Pump();
+    retainedState = false;
+    Check(
+        !stateHarness.runtime.TargetEligible()
+            && stateHarness.runtime.ReadUserState(0U, retainedState)
+            && retainedState,
+        "target loss preserves user state while dispatch is suspended");
+    stateHarness.runtime.SetTargetEligible(true);
+    (void)stateHarness.runtime.HandleInput(KeyboardEvent(
+        stateSource,
+        inputweaver::Transition::Up));
+    (void)stateHarness.runtime.HandleInput(KeyboardEvent(
+        stateSource,
+        inputweaver::Transition::Down));
+    (void)stateHarness.runtime.Pump();
+    retainedState = true;
+    Check(
+        stateHarness.runtime.ReadUserState(0U, retainedState)
+            && !retainedState,
+        "replacement target resumes the same user state");
 }
 
 void TestMappingCancellationReleasePaths()

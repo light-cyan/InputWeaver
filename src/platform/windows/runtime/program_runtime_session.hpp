@@ -10,7 +10,6 @@
 
 #include "windows_input_types.hpp"
 #include "runtime/runtime_types.hpp"
-#include "stop_request.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -22,6 +21,10 @@ class CompiledProgram;
 class DiagnosticLog;
 class TargetProcessContext;
 
+namespace win32 {
+class WindowsDebugServer;
+}
+
 struct WindowsProgramRuntimeSessionOptions final {
     bool traceInput{};
     bool dryRun{};
@@ -29,8 +32,7 @@ struct WindowsProgramRuntimeSessionOptions final {
     WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};
     std::wstring excludedProcessSelector;
-    std::wstring debugSessionToken;
-    StopRequest executorStopRequest{};
+    win32::WindowsDebugServer* debugServer{};
 };
 
 struct WindowsProgramRuntimeSessionMetrics final {
@@ -61,8 +63,11 @@ public:
         std::wstring& errorMessage);
     void RequestStop() noexcept;
     void Wait() noexcept;
+    void WakeDebugInputThread() noexcept;
+    [[nodiscard]] bool AttachTarget(TargetProcessContext&& targetContext) noexcept;
 
     [[nodiscard]] HANDLE StoppedEvent() const noexcept;
+    [[nodiscard]] HANDLE TargetLostEvent() const noexcept;
     [[nodiscard]] WindowsProgramRuntimeSessionMetrics Metrics() const noexcept;
 
 private:

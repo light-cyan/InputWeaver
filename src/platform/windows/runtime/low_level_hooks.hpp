@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -71,6 +72,9 @@ public:
     {
         (void)eligible;
     }
+    virtual void TargetLost() noexcept
+    {
+    }
     [[nodiscard]] virtual bool RequiresTargetEligibilityNotifications() const noexcept
     {
         return false;
@@ -85,6 +89,7 @@ public:
         WindowsSelfTag selfTag,
         LowLevelInputSink& sink,
         TargetProcessContext* targetContext,
+        std::mutex* targetContextMutex,
         const ForegroundProcessExclusion* processExclusion,
         StopRequest stopRequest,
         std::atomic<bool>& shutdownRequested,
@@ -123,6 +128,7 @@ private:
     WindowsSelfTag selfTag_;
     LowLevelInputSink& sink_;
     TargetProcessContext* targetContext_;
+    std::mutex* targetContextMutex_;
     const ForegroundProcessExclusion* processExclusion_;
     StopRequest stopRequest_;
     std::atomic<bool>& shutdownRequested_;

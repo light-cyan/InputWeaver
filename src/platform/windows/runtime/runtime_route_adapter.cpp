@@ -4,9 +4,11 @@ namespace inputweaver::win32 {
 
 WindowsRuntimeRoutePort::WindowsRuntimeRoutePort(
     TargetProcessContext* targetContext,
-    const ForegroundProcessExclusion* processExclusion) noexcept
+    const ForegroundProcessExclusion* processExclusion,
+    std::mutex* targetContextMutex) noexcept
     : targetContext_(targetContext),
-      processExclusion_(processExclusion)
+      processExclusion_(processExclusion),
+      targetContextMutex_(targetContextMutex)
 {
 }
 
@@ -15,6 +17,10 @@ bool WindowsRuntimeRoutePort::ValidateTarget(
 {
     if (kind == TargetSelectorKind::Global) {
         return targetContext_ == nullptr;
+    }
+    std::unique_lock<std::mutex> targetLock;
+    if (targetContextMutex_ != nullptr) {
+        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
     }
     if (kind == TargetSelectorKind::Executable) {
         return targetContext_ != nullptr
@@ -28,6 +34,10 @@ bool WindowsRuntimeRoutePort::TargetValid(
 {
     if (kind == TargetSelectorKind::Global) {
         return true;
+    }
+    std::unique_lock<std::mutex> targetLock;
+    if (targetContextMutex_ != nullptr) {
+        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
     }
     return kind == TargetSelectorKind::Executable
         && targetContext_ != nullptr
@@ -45,7 +55,14 @@ bool WindowsRuntimeRoutePort::CanDispatch(
     if (kind == TargetSelectorKind::Global) {
         return true;
     }
-    if (!TargetValid(kind) || !targetContext_->IsTargetForeground()) {
+    std::unique_lock<std::mutex> targetLock;
+    if (targetContextMutex_ != nullptr) {
+        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
+    }
+    if (kind != TargetSelectorKind::Executable
+        || targetContext_ == nullptr
+        || !targetContext_->IsTargetAlive()
+        || !targetContext_->IsTargetForeground()) {
         return false;
     }
     return event.device != DeviceKind::Mouse
@@ -63,7 +80,14 @@ bool WindowsRuntimeRoutePort::CanInject(
     if (kind == TargetSelectorKind::Global) {
         return true;
     }
-    if (!TargetValid(kind) || !targetContext_->IsTargetForeground()) {
+    std::unique_lock<std::mutex> targetLock;
+    if (targetContextMutex_ != nullptr) {
+        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
+    }
+    if (kind != TargetSelectorKind::Executable
+        || targetContext_ == nullptr
+        || !targetContext_->IsTargetAlive()
+        || !targetContext_->IsTargetForeground()) {
         return false;
     }
     return !control.requiresPointerTarget

@@ -78,7 +78,8 @@ void ProgramRuntime::StopTaskThread() noexcept
 
 void ProgramRuntime::NotifyTargetLost() noexcept
 {
-    if (impl_->active != nullptr) {
+    if (impl_->active != nullptr
+        && impl_->active->targetEligible.load(std::memory_order_acquire)) {
         impl_->Invalidate(
             *impl_->active,
             RuntimeCancellationReason::TargetLoss);

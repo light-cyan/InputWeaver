@@ -119,7 +119,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
           diagnosticLog(sessionDiagnosticLog),
           processExclusion(options.excludedProcessSelector),
           injector(options.selfTag, &::SendInput, options.dryRun),
-          injectionCircuitBreaker(3U)
+          injectionCircuitBreaker(3U),
+          debugServer(options.debugServer)
     {
         LARGE_INTEGER frequency{};
         if (QueryPerformanceFrequency(&frequency) != FALSE
@@ -135,7 +136,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         lowLevelHooks.reset();
         inputAdapter.reset();
         runtime.reset();
-        debugServer.reset();
         activeProgram.reset();
         outputPort.reset();
         clock.reset();
@@ -183,16 +183,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             return false;
         }
         currentGeneration.store(runtime->Generation(), std::memory_order_release);
-        if (debugServer != nullptr
-            && !debugServer->Start(
-                options.debugSessionToken,
-                activeProgram,
-                {
-                    {this, &Impl::WakeDebugInputThreadThunk},
-                    {this, &Impl::RequestExecutorStopThunk}},
-                errorMessage)) {
-            return false;
-        }
         if (!StartOutputThread(errorMessage)) {
             return false;
         }
@@ -275,7 +265,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 DrainRuntimeDiagnostics();
             }
             if (debugServer != nullptr) {
-                debugServer->Stop();
+                debugServer->EndCapture();
             }
             if (outputProducerDoneEvent != nullptr) {
                 SetEvent(outputProducerDoneEvent);
@@ -294,6 +284,11 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     [[nodiscard]] HANDLE StoppedEvent() const noexcept
     {
         return lowLevelHooks == nullptr ? nullptr : lowLevelHooks->StoppedEvent();
+    }
+
+    [[nodiscard]] HANDLE TargetLostEvent() const noexcept
+    {
+        return targetLostEvent;
     }
 
     [[nodiscard]] WindowsProgramRuntimeSessionMetrics Metrics() const noexcept
@@ -344,11 +339,13 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         normalized.debugCaptureEpoch = debugCorrelation.captureEpoch;
         normalized.debugInputSequence = debugCorrelation.inputSequence;
         InputDecision decision = InputDecision::Forward;
-        const bool outsideExecutableTarget =
-            event.origin == InputOrigin::PhysicalCandidate
-            && targetContext != nullptr
-            && targetContext->IsValid()
-            && !targetContext->IsTargetForeground();
+        bool outsideExecutableTarget = false;
+        if (event.origin == InputOrigin::PhysicalCandidate
+            && targetContext != nullptr) {
+            const std::lock_guard targetLock(targetContextMutex);
+            outsideExecutableTarget = targetContext->IsValid()
+                && !targetContext->IsTargetForeground();
+        }
         decision = runtime->HandleInput(normalized);
         if (outsideExecutableTarget && decision == InputDecision::Forward) {
             forwardedOutsideTarget.fetch_add(1U, std::memory_order_relaxed);
@@ -395,6 +392,35 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 runtime->Generation(),
                 std::memory_order_release);
             DrainRuntimeDiagnostics();
+        }
+    }
+
+    void TargetLost() noexcept override
+    {
+        if (targetContext == nullptr
+            || shutdownRequested.load(std::memory_order_acquire)) {
+            return;
+        }
+        {
+            const std::lock_guard targetLock(targetContextMutex);
+            if (!targetContext->IsValid()) {
+                return;
+            }
+            targetContext->Reset();
+        }
+        {
+            const std::lock_guard runtimeLock(runtimeCallMutex);
+            if (runtime != nullptr
+                && !shutdownRequested.load(std::memory_order_acquire)) {
+                runtime->NotifyTargetLost();
+                currentGeneration.store(
+                    runtime->Generation(),
+                    std::memory_order_release);
+                DrainRuntimeDiagnostics();
+            }
+        }
+        if (targetLostEvent != nullptr) {
+            SetEvent(targetLostEvent);
         }
     }
 
@@ -457,25 +483,36 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         session.SignalStopOnly();
     }
 
-    static void WakeDebugInputThreadThunk(void* context) noexcept
+    void WakeDebugInputThread() noexcept
     {
-        if (context == nullptr) {
-            return;
-        }
-        Impl& session = *static_cast<Impl*>(context);
-        if (session.lowLevelHooks != nullptr) {
-            session.lowLevelHooks->Wake();
+        if (lowLevelHooks != nullptr) {
+            lowLevelHooks->Wake();
         }
     }
 
-    static void RequestExecutorStopThunk(void* context) noexcept
+    [[nodiscard]] bool AttachTarget(
+        TargetProcessContext&& replacement) noexcept
     {
-        if (context == nullptr) {
-            return;
+        if (targetContext == nullptr
+            || !replacement.IsValid()
+            || shutdownRequested.load(std::memory_order_acquire)
+            || lowLevelHooks == nullptr) {
+            return false;
         }
-        Impl& session = *static_cast<Impl*>(context);
-        session.options.executorStopRequest.Invoke();
-        session.RequestStop();
+        {
+            const std::lock_guard targetLock(targetContextMutex);
+            if (shutdownRequested.load(std::memory_order_acquire)) {
+                return false;
+            }
+            if (targetContext->IsValid()) {
+                return false;
+            }
+            *targetContext = std::move(replacement);
+        }
+        const bool excluded = processExclusion.IsForegroundExcluded();
+        SetTargetEligible(!excluded && TargetIsForeground());
+        lowLevelHooks->Wake();
+        return true;
     }
 
     static RuntimeOutputResult PublishThunk(
@@ -597,32 +634,17 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         return count;
     }
 
-    void NotifyTargetLostFromOutput() noexcept
-    {
-        if (shutdownRequested.load(std::memory_order_acquire)) {
-            return;
-        }
-        const std::lock_guard runtimeLock(runtimeCallMutex);
-        if (runtime == nullptr
-            || shutdownRequested.load(std::memory_order_acquire)) {
-            return;
-        }
-        runtime->NotifyTargetLost();
-        currentGeneration.store(
-            runtime->Generation(),
-            std::memory_order_release);
-        DrainRuntimeDiagnostics();
-    }
-
     bool CreateEvents(std::wstring& errorMessage) noexcept
     {
         shutdownEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        targetLostEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         hookProducerDoneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         outputWakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         outputReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         outputProducerDoneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         outputStoppedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (shutdownEvent != nullptr
+            && targetLostEvent != nullptr
             && hookProducerDoneEvent != nullptr
             && outputWakeEvent != nullptr
             && outputReadyEvent != nullptr
@@ -641,6 +663,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     {
         HANDLE* handles[] = {
             &shutdownEvent,
+            &targetLostEvent,
             &hookProducerDoneEvent,
             &outputWakeEvent,
             &outputReadyEvent,
@@ -660,7 +683,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             controlCatalog = std::make_unique<win32::WindowsControlCatalog>();
             routePort = std::make_unique<win32::WindowsRuntimeRoutePort>(
                 targetContext,
-                &processExclusion);
+                &processExclusion,
+                &targetContextMutex);
             processLauncher = std::make_unique<win32::WindowsProcessLauncher>(
                 options.permitProcessLaunch,
                 options.dryRun);
@@ -669,9 +693,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *controlCatalog,
                 this,
                 &Impl::PublishThunk);
-            if (!options.debugSessionToken.empty()) {
-                debugServer = std::make_unique<win32::WindowsDebugServer>();
-            }
             RuntimeCapacities capacities{};
             capacities.maximumArrayBytes = 64U * 1024U * 1024U;
             capacities.permitProcessLaunch = options.permitProcessLaunch;
@@ -682,7 +703,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *routePort,
                 *processLauncher,
                 *clock,
-                debugServer.get(),
+                debugServer,
                 support::CallbackRef<void() noexcept>{this, &Impl::FatalStopThunk});
             inputAdapter = std::make_unique<win32::WindowsRuntimeInputAdapter>(
                 *controlCatalog);
@@ -691,6 +712,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 options.selfTag,
                 *this,
                 targetContext,
+                &targetContextMutex,
                 &processExclusion,
                 stopRequest,
                 shutdownRequested,
@@ -753,7 +775,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         InjectionDiagnosticRecord record{};
         PopulateInjectionIdentity(
             item,
-            targetContext == nullptr ? 0U : targetContext->TargetPid(),
+            TargetProcessId(),
             record);
         record.qpcTimestamp = ReadPerformanceCounter();
         const bool release = IsReleaseOutput(item);
@@ -774,11 +796,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             if (processExclusion.IsForegroundExcluded()) {
                 SetTargetEligible(false);
             } else if (targetContext != nullptr
-                && !targetContext->IsTargetAlive()) {
-                NotifyTargetLostFromOutput();
-                SignalStopOnly();
+                && !TargetIsAlive()) {
+                lowLevelHooks->Wake();
             } else if (targetContext != nullptr
-                && !targetContext->IsTargetForeground()) {
+                && !TargetIsForeground()) {
                 SetTargetEligible(false);
             }
         } else if (!release && runtime != nullptr
@@ -802,10 +823,32 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         if (targetContext == nullptr) {
             return true;
         }
+        const std::lock_guard targetLock(targetContextMutex);
         return targetContext->IsTargetAlive()
             && targetContext->IsTargetForeground()
             && (!item.requiresPointerTarget
                 || targetContext->IsTargetPointerTargetAtCursor());
+    }
+
+    [[nodiscard]] WindowsProcessId TargetProcessId() const noexcept
+    {
+        if (targetContext == nullptr) {
+            return 0U;
+        }
+        const std::lock_guard targetLock(targetContextMutex);
+        return targetContext->TargetPid();
+    }
+
+    [[nodiscard]] bool TargetIsAlive() const noexcept
+    {
+        const std::lock_guard targetLock(targetContextMutex);
+        return targetContext != nullptr && targetContext->IsTargetAlive();
+    }
+
+    [[nodiscard]] bool TargetIsForeground() const noexcept
+    {
+        const std::lock_guard targetLock(targetContextMutex);
+        return targetContext != nullptr && targetContext->IsTargetForeground();
     }
 
     void ExecuteOutput(
@@ -894,6 +937,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     DiagnosticLog& diagnosticLog;
     ForegroundProcessExclusion processExclusion;
     HANDLE shutdownEvent{};
+    HANDLE targetLostEvent{};
     HANDLE hookProducerDoneEvent{};
     HANDLE outputWakeEvent{};
     HANDLE outputReadyEvent{};
@@ -903,6 +947,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::atomic<bool> shutdownRequested{false};
     std::atomic<bool> runtimeShutdownNotified{false};
     std::mutex runtimeCallMutex;
+    mutable std::mutex targetContextMutex;
     mutable std::mutex metricsMutex;
     std::once_flag waitOnce;
     bool waitCompleted{};
@@ -928,7 +973,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::unique_ptr<SteadyRuntimeClock> clock;
     std::unique_ptr<win32::WindowsRuntimeOutputPort> outputPort;
     std::unique_ptr<ProgramRuntime> runtime;
-    std::unique_ptr<win32::WindowsDebugServer> debugServer;
+    win32::WindowsDebugServer* debugServer;
     std::unique_ptr<win32::WindowsRuntimeInputAdapter> inputAdapter;
     std::unique_ptr<LowLevelHooks> lowLevelHooks;
     std::shared_ptr<const CompiledProgram> activeProgram;
@@ -964,9 +1009,25 @@ void WindowsProgramRuntimeSession::Wait() noexcept
     impl_->Wait();
 }
 
+void WindowsProgramRuntimeSession::WakeDebugInputThread() noexcept
+{
+    impl_->WakeDebugInputThread();
+}
+
+bool WindowsProgramRuntimeSession::AttachTarget(
+    TargetProcessContext&& targetContext) noexcept
+{
+    return impl_->AttachTarget(std::move(targetContext));
+}
+
 HANDLE WindowsProgramRuntimeSession::StoppedEvent() const noexcept
 {
     return impl_->StoppedEvent();
+}
+
+HANDLE WindowsProgramRuntimeSession::TargetLostEvent() const noexcept
+{
+    return impl_->TargetLostEvent();
 }
 
 WindowsProgramRuntimeSessionMetrics WindowsProgramRuntimeSession::Metrics() const noexcept

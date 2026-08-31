@@ -230,6 +230,7 @@ struct WindowsAppPlatform::Impl final {
         app::ExecutorInfo info{};
         std::string programName;
         ChildProcess child;
+        UniqueHandle stopEvent;
         std::thread outputReader;
         std::thread errorReader;
         std::unique_ptr<WindowsDebugClient> debugClient;
@@ -303,13 +304,14 @@ struct WindowsAppPlatform::Impl final {
         app::ProgramEntryId id,
         std::string_view name,
         app::ConsoleSource source,
-        std::string_view text)
+        std::string_view text,
+        app::PlatformEventKind kind = app::PlatformEventKind::Output)
     {
         if (text.empty()) {
             return;
         }
         QueueEvent({
-            app::PlatformEventKind::Output,
+            kind,
             id,
             std::string{name},
             source,
@@ -344,7 +346,8 @@ struct WindowsAppPlatform::Impl final {
     void ReadExecutorOutput(
         HANDLE handle,
         app::ProgramEntryId id,
-        std::string name) noexcept
+        std::string name,
+        app::PlatformEventKind kind) noexcept
     {
         try {
             std::array<char, 4'096U> buffer{};
@@ -367,7 +370,8 @@ struct WindowsAppPlatform::Impl final {
                         id,
                         name,
                         app::ConsoleSource::Runtime,
-                        std::string_view{pending}.substr(0U, lineEnd + 1U));
+                        std::string_view{pending}.substr(0U, lineEnd + 1U),
+                        kind);
                     pending.erase(0U, lineEnd + 1U);
                 }
                 while (pending.size() > kMaximumCapturedLineBytes) {
@@ -377,12 +381,18 @@ struct WindowsAppPlatform::Impl final {
                         app::ConsoleSource::Runtime,
                         std::string_view{pending}.substr(
                             0U,
-                            kMaximumCapturedLineBytes));
+                            kMaximumCapturedLineBytes),
+                        kind);
                     pending.erase(0U, kMaximumCapturedLineBytes);
                 }
             }
             if (!pending.empty()) {
-                QueueOutput(id, name, app::ConsoleSource::Runtime, pending);
+                QueueOutput(
+                    id,
+                    name,
+                    app::ConsoleSource::Runtime,
+                    pending,
+                    kind);
             }
         } catch (...) {
             QueueEvent({
@@ -414,13 +424,15 @@ struct WindowsAppPlatform::Impl final {
             this,
             executor.child.standardOutput.Get(),
             executor.info.programId,
-            executor.programName);
+            executor.programName,
+            app::PlatformEventKind::Output);
         executor.errorReader = std::thread(
             &Impl::ReadExecutorOutput,
             this,
             executor.child.standardError.Get(),
             executor.info.programId,
-            executor.programName);
+            executor.programName,
+            app::PlatformEventKind::Error);
     }
 
     void FinishExecutor(std::unique_ptr<ManagedExecutor> executor)
@@ -468,20 +480,14 @@ struct WindowsAppPlatform::Impl final {
     [[nodiscard]] app::OperationResult RequestStop(
         ManagedExecutor& executor) noexcept
     {
-        if (executor.debugClient != nullptr) {
-            const debug::DebugClientResult result =
-                executor.debugClient->RequestExecutorStop();
-            return result.Succeeded()
-                ? app::OperationResult::Success()
-                : app::OperationResult::Failure(
-                    DebugClientErrorText(result.error));
-        }
-        if (GenerateConsoleCtrlEvent(
-                CTRL_BREAK_EVENT,
-                executor.child.processId) == FALSE) {
+        if (!executor.stopEvent) {
             return app::OperationResult::Failure(
-                std::system_category().message(
-                    static_cast<int>(GetLastError())));
+                "Executor stop channel is unavailable.");
+        }
+        if (SetEvent(executor.stopEvent.Get()) == FALSE) {
+            return app::OperationResult::Failure(
+                "Cannot signal the executor stop event. Win32 error "
+                + std::to_string(GetLastError()) + ".");
         }
         return app::OperationResult::Success();
     }
@@ -775,16 +781,45 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
         request.options.allowExec,
         logPath};
     executor->programName = request.entry.displayName;
+    SECURITY_ATTRIBUTES stopEventSecurity{};
+    stopEventSecurity.nLength = sizeof(stopEventSecurity);
+    stopEventSecurity.bInheritHandle = TRUE;
+    executor->stopEvent.Reset(CreateEventW(
+        &stopEventSecurity,
+        TRUE,
+        FALSE,
+        nullptr));
+    if (!executor->stopEvent) {
+        return app::OperationResult::Failure(
+            "Cannot create the executor stop event. Win32 error "
+            + std::to_string(GetLastError()) + ".");
+    }
+    arguments.push_back(L"--host-stop-event");
+    arguments.push_back(std::to_wstring(reinterpret_cast<std::uintptr_t>(
+        executor->stopEvent.Get())));
     std::string error;
     const std::filesystem::path runtime =
         impl_->library.ExecutableDirectory() / L"InputWeaver.exe";
     if (!StartChildProcess(
             runtime,
             arguments,
-            CREATE_NEW_PROCESS_GROUP,
+            CREATE_NO_WINDOW,
             executor->child,
             error)) {
         return app::OperationResult::Failure(std::move(error));
+    }
+    if (SetHandleInformation(
+            executor->stopEvent.Get(),
+            HANDLE_FLAG_INHERIT,
+            0U) == FALSE) {
+        const DWORD handleError = GetLastError();
+        (void)SetEvent(executor->stopEvent.Get());
+        (void)WaitForSingleObject(
+            executor->child.process.Get(),
+            kExecutorStopTimeoutMilliseconds);
+        return app::OperationResult::Failure(
+            "Cannot secure the executor stop event. Win32 error "
+            + std::to_string(handleError) + ".");
     }
     try {
         impl_->StartOutputReaders(*executor);
@@ -803,9 +838,7 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
             {executor->child.processId},
             token);
         if (!connected.Succeeded()) {
-            (void)GenerateConsoleCtrlEvent(
-                CTRL_BREAK_EVENT,
-                executor->child.processId);
+            (void)impl_->RequestStop(*executor);
             (void)WaitForSingleObject(
                 executor->child.process.Get(),
                 kExecutorStopTimeoutMilliseconds);
@@ -816,7 +849,7 @@ app::OperationResult WindowsAppPlatform::LaunchExecutor(
         const debug::DebugClientResult captured =
             executor->debugClient->StartCapture();
         if (!captured.Succeeded()) {
-            (void)executor->debugClient->RequestExecutorStop();
+            (void)impl_->RequestStop(*executor);
             (void)WaitForSingleObject(
                 executor->child.process.Get(),
                 kExecutorStopTimeoutMilliseconds);

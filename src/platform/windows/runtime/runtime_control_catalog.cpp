@@ -166,6 +166,11 @@ constexpr std::uint8_t kOutputCapabilities =
     return kControlQualifierNone;
 }
 
+[[nodiscard]] bool IsExtendedNavigationUsage(std::uint32_t usage) noexcept
+{
+    return usage >= 0x49U && usage <= 0x52U;
+}
+
 [[nodiscard]] std::uint32_t NativeScanQualifier(
     const WindowsNativeInputEvent& event) noexcept
 {
@@ -180,13 +185,17 @@ constexpr std::uint8_t kOutputCapabilities =
 void FillKeyboardRecipe(
     WindowsControlBinding& binding,
     WindowsVirtualKey virtualKey,
-    bool preserveVirtualKey) noexcept
+    bool preserveVirtualKey,
+    bool forceExtendedScanCode = false) noexcept
 {
     binding.kind = WindowsControlKind::Keyboard;
     binding.virtualKey = virtualKey;
     const UINT scanCode = MapVirtualKeyW(virtualKey, MAPVK_VK_TO_VSC_EX);
     binding.scanCode = scanCode & 0xffU;
     binding.scanQualifier = ScanQualifierFromMappedCode(scanCode);
+    if (forceExtendedScanCode) {
+        binding.scanQualifier = kWindowsScanCodeQualifierE0;
+    }
     binding.capabilities = kInputCapabilities;
     if (preserveVirtualKey) {
         binding.outputRecipe.kind = WindowsOutputKind::KeyboardVirtualKey;
@@ -398,7 +407,11 @@ bool WindowsControlCatalog::Resolve(
             if (virtualKey == 0U) {
                 return false;
             }
-            FillKeyboardRecipe(binding, virtualKey, false);
+            FillKeyboardRecipe(
+                binding,
+                virtualKey,
+                false,
+                IsExtendedNavigationUsage(control.code));
             return true;
         }
         if (control.familyId == 0x09U) {

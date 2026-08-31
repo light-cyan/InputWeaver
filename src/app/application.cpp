@@ -570,6 +570,9 @@ void Application::DrainPlatformEvents()
                 ConsoleSource::Runtime,
                 "Executor exited with code "
                     + std::to_string(event.exitCode) + ".");
+            if (event.exitCode != 0U) {
+                SetAttention(ApplicationAttention::Console);
+            }
             if (platform_.DebugProgramId() == kInvalidProgramEntryId) {
                 awaitingDebugCapture_ = false;
             }

@@ -1,0 +1,523 @@
+// Type Snake(x=8,y=9) in Notepad and press Enter.
+// The dimensions describe the playable area inside the border.
+// Arrow keys steer the snake. Space pauses or resumes the game.
+// A collision removes the command and board.
+
+TARGET = "notepad.exe";
+TAP_DURATION = 2ms;
+ACTION_GAP = 1ms;
+
+duration MOVE_INTERVAL = 160ms;
+duration START_DELAY = 500ms;
+duration frameDelay = 500ms;
+
+number[] snakeX = [];
+number[] snakeY = [];
+
+number commandStage = 0;
+number requestedWidth = 0;
+number requestedHeight = 0;
+number widthDigits = 0;
+number heightDigits = 0;
+
+number mapWidth = 0;
+number mapHeight = 0;
+number row = 0;
+number column = 0;
+number cursorX = 0;
+number cursorY = 0;
+number targetX = 0;
+number targetY = 0;
+
+number headX = 0;
+number headY = 0;
+number nextX = 0;
+number nextY = 0;
+number foodX = 0;
+number foodY = 0;
+number direction = 0;
+number pendingDirection = 0;
+
+number index = 0;
+number spawnAttempts = 0;
+number scanX = 0;
+number scanY = 0;
+number discardedX = 0;
+number discardedY = 0;
+
+state gameActive = off;
+state gamePaused = off;
+state alive = off;
+state collision = off;
+state growing = off;
+state occupied = off;
+state foodPlaced = off;
+state won = off;
+
+// Command parser: Snake(x=<6..29>,y=<6..29>)
+S:down when gameActive == off and commandStage == 0 and (LShift == held or RShift == held) ~> set(commandStage, 1);
+N:down when gameActive == off and commandStage == 1 and LShift == idle and RShift == idle ~> set(commandStage, 2);
+A:down when gameActive == off and commandStage == 2 and LShift == idle and RShift == idle ~> set(commandStage, 3);
+K:down when gameActive == off and commandStage == 3 and LShift == idle and RShift == idle ~> set(commandStage, 4);
+E:down when gameActive == off and commandStage == 4 and LShift == idle and RShift == idle ~> set(commandStage, 5);
+Digit9:down when gameActive == off and commandStage == 5 and (LShift == held or RShift == held) ~> set(commandStage, 6);
+X:down when gameActive == off and commandStage == 6 and LShift == idle and RShift == idle ~> set(commandStage, 7);
+Windows.VirtualKey(0xBB):down when gameActive == off and commandStage == 7 and LShift == idle and RShift == idle ~> set(commandStage, 8) set(requestedWidth, 0) set(widthDigits, 0);
+
+Digit0:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10) set(widthDigits, widthDigits + 1);
+Digit1:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 1) set(widthDigits, widthDigits + 1);
+Digit2:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 2) set(widthDigits, widthDigits + 1);
+Digit3:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 3) set(widthDigits, widthDigits + 1);
+Digit4:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 4) set(widthDigits, widthDigits + 1);
+Digit5:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 5) set(widthDigits, widthDigits + 1);
+Digit6:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 6) set(widthDigits, widthDigits + 1);
+Digit7:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 7) set(widthDigits, widthDigits + 1);
+Digit8:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 8) set(widthDigits, widthDigits + 1);
+Digit9:down when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 9) set(widthDigits, widthDigits + 1);
+
+Digit0:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10) set(widthDigits, widthDigits + 1);
+Digit1:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 1) set(widthDigits, widthDigits + 1);
+Digit2:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 2) set(widthDigits, widthDigits + 1);
+Digit3:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 3) set(widthDigits, widthDigits + 1);
+Digit4:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 4) set(widthDigits, widthDigits + 1);
+Digit5:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 5) set(widthDigits, widthDigits + 1);
+Digit6:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 6) set(widthDigits, widthDigits + 1);
+Digit7:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 7) set(widthDigits, widthDigits + 1);
+Digit8:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 8) set(widthDigits, widthDigits + 1);
+Digit9:again when gameActive == off and commandStage == 8 and widthDigits < 2 and LShift == idle and RShift == idle ~> set(requestedWidth, requestedWidth * 10 + 9) set(widthDigits, widthDigits + 1);
+
+Windows.VirtualKey(0xBC):down when gameActive == off and commandStage == 8 and widthDigits > 0 and LShift == idle and RShift == idle ~> set(commandStage, 9);
+Y:down when gameActive == off and commandStage == 9 and LShift == idle and RShift == idle ~> set(commandStage, 10);
+Windows.VirtualKey(0xBB):down when gameActive == off and commandStage == 10 and LShift == idle and RShift == idle ~> set(commandStage, 11) set(requestedHeight, 0) set(heightDigits, 0);
+
+Digit0:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10) set(heightDigits, heightDigits + 1);
+Digit1:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 1) set(heightDigits, heightDigits + 1);
+Digit2:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 2) set(heightDigits, heightDigits + 1);
+Digit3:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 3) set(heightDigits, heightDigits + 1);
+Digit4:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 4) set(heightDigits, heightDigits + 1);
+Digit5:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 5) set(heightDigits, heightDigits + 1);
+Digit6:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 6) set(heightDigits, heightDigits + 1);
+Digit7:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 7) set(heightDigits, heightDigits + 1);
+Digit8:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 8) set(heightDigits, heightDigits + 1);
+Digit9:down when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 9) set(heightDigits, heightDigits + 1);
+
+Digit0:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10) set(heightDigits, heightDigits + 1);
+Digit1:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 1) set(heightDigits, heightDigits + 1);
+Digit2:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 2) set(heightDigits, heightDigits + 1);
+Digit3:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 3) set(heightDigits, heightDigits + 1);
+Digit4:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 4) set(heightDigits, heightDigits + 1);
+Digit5:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 5) set(heightDigits, heightDigits + 1);
+Digit6:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 6) set(heightDigits, heightDigits + 1);
+Digit7:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 7) set(heightDigits, heightDigits + 1);
+Digit8:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 8) set(heightDigits, heightDigits + 1);
+Digit9:again when gameActive == off and commandStage == 11 and heightDigits < 2 and LShift == idle and RShift == idle ~> set(requestedHeight, requestedHeight * 10 + 9) set(heightDigits, heightDigits + 1);
+
+Digit0:down when gameActive == off and commandStage == 11 and heightDigits > 0 and (LShift == held or RShift == held) ~> set(commandStage, 12);
+
+// Start the game only after a complete, bounded command.
+Enter:down when gameActive == off and commandStage == 12 and requestedWidth > 5 and requestedWidth < 30 and requestedHeight > 5 and requestedHeight < 30 =>
+    set(mapWidth, requestedWidth)
+    set(mapHeight, requestedHeight)
+    set(commandStage, 0)
+    set(requestedWidth, 0)
+    set(requestedHeight, 0)
+    set(widthDigits, 0)
+    set(heightDigits, 0)
+    set(gameActive, on)
+    set(gamePaused, off)
+    set(alive, on)
+    set(won, off)
+    set(collision, off)
+    set(growing, off)
+    set(foodPlaced, off)
+    set(direction, 0)
+    set(pendingDirection, 0)
+    set(frameDelay, START_DELAY)
+    clear(snakeX)
+    clear(snakeY)
+
+    set(headX, (mapWidth - mapWidth % 2) / 2 + 1)
+    set(headY, (mapHeight - mapHeight % 2) / 2 + 1)
+    append(snakeX, headX)
+    append(snakeY, headY)
+    append(snakeX, headX - 1)
+    append(snakeY, headY)
+    append(snakeX, headX - 2)
+    append(snakeY, headY)
+
+    tap(Enter)
+    wait(20ms)
+    set(cursorX, 0)
+    set(cursorY, 0)
+
+    press(LShift) | repeat mapWidth + 2 do tap(Digit3) end | release(LShift)
+    tap(Enter)
+    set(cursorX, 0)
+    set(cursorY, 1)
+
+    set(row, 1)
+    while row <= mapHeight do
+        press(LShift) | tap(Digit3) | release(LShift)
+        set(cursorX, 1)
+        set(column, 1)
+        while column <= mapWidth do
+            if row == snakeY[0] and column == snakeX[0] then
+                press(LShift) | tap(Digit2) | release(LShift)
+            else
+                if (row == snakeY[1] and column == snakeX[1]) or (row == snakeY[2] and column == snakeX[2]) then
+                    tap(O)
+                else
+                    tap(Windows.VirtualKey(0xC0))
+                end
+            end
+            set(column, column + 1)
+            set(cursorX, cursorX + 1)
+        end
+        press(LShift) | tap(Digit3) | release(LShift)
+        set(cursorX, cursorX + 1)
+        tap(Enter)
+        set(cursorX, 0)
+        set(cursorY, cursorY + 1)
+        set(row, row + 1)
+    end
+
+    press(LShift) | repeat mapWidth + 2 do tap(Digit3) end | release(LShift)
+    set(cursorX, mapWidth + 2)
+    set(cursorY, mapHeight + 1)
+
+    while alive == on do
+        while gamePaused == on do
+            wait(20ms)
+        end
+
+        if foodPlaced == off then
+            set(spawnAttempts, 0)
+            while foodPlaced == off and spawnAttempts < mapWidth * mapHeight * 2 do
+                set(foodX, RAND01 * mapWidth)
+                set(foodX, foodX - foodX % 1 + 1)
+                set(foodY, RAND01 * mapHeight)
+                set(foodY, foodY - foodY % 1 + 1)
+                set(occupied, off)
+                set(index, 0)
+                while occupied == off and index < snakeX.length do
+                    if snakeX[index] == foodX and snakeY[index] == foodY then
+                        set(occupied, on)
+                    else
+                        set(index, index + 1)
+                    end
+                end
+                if occupied == off then
+                    set(foodPlaced, on)
+                end
+                set(spawnAttempts, spawnAttempts + 1)
+            end
+
+            if foodPlaced == off then
+                set(scanY, 1)
+                while foodPlaced == off and scanY <= mapHeight do
+                    set(scanX, 1)
+                    while foodPlaced == off and scanX <= mapWidth do
+                        set(occupied, off)
+                        set(index, 0)
+                        while occupied == off and index < snakeX.length do
+                            if snakeX[index] == scanX and snakeY[index] == scanY then
+                                set(occupied, on)
+                            else
+                                set(index, index + 1)
+                            end
+                        end
+                        if occupied == off then
+                            set(foodX, scanX)
+                            set(foodY, scanY)
+                            set(foodPlaced, on)
+                        end
+                        set(scanX, scanX + 1)
+                    end
+                    set(scanY, scanY + 1)
+                end
+            end
+
+            if foodPlaced == on then
+                set(targetX, foodX)
+                set(targetY, foodY)
+                tap(Home)
+                set(cursorX, 0)
+                if cursorY < targetY then
+                    repeat targetY - cursorY do tap(ArrowDown) end
+                else
+                    repeat cursorY - targetY do tap(ArrowUp) end
+                end
+                set(cursorY, targetY)
+                repeat targetX do tap(ArrowRight) end
+                set(cursorX, targetX)
+                tap(Delete)
+                press(LShift) | tap(Digit8) | release(LShift)
+                set(cursorX, cursorX + 1)
+            else
+                set(won, on)
+                set(alive, off)
+            end
+        end
+
+        if alive == on then
+            wait(frameDelay)
+            while gamePaused == on do
+                wait(20ms)
+            end
+            set(frameDelay, MOVE_INTERVAL)
+            set(direction, pendingDirection)
+            set(nextX, snakeX[0])
+            set(nextY, snakeY[0])
+
+            if direction == 0 then
+                set(nextX, nextX + 1)
+            else
+                if direction == 1 then
+                    set(nextY, nextY + 1)
+                else
+                    if direction == 2 then
+                        set(nextX, nextX - 1)
+                    else
+                        set(nextY, nextY - 1)
+                    end
+                end
+            end
+
+            set(collision, off)
+            if nextX == foodX and nextY == foodY then
+                set(growing, on)
+            else
+                set(growing, off)
+            end
+            if nextX < 1 or nextX > mapWidth or nextY < 1 or nextY > mapHeight then
+                set(collision, on)
+            end
+
+            set(index, 0)
+            while collision == off and index < snakeX.length do
+                if snakeX[index] == nextX and snakeY[index] == nextY and (growing == on or index < snakeX.length - 1) then
+                    set(collision, on)
+                else
+                    set(index, index + 1)
+                end
+            end
+
+            if collision == on then
+                set(alive, off)
+            else
+                append(snakeX, 0)
+                append(snakeY, 0)
+                set(index, snakeX.length - 1)
+                while index > 0 do
+                    set(snakeX[index], snakeX[index - 1])
+                    set(snakeY[index], snakeY[index - 1])
+                    set(index, index - 1)
+                end
+                set(snakeX[0], nextX)
+                set(snakeY[0], nextY)
+
+                // Draw the new head first.
+                set(targetX, snakeX[0])
+                set(targetY, snakeY[0])
+                tap(Home)
+                set(cursorX, 0)
+                if cursorY < targetY then
+                    repeat targetY - cursorY do tap(ArrowDown) end
+                else
+                    repeat cursorY - targetY do tap(ArrowUp) end
+                end
+                set(cursorY, targetY)
+                repeat targetX do tap(ArrowRight) end
+                set(cursorX, targetX)
+                tap(Delete)
+                press(LShift) | tap(Digit2) | release(LShift)
+                set(cursorX, cursorX + 1)
+
+                // Convert the previous head into a body segment.
+                set(targetX, snakeX[1])
+                set(targetY, snakeY[1])
+                tap(Home)
+                set(cursorX, 0)
+                if cursorY < targetY then
+                    repeat targetY - cursorY do tap(ArrowDown) end
+                else
+                    repeat cursorY - targetY do tap(ArrowUp) end
+                end
+                set(cursorY, targetY)
+                repeat targetX do tap(ArrowRight) end
+                set(cursorX, targetX)
+                tap(Delete)
+                tap(O)
+                set(cursorX, cursorX + 1)
+
+                if growing == on then
+                    set(foodPlaced, off)
+                else
+                    // Erase the old tail only after the new head is visible.
+                    set(targetX, snakeX[snakeX.length - 1])
+                    set(targetY, snakeY[snakeY.length - 1])
+                    if targetX != snakeX[0] or targetY != snakeY[0] then
+                        tap(Home)
+                        set(cursorX, 0)
+                        if cursorY < targetY then
+                            repeat targetY - cursorY do tap(ArrowDown) end
+                        else
+                            repeat cursorY - targetY do tap(ArrowUp) end
+                        end
+                        set(cursorY, targetY)
+                        repeat targetX do tap(ArrowRight) end
+                        set(cursorX, targetX)
+                        tap(Delete)
+                        tap(Windows.VirtualKey(0xC0))
+                        set(cursorX, cursorX + 1)
+                    end
+                    pop(snakeX, discardedX)
+                    pop(snakeY, discardedY)
+                end
+            end
+        end
+    end
+
+    if won == off then
+        // Select from the invocation line through the last border and delete it.
+        tap(Home)
+        set(cursorX, 0)
+        repeat cursorY + 1 do tap(ArrowUp) end
+        set(cursorY, -1)
+        press(LShift) | repeat mapHeight + 2 do tap(ArrowDown) end | tap(End) | release(LShift)
+        tap(Delete)
+        set(cursorX, 0)
+        set(cursorY, -1)
+    end
+
+    set(gamePaused, off)
+    set(gameActive, off)
+    set(commandStage, 0);
+
+Space:down when gameActive == on => toggle(gamePaused);
+Space:again when gameActive == on =>;
+Space:up when gameActive == on =>;
+
+// Direction codes: right 0, down 1, left 2, up 3.
+ArrowRight:down when gameActive == on and direction != 2 => set(pendingDirection, 0);
+ArrowRight:again when gameActive == on and direction != 2 => set(pendingDirection, 0);
+ArrowRight:up when gameActive == on =>;
+ArrowDown:down when gameActive == on and direction != 3 => set(pendingDirection, 1);
+ArrowDown:again when gameActive == on and direction != 3 => set(pendingDirection, 1);
+ArrowDown:up when gameActive == on =>;
+ArrowLeft:down when gameActive == on and direction != 0 => set(pendingDirection, 2);
+ArrowLeft:again when gameActive == on and direction != 0 => set(pendingDirection, 2);
+ArrowLeft:up when gameActive == on =>;
+ArrowUp:down when gameActive == on and direction != 1 => set(pendingDirection, 3);
+ArrowUp:again when gameActive == on and direction != 1 => set(pendingDirection, 3);
+ArrowUp:up when gameActive == on =>;
+
+// An invalid line is ignored until Enter starts a new command line.
+Enter:down when gameActive == off ~> set(commandStage, 0) set(requestedWidth, 0) set(requestedHeight, 0) set(widthDigits, 0) set(heightDigits, 0);
+Enter:again when gameActive == off ~> set(commandStage, 0) set(requestedWidth, 0) set(requestedHeight, 0) set(widthDigits, 0) set(heightDigits, 0);
+Backspace:down when gameActive == off ~> set(commandStage, -1);
+Backspace:again when gameActive == off ~> set(commandStage, -1);
+Space:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Space:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Tab:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Tab:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+A:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+B:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+C:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+D:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+E:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+F:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+G:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+H:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+I:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+J:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+K:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+L:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+M:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+N:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+O:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+P:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Q:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+R:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+S:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+T:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+U:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+V:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+W:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+X:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Y:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Z:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+A:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+B:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+C:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+D:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+E:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+F:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+G:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+H:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+I:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+J:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+K:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+L:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+M:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+N:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+O:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+P:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Q:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+R:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+S:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+T:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+U:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+V:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+W:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+X:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Y:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Z:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Digit0:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit1:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit2:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit3:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit4:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit5:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit6:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit7:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit8:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit9:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Digit0:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit1:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit2:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit3:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit4:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit5:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit6:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit7:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit8:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit9:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Windows.VirtualKey(0xBA):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBB):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBC):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBD):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBE):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBF):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xC0):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDB):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDC):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDD):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDE):down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Windows.VirtualKey(0xBA):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBB):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBC):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBD):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBE):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xBF):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xC0):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDB):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDC):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDD):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Windows.VirtualKey(0xDE):again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);

@@ -366,6 +366,31 @@ void TestApplicationFlow()
             == inputweaver::app::ApplicationAttention::Debug,
         "trusted debug capture requests Debug page attention");
 
+    platform.events.push_back({
+        inputweaver::app::PlatformEventKind::Error,
+        1U,
+        "Game",
+        inputweaver::app::ConsoleSource::Runtime,
+        "Runtime error.",
+        0U});
+    application.Tick();
+    Check(
+        application.ConsumeAttention()
+            == inputweaver::app::ApplicationAttention::Console,
+        "runtime errors request Console page attention");
+    platform.events.push_back({
+        inputweaver::app::PlatformEventKind::ExecutorExited,
+        1U,
+        "Game",
+        inputweaver::app::ConsoleSource::Runtime,
+        {},
+        8U});
+    application.Tick();
+    Check(
+        application.ConsumeAttention()
+            == inputweaver::app::ApplicationAttention::Console,
+        "nonzero executor exits request Console page attention");
+
     inputweaver::app::RunConfiguration configuration{
         inputweaver::app::TargetMode::Global,
         {},

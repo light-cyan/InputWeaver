@@ -1,0 +1,395 @@
+// Open a plain-text editor in Visual Studio Code with word wrap disabled.
+// Type 2048() and press Enter. Arrow keys move tiles; R starts a new board.
+
+TARGET = "Code.exe";
+TAP_DURATION = 0ms;
+ACTION_GAP = 1ms;
+RAND_SEED = 2048;
+
+number[] board = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+number[] lineValues = [];
+number[] mergedValues = [];
+
+number commandStage = 0;
+number pendingMove = -1;
+number moveDirection = -1;
+number line = 0;
+number position = 0;
+number index = 0;
+number valueIndex = 0;
+number boardIndex = 0;
+number mergedValue = 0;
+number emptyCount = 0;
+number spawnChoice = 0;
+number spawnRemaining = 0;
+number spawnRoll = 0;
+number renderIndex = 0;
+number targetX = 0;
+number targetY = 0;
+number cursorX = 0;
+number cursorY = 0;
+number row = 0;
+number column = 0;
+
+state gameActive = off;
+state moved = off;
+state spawnPlaced = off;
+state renderNeeded = off;
+state gameOver = off;
+state won = off;
+
+// Command parser: 2048()
+Digit2:down when gameActive == off and commandStage == 0 and LShift == idle and RShift == idle ~> set(commandStage, 1);
+Digit0:down when gameActive == off and commandStage == 1 and LShift == idle and RShift == idle ~> set(commandStage, 2);
+Digit4:down when gameActive == off and commandStage == 2 and LShift == idle and RShift == idle ~> set(commandStage, 3);
+Digit8:down when gameActive == off and commandStage == 3 and LShift == idle and RShift == idle ~> set(commandStage, 4);
+Digit9:down when gameActive == off and commandStage == 4 and (LShift == held or RShift == held) ~> set(commandStage, 5);
+Digit0:down when gameActive == off and commandStage == 5 and (LShift == held or RShift == held) ~> set(commandStage, 6);
+
+Enter:down when gameActive == off and commandStage == 6 =>
+    set(commandStage, 0)
+    set(gameActive, on)
+    set(pendingMove, 4)
+    set(moveDirection, -1)
+    set(renderNeeded, off)
+    set(gameOver, off)
+    set(won, off)
+    clear(lineValues)
+    clear(mergedValues)
+
+    tap(Enter)
+    wait(20ms)
+    set(cursorX, 0)
+    set(cursorY, 0)
+
+    press(LShift) | repeat 18 do tap(Digit3) end | release(LShift)
+    tap(Enter)
+    set(cursorX, 0)
+    set(cursorY, 1)
+
+    set(row, 0)
+    while row < 4 do
+        press(LShift) | tap(Digit3) | release(LShift)
+        repeat 16 do tap(Windows.VirtualKey(0xC0)) end
+        press(LShift) | tap(Digit3) | release(LShift)
+        tap(Enter)
+        set(cursorX, 0)
+        set(cursorY, cursorY + 1)
+        set(row, row + 1)
+    end
+
+    press(LShift) | repeat 18 do tap(Digit3) end | release(LShift)
+    set(cursorX, 18)
+    set(cursorY, 5)
+
+    while gameActive == on do
+        if renderNeeded == on then
+            set(renderIndex, 0)
+            while renderIndex < 16 do
+                set(targetY, (renderIndex - renderIndex % 4) / 4 + 1)
+                set(targetX, renderIndex % 4 * 4 + 1)
+                tap(Home)
+                set(cursorX, 0)
+                if cursorY < targetY then
+                    repeat targetY - cursorY do tap(ArrowDown) end
+                else
+                    repeat cursorY - targetY do tap(ArrowUp) end
+                end
+                set(cursorY, targetY)
+                repeat targetX do tap(ArrowRight) end
+                set(cursorX, targetX)
+                repeat 4 do tap(Delete) end
+
+                if board[renderIndex] == 0 then
+                    repeat 4 do tap(Windows.VirtualKey(0xC0)) end
+                else
+                    if board[renderIndex] == 2 then
+                        repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                        tap(Digit2)
+                    else
+                        if board[renderIndex] == 4 then
+                            repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                            tap(Digit4)
+                        else
+                            if board[renderIndex] == 8 then
+                                repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                                tap(Digit8)
+                            else
+                                if board[renderIndex] == 16 then
+                                    repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                    tap(Digit1) tap(Digit6)
+                                else
+                                    if board[renderIndex] == 32 then
+                                        repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                        tap(Digit3) tap(Digit2)
+                                    else
+                                        if board[renderIndex] == 64 then
+                                            repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                            tap(Digit6) tap(Digit4)
+                                        else
+                                            if board[renderIndex] == 128 then
+                                                tap(Windows.VirtualKey(0xC0))
+                                                tap(Digit1) tap(Digit2) tap(Digit8)
+                                            else
+                                                if board[renderIndex] == 256 then
+                                                    tap(Windows.VirtualKey(0xC0))
+                                                    tap(Digit2) tap(Digit5) tap(Digit6)
+                                                else
+                                                    if board[renderIndex] == 512 then
+                                                        tap(Windows.VirtualKey(0xC0))
+                                                        tap(Digit5) tap(Digit1) tap(Digit2)
+                                                    else
+                                                        if board[renderIndex] == 1024 then
+                                                            tap(Digit1) tap(Digit0) tap(Digit2) tap(Digit4)
+                                                        else
+                                                            tap(Digit2) tap(Digit0) tap(Digit4) tap(Digit8)
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                set(cursorX, targetX + 4)
+                set(renderIndex, renderIndex + 1)
+            end
+            set(renderNeeded, off)
+
+            if won == on or gameOver == on then
+                tap(Home)
+                set(cursorX, 0)
+                if cursorY < 5 then
+                    repeat 5 - cursorY do tap(ArrowDown) end
+                else
+                    repeat cursorY - 5 do tap(ArrowUp) end
+                end
+                set(cursorY, 5)
+                tap(End)
+                set(cursorX, 18)
+                tap(Enter)
+                set(cursorX, 0)
+                set(cursorY, 6)
+                press(LShift) |
+                if won == on then
+                    tap(Y) tap(O) tap(U) tap(W) tap(I) tap(N)
+                else
+                    tap(G) tap(A) tap(M) tap(E) tap(O) tap(V) tap(E) tap(R)
+                end
+                | release(LShift)
+                tap(Enter)
+                set(cursorX, 0)
+                set(cursorY, 7)
+                set(gameActive, off)
+            end
+        end
+
+        if gameActive == on then
+            if pendingMove < 0 then
+                wait(10ms)
+            else
+                set(moveDirection, pendingMove)
+                set(pendingMove, -1)
+                set(spawnRemaining, 0)
+
+                if moveDirection == 4 then
+                    set(index, 0)
+                    while index < 16 do
+                        set(board[index], 0)
+                        set(index, index + 1)
+                    end
+                    set(won, off)
+                    set(gameOver, off)
+                    set(spawnRemaining, 2)
+                    set(renderNeeded, on)
+                else
+                    set(moved, off)
+                    set(line, 0)
+                    while line < 4 do
+                        clear(lineValues)
+                        set(position, 0)
+                        while position < 4 do
+                            if moveDirection == 0 then
+                                set(boardIndex, line * 4 + position)
+                            else
+                                if moveDirection == 1 then
+                                    set(boardIndex, line * 4 + 3 - position)
+                                else
+                                    if moveDirection == 2 then
+                                        set(boardIndex, position * 4 + line)
+                                    else
+                                        set(boardIndex, (3 - position) * 4 + line)
+                                    end
+                                end
+                            end
+                            if board[boardIndex] != 0 then
+                                append(lineValues, board[boardIndex])
+                            end
+                            set(position, position + 1)
+                        end
+
+                        clear(mergedValues)
+                        set(valueIndex, 0)
+                        while valueIndex < lineValues.length do
+                            if valueIndex + 1 < lineValues.length and lineValues[valueIndex] == lineValues[valueIndex + 1] then
+                                set(mergedValue, lineValues[valueIndex] * 2)
+                                append(mergedValues, mergedValue)
+                                if mergedValue >= 2048 then
+                                    set(won, on)
+                                end
+                                set(valueIndex, valueIndex + 2)
+                            else
+                                append(mergedValues, lineValues[valueIndex])
+                                set(valueIndex, valueIndex + 1)
+                            end
+                        end
+                        while mergedValues.length < 4 do
+                            append(mergedValues, 0)
+                        end
+
+                        set(position, 0)
+                        while position < 4 do
+                            if moveDirection == 0 then
+                                set(boardIndex, line * 4 + position)
+                            else
+                                if moveDirection == 1 then
+                                    set(boardIndex, line * 4 + 3 - position)
+                                else
+                                    if moveDirection == 2 then
+                                        set(boardIndex, position * 4 + line)
+                                    else
+                                        set(boardIndex, (3 - position) * 4 + line)
+                                    end
+                                end
+                            end
+                            if board[boardIndex] != mergedValues[position] then
+                                set(moved, on)
+                                set(board[boardIndex], mergedValues[position])
+                            end
+                            set(position, position + 1)
+                        end
+                        set(line, line + 1)
+                    end
+
+                    if moved == on then
+                        if won == off then
+                            set(spawnRemaining, 1)
+                        end
+                        set(renderNeeded, on)
+                    end
+                end
+
+                while spawnRemaining > 0 do
+                    set(emptyCount, 0)
+                    set(index, 0)
+                    while index < 16 do
+                        if board[index] == 0 then
+                            set(emptyCount, emptyCount + 1)
+                        end
+                        set(index, index + 1)
+                    end
+                    if emptyCount > 0 then
+                        set(spawnChoice, RAND01 * emptyCount)
+                        set(spawnChoice, spawnChoice - spawnChoice % 1)
+                        set(spawnPlaced, off)
+                        set(index, 0)
+                        while spawnPlaced == off and index < 16 do
+                            if board[index] == 0 then
+                                if spawnChoice == 0 then
+                                    set(spawnRoll, RAND01)
+                                    if spawnRoll < 0.9 then
+                                        set(board[index], 2)
+                                    else
+                                        set(board[index], 4)
+                                    end
+                                    set(spawnPlaced, on)
+                                else
+                                    set(spawnChoice, spawnChoice - 1)
+                                end
+                            end
+                            set(index, index + 1)
+                        end
+                    else
+                        set(spawnPlaced, off)
+                    end
+                    if spawnPlaced == on then
+                        set(spawnRemaining, spawnRemaining - 1)
+                    else
+                        set(spawnRemaining, 0)
+                    end
+                end
+
+                if won == off then
+                    set(gameOver, on)
+                    set(index, 0)
+                    while index < 16 do
+                        if board[index] == 0 then
+                            set(gameOver, off)
+                        end
+                        set(index, index + 1)
+                    end
+                    if gameOver == on then
+                        set(row, 0)
+                        while gameOver == on and row < 4 do
+                            set(column, 0)
+                            while gameOver == on and column < 4 do
+                                set(boardIndex, row * 4 + column)
+                                if column < 3 and board[boardIndex] == board[boardIndex + 1] then
+                                    set(gameOver, off)
+                                end
+                                if row < 3 and board[boardIndex] == board[boardIndex + 4] then
+                                    set(gameOver, off)
+                                end
+                                set(column, column + 1)
+                            end
+                            set(row, row + 1)
+                        end
+                    end
+                    if gameOver == on then
+                        set(renderNeeded, on)
+                    end
+                end
+            end
+        end
+    end
+
+    set(commandStage, 0);
+
+ArrowLeft:down when gameActive == on => set(pendingMove, 0);
+ArrowLeft:again when gameActive == on => set(pendingMove, 0);
+ArrowLeft:up when gameActive == on =>;
+ArrowRight:down when gameActive == on => set(pendingMove, 1);
+ArrowRight:again when gameActive == on => set(pendingMove, 1);
+ArrowRight:up when gameActive == on =>;
+ArrowUp:down when gameActive == on => set(pendingMove, 2);
+ArrowUp:again when gameActive == on => set(pendingMove, 2);
+ArrowUp:up when gameActive == on =>;
+ArrowDown:down when gameActive == on => set(pendingMove, 3);
+ArrowDown:again when gameActive == on => set(pendingMove, 3);
+ArrowDown:up when gameActive == on =>;
+
+R:down when gameActive == on and LCtrl == idle and RCtrl == idle => set(pendingMove, 4);
+R:again when gameActive == on =>;
+R:up when gameActive == on =>;
+
+Enter:down when gameActive == off ~> set(commandStage, 0);
+Enter:again when gameActive == off ~> set(commandStage, 0);
+Backspace:down when gameActive == off ~> set(commandStage, -1);
+Backspace:again when gameActive == off ~> set(commandStage, -1);
+Space:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Space:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Digit0:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit2:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit4:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit8:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit9:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+
+Digit0:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit2:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit4:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit8:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Digit9:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);

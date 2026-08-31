@@ -115,6 +115,7 @@ LowLevelHooks::LowLevelHooks(
     WindowsSelfTag selfTag,
     LowLevelInputSink& sink,
     TargetProcessContext* targetContext,
+    std::mutex* targetContextMutex,
     const ForegroundProcessExclusion* processExclusion,
     StopRequest stopRequest,
     std::atomic<bool>& shutdownRequested,
@@ -123,6 +124,7 @@ LowLevelHooks::LowLevelHooks(
     : selfTag_(selfTag),
       sink_(sink),
       targetContext_(targetContext),
+      targetContextMutex_(targetContextMutex),
       processExclusion_(processExclusion),
       stopRequest_(stopRequest),
       shutdownRequested_(shutdownRequested),
@@ -280,6 +282,10 @@ void LowLevelHooks::HandleForegroundChange() noexcept
 {
     const bool excluded = processExclusion_ != nullptr
         && processExclusion_->IsForegroundExcluded();
+    std::unique_lock<std::mutex> targetLock;
+    if (targetContextMutex_ != nullptr) {
+        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
+    }
     sink_.SetTargetEligible(
         !excluded
         && (targetContext_ == nullptr || targetContext_->IsTargetForeground()));
@@ -353,8 +359,15 @@ void LowLevelHooks::ThreadMain() noexcept {
         if (!shuttingDown) {
             HANDLE handles[2] = {shutdownEvent_, nullptr};
             DWORD handleCount = 1;
-            if (targetContext_ != nullptr && targetContext_->IsValid()) {
-                handles[handleCount++] = targetContext_->TargetHandle();
+            {
+                std::unique_lock<std::mutex> targetLock;
+                if (targetContextMutex_ != nullptr) {
+                    targetLock = std::unique_lock<std::mutex>(
+                        *targetContextMutex_);
+                }
+                if (targetContext_ != nullptr && targetContext_->IsValid()) {
+                    handles[handleCount++] = targetContext_->TargetHandle();
+                }
             }
             const DWORD waitResult = MsgWaitForMultipleObjectsEx(
                 handleCount, handles, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -362,9 +375,7 @@ void LowLevelHooks::ThreadMain() noexcept {
                 shuttingDown = true;
                 shutdownGrace.Begin(GetTickCount64());
             } else if (handleCount == 2 && waitResult == WAIT_OBJECT_0 + 1) {
-                stopRequest_.Invoke();
-                shuttingDown = true;
-                shutdownGrace.Begin(GetTickCount64());
+                sink_.TargetLost();
             } else if (waitResult == WAIT_FAILED) {
                 stopRequest_.Invoke();
                 shuttingDown = true;

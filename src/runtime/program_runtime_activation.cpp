@@ -565,8 +565,12 @@ void ProgramRuntime::Impl::Invalidate(
         }
         state.accepting.store(false, std::memory_order_release);
     }
+    if (reason == RuntimeCancellationReason::TargetLoss) {
+        state.targetEligible.store(false, std::memory_order_release);
+    }
     if (reason != RuntimeCancellationReason::Pause
-        && reason != RuntimeCancellationReason::TargetIneligible) {
+        && reason != RuntimeCancellationReason::TargetIneligible
+        && reason != RuntimeCancellationReason::TargetLoss) {
         state.accepting.store(false, std::memory_order_release);
     }
     for (std::size_t index = 0U;

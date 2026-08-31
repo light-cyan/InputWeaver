@@ -15,6 +15,7 @@ struct WindowsExecutorOptions final {
     std::wstring targetSelector;
     std::wstring jsonlPath;
     std::wstring debugSessionToken;
+    std::uintptr_t inheritedStopEvent{};
     std::filesystem::path programPath;
 };
 
