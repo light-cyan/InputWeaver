@@ -25,6 +25,8 @@ echo [2/2] Building CompiledProgramTests.exe...
     "src\program\compiled_program.cpp" ^
     "src\program\program_dump.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     "src\program\weavec_codec.cpp" ^
     -o "bin\CompiledProgramTests.exe"
 if errorlevel 1 exit /b %errorlevel%

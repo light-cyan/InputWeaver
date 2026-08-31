@@ -22,6 +22,8 @@ echo Building CompilerTests.exe...
     "src\compiler\lowering.cpp" ^
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     "src\program\program_dump.cpp" ^
     "src\program\weavec_codec.cpp" ^
     -o "bin\CompilerTests.exe"

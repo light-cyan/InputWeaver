@@ -6,7 +6,7 @@
 #include "platform/windows/runtime/runtime_route_adapter.hpp"
 #include "platform/windows/runtime/windows_output_queue.hpp"
 #include "program/compiled_program.hpp"
-#include "program/program_validator.hpp"
+#include "program/program_requirements.hpp"
 #include "runtime/program_runtime.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 

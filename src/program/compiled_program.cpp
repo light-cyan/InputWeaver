@@ -1,5 +1,6 @@
 #include "compiled_program.hpp"
 
+#include "program_requirements.hpp"
 #include "program_validator.hpp"
 
 #include <algorithm>

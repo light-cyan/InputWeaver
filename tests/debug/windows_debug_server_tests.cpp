@@ -10,7 +10,7 @@
 #include "platform/windows/debug/debug_client.hpp"
 #include "platform/windows/debug/debug_server.hpp"
 #include "program/compiled_program.hpp"
-#include "program/program_validator.hpp"
+#include "program/program_requirements.hpp"
 #include "../program/compiled_program_fixtures.hpp"
 
 #include <algorithm>

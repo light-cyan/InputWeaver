@@ -1,7 +1,7 @@
 #include "compiled_program_fixtures.hpp"
 
 #include "program/program_dump.hpp"
-#include "program/program_validator.hpp"
+#include "program/program_requirements.hpp"
 #include "program/weavec_codec.hpp"
 #include "support/little_endian.hpp"
 

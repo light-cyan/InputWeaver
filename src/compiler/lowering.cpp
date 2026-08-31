@@ -1,6 +1,6 @@
 #include "lowering.hpp"
 
-#include "program/program_validator.hpp"
+#include "program/program_requirements.hpp"
 
 #include <bit>
 #include <cstddef>

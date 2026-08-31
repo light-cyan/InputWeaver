@@ -15,8 +15,14 @@ echo [1/7] Building ProgramRuntimeTests.exe...
     "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
+    "src\runtime\program_runtime_activation.cpp" ^
+    "src\runtime\program_runtime_dispatch.cpp" ^
+    "src\runtime\program_runtime_output.cpp" ^
+    "src\runtime\program_runtime_tasks.cpp" ^
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     "src\program\weavec_codec.cpp" ^
     -o "bin\ProgramRuntimeTests.exe"
 if errorlevel 1 exit /b %errorlevel%
@@ -29,8 +35,14 @@ echo [2/7] Building WindowsRuntimeAdapterTests.exe...
     "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
+    "src\runtime\program_runtime_activation.cpp" ^
+    "src\runtime\program_runtime_dispatch.cpp" ^
+    "src\runtime\program_runtime_output.cpp" ^
+    "src\runtime\program_runtime_tasks.cpp" ^
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     "src\platform\windows\runtime\runtime_control_catalog.cpp" ^
     "src\platform\windows\runtime\runtime_process_launcher.cpp" ^
     "src\platform\windows\runtime\runtime_route_adapter.cpp" ^
@@ -75,6 +87,8 @@ echo [6/7] Building WindowsDebugServerTests.exe...
     "src\debug\debug_protocol.cpp" ^
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     -o "bin\WindowsDebugServerTests.exe" ^
     -ladvapi32
 if errorlevel 1 exit /b %errorlevel%

@@ -36,8 +36,14 @@ echo [2/2] Building InputWeaver.exe...
     "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
     "src\runtime\program_runtime.cpp" ^
+    "src\runtime\program_runtime_activation.cpp" ^
+    "src\runtime\program_runtime_dispatch.cpp" ^
+    "src\runtime\program_runtime_output.cpp" ^
+    "src\runtime\program_runtime_tasks.cpp" ^
     "src\program\compiled_program.cpp" ^
     "src\program\program_validator.cpp" ^
+    "src\program\program_code_validator.cpp" ^
+    "src\program\program_requirements.cpp" ^
     "src\program\weavec_codec.cpp" ^
     "bin\InputWeaverResource.o" ^
     -o "bin\InputWeaver.exe" ^
