@@ -21,10 +21,6 @@ class CompiledProgram;
 class DiagnosticLog;
 class TargetProcessContext;
 
-namespace win32 {
-class WindowsDebugServer;
-}
-
 struct WindowsProgramRuntimeSessionOptions final {
     bool traceInput{};
     bool dryRun{};
@@ -32,7 +28,7 @@ struct WindowsProgramRuntimeSessionOptions final {
     WindowsSelfTag selfTag{};
     TargetSelectorKind effectiveTargetKind{TargetSelectorKind::Unspecified};
     std::wstring excludedProcessSelector;
-    win32::WindowsDebugServer* debugServer{};
+    std::wstring debugSessionToken;
 };
 
 struct WindowsProgramRuntimeSessionMetrics final {
@@ -51,7 +47,6 @@ class WindowsProgramRuntimeSession final {
 public:
     WindowsProgramRuntimeSession(
         WindowsProgramRuntimeSessionOptions options,
-        TargetProcessContext* targetContext,
         DiagnosticLog& diagnosticLog);
     ~WindowsProgramRuntimeSession();
 
@@ -63,7 +58,6 @@ public:
         std::wstring& errorMessage);
     void RequestStop() noexcept;
     void Wait() noexcept;
-    void WakeDebugInputThread() noexcept;
     [[nodiscard]] bool AttachTarget(TargetProcessContext&& targetContext) noexcept;
 
     [[nodiscard]] HANDLE StoppedEvent() const noexcept;

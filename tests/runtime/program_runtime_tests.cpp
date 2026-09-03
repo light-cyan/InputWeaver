@@ -119,6 +119,7 @@ public:
 
 class FakeRoutePort final : public inputweaver::RuntimeRoutePort {
 public:
+    bool targetSupported{true};
     bool targetValid{true};
     bool dispatchAllowed{true};
     bool injectionAllowed{true};
@@ -131,7 +132,7 @@ public:
         inputweaver::TargetSelectorKind kind) noexcept override
     {
         validatedKind = kind;
-        return targetValid;
+        return targetSupported;
     }
 
     [[nodiscard]] bool CanDispatch(

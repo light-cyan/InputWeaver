@@ -120,6 +120,7 @@ LowLevelHooks::LowLevelHooks(
     StopRequest stopRequest,
     std::atomic<bool>& shutdownRequested,
     HANDLE shutdownEvent,
+    HANDLE controlRequestEvent,
     HANDLE producerDoneEvent) noexcept
     : selfTag_(selfTag),
       sink_(sink),
@@ -129,6 +130,7 @@ LowLevelHooks::LowLevelHooks(
       stopRequest_(stopRequest),
       shutdownRequested_(shutdownRequested),
       shutdownEvent_(shutdownEvent),
+      controlRequestEvent_(controlRequestEvent),
       producerDoneEvent_(producerDoneEvent) {}
 
 LowLevelHooks::~LowLevelHooks() {
@@ -145,7 +147,10 @@ bool LowLevelHooks::Start(std::wstring& errorMessage) {
         errorMessage = L"The low-level hooks have already been started.";
         return false;
     }
-    if (selfTag_ == 0 || shutdownEvent_ == nullptr || producerDoneEvent_ == nullptr) {
+    if (selfTag_ == 0
+        || shutdownEvent_ == nullptr
+        || controlRequestEvent_ == nullptr
+        || producerDoneEvent_ == nullptr) {
         errorMessage = L"The low-level hook dependencies are invalid.";
         return false;
     }
@@ -357,8 +362,12 @@ void LowLevelHooks::ThreadMain() noexcept {
 
     while (!shuttingDown || sink_.HasCapturedInputs()) {
         if (!shuttingDown) {
-            HANDLE handles[2] = {shutdownEvent_, nullptr};
-            DWORD handleCount = 1;
+            HANDLE handles[3] = {
+                shutdownEvent_,
+                controlRequestEvent_,
+                nullptr};
+            DWORD handleCount = 2;
+            DWORD targetHandleIndex = MAXDWORD;
             {
                 std::unique_lock<std::mutex> targetLock;
                 if (targetContextMutex_ != nullptr) {
@@ -366,6 +375,7 @@ void LowLevelHooks::ThreadMain() noexcept {
                         *targetContextMutex_);
                 }
                 if (targetContext_ != nullptr && targetContext_->IsValid()) {
+                    targetHandleIndex = handleCount;
                     handles[handleCount++] = targetContext_->TargetHandle();
                 }
             }
@@ -374,7 +384,8 @@ void LowLevelHooks::ThreadMain() noexcept {
             if (waitResult == WAIT_OBJECT_0) {
                 shuttingDown = true;
                 shutdownGrace.Begin(GetTickCount64());
-            } else if (handleCount == 2 && waitResult == WAIT_OBJECT_0 + 1) {
+            } else if (targetHandleIndex != MAXDWORD
+                && waitResult == WAIT_OBJECT_0 + targetHandleIndex) {
                 sink_.TargetLost();
             } else if (waitResult == WAIT_FAILED) {
                 stopRequest_.Invoke();

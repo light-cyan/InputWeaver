@@ -30,6 +30,7 @@ The user-visible invariant is: once an executor reports that its program session
 - `PAUSE` rules and ordinary mappings remain behind target eligibility and routing checks.
 - Host stop, console stop, debug protocol stop, physical exit, hook failure, output failure, and fatal runtime failure converge on the session's idempotent stop path.
 - Debug transport starts before runtime publication can occur and stops only after runtime publication has ended.
+- Debug callbacks access only session events and atomic control state that exist before the server starts and remain valid until after the server stops.
 
 ## Lifecycle
 
@@ -42,7 +43,7 @@ The executor reads and structurally validates the `.weavec` artifact, resolves t
 `WindowsProgramRuntimeSession::Start` performs the following ordered work without target discovery:
 
 1. Create the session shutdown, target-loss, producer-completion, and output synchronization events.
-2. In debug mode, construct and start `WindowsDebugServer` with the compiled program, a callback that wakes the session input thread, and a callback that requests session stop.
+2. In debug mode, construct and start `WindowsDebugServer` with the compiled program, a callback that signals the stable input-control event, and a callback that signals the stable session stop control.
 3. Create the control catalog, stable target binding view, route port, process launcher, runtime clock, output port, `ProgramRuntime`, input adapter, and low-level hook owner.
 4. Activate `ProgramRuntime` with the effective target kind.
 5. Initialize executable target eligibility from live binding validity; an initially unbound executable target starts ineligible, while a global target starts eligible.
@@ -73,7 +74,7 @@ The hook thread observes the bound process handle. When the handle signals, it s
 
 ### Session Stop
 
-`RequestStop` is idempotent and safe from the executor coordinator, debug server, hook thread, and fatal runtime callback. The first request marks shutdown, signals the session shutdown and output wake events, wakes the hook thread, and requests `ProgramRuntime` shutdown. Later requests only preserve the signaled state.
+`RequestStop` is idempotent and safe from the executor coordinator, hook thread, and fatal runtime callback. The first request marks shutdown, signals the session shutdown, input-control, and output wake events, and requests `ProgramRuntime` shutdown. The debug server callback performs only the stable signaling portion; the coordinator and normal shutdown path complete runtime shutdown. Later requests only preserve the signaled state.
 
 `Wait` completes shutdown in this order:
 
@@ -143,9 +144,14 @@ The debug control path is `WindowsDebugClient -> named pipe -> WindowsDebugServe
 
 - Own the optional debug server and stable executable-target storage.
 - Start the debug server before constructing and activating runtime components.
-- Route debug wake and stop callbacks directly to the session implementation.
+- Route debug wake and stop callbacks only to stable session events and atomic control state.
 - Supply the stable target view to the route port and hooks only in executable mode.
 - Stop the debug server after hook and runtime publication has ended.
+
+### `src/platform/windows/runtime/low_level_hooks.hpp` and `low_level_hooks.cpp`
+
+- Accept the stable session input-control event as a wait source.
+- Process pending debug control requests when that event signals without exposing the hook owner to the debug callback thread.
 
 ### `src/platform/windows/runtime/runtime_route_adapter.cpp`
 
@@ -173,7 +179,9 @@ The debug server is constructed before `ProgramRuntime` because it is the runtim
 
 Target mutation remains protected by the existing target mutex. Target loss and input callbacks execute on the hook thread, while attachment occurs on the coordinator thread and output validation occurs on the output thread. The stable target storage prevents pointer replacement races; only its contents change under the mutex.
 
-Debug commands received before hook readiness remain represented by the existing atomic pending request. The wake callback may run before the hook owner exists and may safely do nothing because hook startup explicitly processes pending control requests before reporting readiness.
+Debug commands received before hook readiness remain represented by the existing atomic pending request. The wake callback signals a stable auto-reset event created before the debug server; hook startup explicitly processes pending control requests before reporting readiness, and the normal hook wait consumes later signals. The callback never reads the `runtime` or `lowLevelHooks` owner pointers.
+
+Shutdown waits for the hook, runtime task, and output producers to finish before stopping and joining the debug server. Callback-visible events and atomics remain alive until that join completes, after which component pointers and session events can be destroyed without a callback race.
 
 Session stop remains monotonic through the existing atomic shutdown flag and manual-reset shutdown event. Target discovery observes both the session stopped event and the process-level stop event, so no target state can strand shutdown.
 

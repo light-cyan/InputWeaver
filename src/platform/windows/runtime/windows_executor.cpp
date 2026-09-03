@@ -1,7 +1,6 @@
 #include "windows_executor.hpp"
 
 #include "compiled_target_resolver.hpp"
-#include "platform/windows/debug/debug_server.hpp"
 #include "platform/windows/diagnostics/diagnostic_log.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/process_locator.hpp"
@@ -13,7 +12,6 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <utility>
 
@@ -24,42 +22,6 @@ namespace {
 using inputweaver::win32::WindowsExecutorOptions;
 
 HANDLE gConsoleStopEvent = nullptr;
-
-class RuntimeDebugBinding final {
-public:
-    void Attach(inputweaver::WindowsProgramRuntimeSession& runtime)
-    {
-        const std::lock_guard lock(mutex_);
-        runtime_ = &runtime;
-    }
-
-    void Detach(inputweaver::WindowsProgramRuntimeSession& runtime)
-    {
-        const std::lock_guard lock(mutex_);
-        if (runtime_ == &runtime) {
-            runtime_ = nullptr;
-        }
-    }
-
-    static void WakeRuntime(void* context) noexcept
-    {
-        if (context != nullptr) {
-            static_cast<RuntimeDebugBinding*>(context)->WakeAttachedRuntime();
-        }
-    }
-
-private:
-    void WakeAttachedRuntime() noexcept
-    {
-        const std::lock_guard lock(mutex_);
-        if (runtime_ != nullptr) {
-            runtime_->WakeDebugInputThread();
-        }
-    }
-
-    std::mutex mutex_;
-    inputweaver::WindowsProgramRuntimeSession* runtime_{};
-};
 
 BOOL WINAPI ConsoleControlHandler(DWORD controlType) noexcept {
     switch (controlType) {
@@ -142,13 +104,6 @@ void PrintFinalDiagnosticMetrics(const inputweaver::DiagnosticLog& diagnosticLog
 bool StopWasRequested() noexcept {
     return gConsoleStopEvent != nullptr &&
            WaitForSingleObject(gConsoleStopEvent, 0) == WAIT_OBJECT_0;
-}
-
-void RequestExecutorStopFromDebug(void*) noexcept
-{
-    if (gConsoleStopEvent != nullptr) {
-        SetEvent(gConsoleStopEvent);
-    }
 }
 
 bool WaitForRetry(HANDLE runtimeStoppedEvent = nullptr) noexcept {
@@ -256,56 +211,57 @@ void PrintArtifactReadError(
     }
 }
 
-int RunCompiledInstance(
+int RunCompiledProgram(
     const WindowsExecutorOptions& options,
     inputweaver::WindowsSelfTag selfTag,
     inputweaver::DiagnosticLog& diagnosticLog,
     const std::shared_ptr<const inputweaver::CompiledProgram>& program,
-    inputweaver::TargetSelectorKind effectiveTargetKind,
-    const std::wstring& targetSelector,
-    inputweaver::TargetProcessContext* targetContext,
-    inputweaver::win32::WindowsDebugServer* debugServer,
-    RuntimeDebugBinding& debugBinding) {
+    inputweaver::TargetSelectorKind targetKind,
+    const std::wstring& targetSelector) {
     inputweaver::WindowsProgramRuntimeSession runtime(
         {
             options.traceInput,
             options.dryRun,
             options.allowExec,
             selfTag,
-            effectiveTargetKind,
+            targetKind,
             options.excludedProcessSelector,
-            debugServer},
-        targetContext,
+            options.debugSessionToken},
         diagnosticLog);
-    debugBinding.Attach(runtime);
     std::wstring errorMessage;
     if (!runtime.Start(program, errorMessage)) {
-        debugBinding.Detach(runtime);
         std::wcerr << L"Error: " << errorMessage << L"\n";
         return 6;
     }
 
-    std::wcout << L"Compiled program is active"
-               << (targetContext == nullptr
-                    ? L" globally.\n"
-                    : L" only while the selected process is foreground.\n")
+    const bool executableTarget =
+        targetKind == inputweaver::TargetSelectorKind::Executable;
+    std::wcout << L"Loaded " << options.programPath.wstring() << L"\n"
+               << L"Compiled program is active"
+               << (executableTarget
+                    ? L" only while the selected process is foreground.\n"
+                    : L" globally.\n")
                << (options.dryRun
                     ? L"Dry-run is active; physical input is forwarded and output effects are simulated.\n"
                     : L"")
                << L"Use the configured physical exit event to stop.\n" << std::flush;
+
+    bool targetBound = !executableTarget;
+    bool targetWasLost = false;
     int sessionResult = 0;
     for (;;) {
-        DWORD waitError = ERROR_SUCCESS;
-        const DWORD waitResult = WaitForProgramRuntime(runtime, waitError);
-        if (waitResult == WAIT_OBJECT_0 + 1U) {
-            std::wcout << L"Target exited; waiting for it to restart.\n"
-                       << std::flush;
-            inputweaver::TargetProcessContext replacement;
+        if (!targetBound) {
+            if (targetWasLost) {
+                std::wcout << L"Target exited; waiting for it to restart.\n"
+                           << std::flush;
+                targetWasLost = false;
+            }
+            inputweaver::TargetProcessContext candidate;
             inputweaver::win32::LocatedProcess selected{};
             const TargetWaitResult targetResult = WaitForTarget(
                 targetSelector,
                 runtime.StoppedEvent(),
-                replacement,
+                candidate,
                 selected);
             if (targetResult == TargetWaitResult::Error) {
                 sessionResult = 3;
@@ -318,17 +274,25 @@ int RunCompiledInstance(
                 }
                 break;
             }
-            if (!runtime.AttachTarget(std::move(replacement))) {
+            if (!runtime.AttachTarget(std::move(candidate))) {
                 if (WaitForSingleObject(runtime.StoppedEvent(), 0U)
                     != WAIT_OBJECT_0) {
-                    std::wcerr << L"Error: cannot attach the replacement target.\n";
+                    std::wcerr << L"Error: cannot attach the target.\n";
                     sessionResult = 7;
                     runtime.RequestStop();
                 }
                 break;
             }
+            targetBound = true;
             std::wcout << L"Attached to PID " << selected.processId << L": "
                        << selected.imagePath << L"\n" << std::flush;
+        }
+
+        DWORD waitError = ERROR_SUCCESS;
+        const DWORD waitResult = WaitForProgramRuntime(runtime, waitError);
+        if (waitResult == WAIT_OBJECT_0 + 1U) {
+            targetBound = false;
+            targetWasLost = true;
             continue;
         }
         if (waitResult == WAIT_OBJECT_0 + 2U) {
@@ -342,7 +306,6 @@ int RunCompiledInstance(
         break;
     }
     runtime.Wait();
-    debugBinding.Detach(runtime);
     const inputweaver::WindowsProgramRuntimeSessionMetrics metrics = runtime.Metrics();
     PrintProgramMetrics(metrics, diagnosticLog);
     if (sessionResult != 0) {
@@ -353,57 +316,6 @@ int RunCompiledInstance(
             || metrics.injectionFailures != 0U
         ? 8
         : 0;
-}
-
-int RunCompiledProgram(
-    const WindowsExecutorOptions& options,
-    inputweaver::WindowsSelfTag selfTag,
-    inputweaver::DiagnosticLog& diagnosticLog,
-    const std::shared_ptr<const inputweaver::CompiledProgram>& program,
-    inputweaver::TargetSelectorKind targetKind,
-    const std::wstring& targetSelector,
-    inputweaver::win32::WindowsDebugServer* debugServer,
-    RuntimeDebugBinding& debugBinding) {
-    if (targetKind == inputweaver::TargetSelectorKind::Global) {
-        return RunCompiledInstance(
-            options,
-            selfTag,
-            diagnosticLog,
-            program,
-            targetKind,
-            targetSelector,
-            nullptr,
-            debugServer,
-            debugBinding);
-    }
-
-    inputweaver::TargetProcessContext targetContext;
-    inputweaver::win32::LocatedProcess selected{};
-    const TargetWaitResult targetResult = WaitForTarget(
-        targetSelector,
-        nullptr,
-        targetContext,
-        selected);
-    if (targetResult == TargetWaitResult::Error) {
-        return 3;
-    }
-    if (targetResult == TargetWaitResult::Stopped) {
-        return 0;
-    }
-
-    std::wcout << L"Loaded " << options.programPath.wstring() << L"\n"
-               << L"Attached to PID " << selected.processId << L": "
-               << selected.imagePath << L"\n" << std::flush;
-    return RunCompiledInstance(
-        options,
-        selfTag,
-        diagnosticLog,
-        program,
-        targetKind,
-        targetSelector,
-        &targetContext,
-        debugServer,
-        debugBinding);
 }
 
 }  // namespace
@@ -465,38 +377,13 @@ int inputweaver::win32::RunWindowsExecutor(const WindowsExecutorOptions& options
         return 5;
     }
 
-    const int result = [&]() {
-        RuntimeDebugBinding debugBinding;
-        std::unique_ptr<inputweaver::win32::WindowsDebugServer> debugServer;
-        if (!options.debugSessionToken.empty()) {
-            try {
-                debugServer =
-                    std::make_unique<inputweaver::win32::WindowsDebugServer>();
-            } catch (...) {
-                std::wcerr << L"Error: cannot allocate the input debug server.\n";
-                return 6;
-            }
-            if (!debugServer->Start(
-                    options.debugSessionToken,
-                    compiledProgram,
-                    {
-                        {&debugBinding, &RuntimeDebugBinding::WakeRuntime},
-                        {nullptr, &RequestExecutorStopFromDebug}},
-                    errorMessage)) {
-                std::wcerr << L"Error: " << errorMessage << L"\n";
-                return 6;
-            }
-        }
-        return RunCompiledProgram(
-            options,
-            GenerateSelfTag(),
-            diagnosticLog,
-            compiledProgram,
-            compiledTargetKind,
-            compiledTargetSelector,
-            debugServer.get(),
-            debugBinding);
-    }();
+    const int result = RunCompiledProgram(
+        options,
+        GenerateSelfTag(),
+        diagnosticLog,
+        compiledProgram,
+        compiledTargetKind,
+        compiledTargetSelector);
 
     diagnosticLog.Stop();
     PrintFinalDiagnosticMetrics(diagnosticLog);

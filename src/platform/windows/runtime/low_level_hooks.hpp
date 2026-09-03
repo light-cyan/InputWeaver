@@ -94,6 +94,7 @@ public:
         StopRequest stopRequest,
         std::atomic<bool>& shutdownRequested,
         HANDLE shutdownEvent,
+        HANDLE controlRequestEvent,
         HANDLE producerDoneEvent) noexcept;
     ~LowLevelHooks();
 
@@ -133,6 +134,7 @@ private:
     StopRequest stopRequest_;
     std::atomic<bool>& shutdownRequested_;
     HANDLE shutdownEvent_;
+    HANDLE controlRequestEvent_;
     HANDLE producerDoneEvent_;
 
     HANDLE readyEvent_{nullptr};

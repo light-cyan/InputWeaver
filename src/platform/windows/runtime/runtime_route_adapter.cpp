@@ -18,13 +18,8 @@ bool WindowsRuntimeRoutePort::ValidateTarget(
     if (kind == TargetSelectorKind::Global) {
         return targetContext_ == nullptr;
     }
-    std::unique_lock<std::mutex> targetLock;
-    if (targetContextMutex_ != nullptr) {
-        targetLock = std::unique_lock<std::mutex>(*targetContextMutex_);
-    }
     if (kind == TargetSelectorKind::Executable) {
-        return targetContext_ != nullptr
-            && targetContext_->IsValid();
+        return targetContext_ != nullptr;
     }
     return false;
 }

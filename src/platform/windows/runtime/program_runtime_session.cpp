@@ -112,15 +112,16 @@ void PopulateInjectionIdentity(
 struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     Impl(
         WindowsProgramRuntimeSessionOptions sessionOptions,
-        TargetProcessContext* sessionTargetContext,
         DiagnosticLog& sessionDiagnosticLog)
         : options(std::move(sessionOptions)),
-          targetContext(sessionTargetContext),
+          targetContext(
+              options.effectiveTargetKind == TargetSelectorKind::Executable
+                  ? &ownedTargetContext
+                  : nullptr),
           diagnosticLog(sessionDiagnosticLog),
           processExclusion(options.excludedProcessSelector),
           injector(options.selfTag, &::SendInput, options.dryRun),
-          injectionCircuitBreaker(3U),
-          debugServer(options.debugServer)
+          injectionCircuitBreaker(3U)
     {
         LARGE_INTEGER frequency{};
         if (QueryPerformanceFrequency(&frequency) != FALSE
@@ -142,6 +143,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         processLauncher.reset();
         routePort.reset();
         controlCatalog.reset();
+        debugServer.reset();
         CloseEvents();
     }
 
@@ -161,7 +163,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             errorMessage = L"The compiled program is missing.";
             return false;
         }
-        if (!CreateEvents(errorMessage) || !CreateComponents(errorMessage)) {
+        if (!CreateEvents(errorMessage)
+            || !StartDebugServer(program, errorMessage)
+            || !CreateComponents(errorMessage)) {
             return false;
         }
 
@@ -207,8 +211,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         if (outputWakeEvent != nullptr) {
             SetEvent(outputWakeEvent);
         }
-        if (lowLevelHooks != nullptr) {
-            lowLevelHooks->Wake();
+        if (controlRequestEvent != nullptr) {
+            SetEvent(controlRequestEvent);
         }
     }
 
@@ -252,9 +256,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 runtime->Deactivate();
                 DrainRuntimeDiagnostics();
             }
-            if (debugServer != nullptr) {
-                debugServer->EndCapture();
-            }
             if (outputProducerDoneEvent != nullptr) {
                 SetEvent(outputProducerDoneEvent);
             }
@@ -263,6 +264,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             }
             if (outputThread.joinable()) {
                 outputThread.join();
+            }
+            if (debugServer != nullptr) {
+                debugServer->EndCapture();
+                debugServer->Stop();
             }
             CaptureSessionMetrics();
             waitCompleted = true;
@@ -461,6 +466,24 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         }
     }
 
+    static void WakeDebugInputThreadThunk(void* context) noexcept
+    {
+        if (context == nullptr) {
+            return;
+        }
+        const HANDLE event = static_cast<Impl*>(context)->controlRequestEvent;
+        if (event != nullptr) {
+            SetEvent(event);
+        }
+    }
+
+    static void SignalStopThunk(void* context) noexcept
+    {
+        if (context != nullptr) {
+            static_cast<Impl*>(context)->SignalStopOnly();
+        }
+    }
+
     static void FatalStopThunk(void* context) noexcept
     {
         if (context == nullptr) {
@@ -469,13 +492,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         Impl& session = *static_cast<Impl*>(context);
         session.fatalShutdownObserved.store(true, std::memory_order_release);
         session.SignalStopOnly();
-    }
-
-    void WakeDebugInputThread() noexcept
-    {
-        if (lowLevelHooks != nullptr) {
-            lowLevelHooks->Wake();
-        }
     }
 
     [[nodiscard]] bool AttachTarget(
@@ -627,6 +643,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         shutdownEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         targetLostEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         hookProducerDoneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        controlRequestEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         outputWakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         outputReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         outputProducerDoneEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -634,6 +651,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         if (shutdownEvent != nullptr
             && targetLostEvent != nullptr
             && hookProducerDoneEvent != nullptr
+            && controlRequestEvent != nullptr
             && outputWakeEvent != nullptr
             && outputReadyEvent != nullptr
             && outputProducerDoneEvent != nullptr
@@ -653,6 +671,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             &shutdownEvent,
             &targetLostEvent,
             &hookProducerDoneEvent,
+            &controlRequestEvent,
             &outputWakeEvent,
             &outputReadyEvent,
             &outputProducerDoneEvent,
@@ -663,6 +682,32 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *handle = nullptr;
             }
         }
+    }
+
+    bool StartDebugServer(
+        const std::shared_ptr<const CompiledProgram>& program,
+        std::wstring& errorMessage)
+    {
+        if (options.debugSessionToken.empty()) {
+            return true;
+        }
+        try {
+            debugServer = std::make_unique<win32::WindowsDebugServer>();
+        } catch (...) {
+            errorMessage = L"Cannot allocate the input debug server.";
+            return false;
+        }
+        if (!debugServer->Start(
+                options.debugSessionToken,
+                program,
+                {
+                    {this, &Impl::WakeDebugInputThreadThunk},
+                    {this, &Impl::SignalStopThunk}},
+                errorMessage)) {
+            debugServer.reset();
+            return false;
+        }
+        return true;
     }
 
     bool CreateComponents(std::wstring& errorMessage)
@@ -691,7 +736,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 *routePort,
                 *processLauncher,
                 *clock,
-                debugServer,
+                debugServer.get(),
                 support::CallbackRef<void() noexcept>{this, &Impl::FatalStopThunk});
             inputAdapter = std::make_unique<win32::WindowsRuntimeInputAdapter>(
                 *controlCatalog);
@@ -705,6 +750,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 stopRequest,
                 shutdownRequested,
                 shutdownEvent,
+                controlRequestEvent,
                 hookProducerDoneEvent);
         } catch (const std::exception&) {
             errorMessage = L"Cannot allocate the compiled-program runtime components.";
@@ -921,12 +967,14 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     }
 
     WindowsProgramRuntimeSessionOptions options;
+    TargetProcessContext ownedTargetContext;
     TargetProcessContext* targetContext;
     DiagnosticLog& diagnosticLog;
     ForegroundProcessExclusion processExclusion;
     HANDLE shutdownEvent{};
     HANDLE targetLostEvent{};
     HANDLE hookProducerDoneEvent{};
+    HANDLE controlRequestEvent{};
     HANDLE outputWakeEvent{};
     HANDLE outputReadyEvent{};
     HANDLE outputProducerDoneEvent{};
@@ -961,7 +1009,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     std::unique_ptr<SteadyRuntimeClock> clock;
     std::unique_ptr<win32::WindowsRuntimeOutputPort> outputPort;
     std::unique_ptr<ProgramRuntime> runtime;
-    win32::WindowsDebugServer* debugServer;
+    std::unique_ptr<win32::WindowsDebugServer> debugServer;
     std::unique_ptr<win32::WindowsRuntimeInputAdapter> inputAdapter;
     std::unique_ptr<LowLevelHooks> lowLevelHooks;
     std::shared_ptr<const CompiledProgram> activeProgram;
@@ -969,11 +1017,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
 WindowsProgramRuntimeSession::WindowsProgramRuntimeSession(
     WindowsProgramRuntimeSessionOptions options,
-    TargetProcessContext* targetContext,
     DiagnosticLog& diagnosticLog)
     : impl_(std::make_unique<Impl>(
           std::move(options),
-          targetContext,
           diagnosticLog))
 {
 }
@@ -995,11 +1041,6 @@ void WindowsProgramRuntimeSession::RequestStop() noexcept
 void WindowsProgramRuntimeSession::Wait() noexcept
 {
     impl_->Wait();
-}
-
-void WindowsProgramRuntimeSession::WakeDebugInputThread() noexcept
-{
-    impl_->WakeDebugInputThread();
 }
 
 bool WindowsProgramRuntimeSession::AttachTarget(

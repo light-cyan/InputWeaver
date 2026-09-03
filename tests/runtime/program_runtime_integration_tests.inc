@@ -267,8 +267,39 @@ void TestActivationAndTransientCapacity()
         exactMappingOperationHarness.runtime.Activate(mapping).activated,
         "mapping-operation requirement is accepted at the exact capacity");
 
+    RuntimeHarness unboundTarget;
+    unboundTarget.route.targetValid = false;
+    const inputweaver::RuntimeActivationResult unboundActivation =
+        unboundTarget.runtime.Activate(
+            tap,
+            inputweaver::TargetSelectorKind::Executable);
+    Check(
+        unboundActivation.activated
+            && unboundTarget.route.validatedKind
+                == inputweaver::TargetSelectorKind::Executable
+            && !unboundTarget.runtime.TargetEligible(),
+        "supported unbound executable target activates ineligible");
+    Check(
+        unboundTarget.runtime.HandleInput(KeyboardEvent(
+            TriggerControl(*tap),
+            inputweaver::Transition::Down))
+            == inputweaver::InputDecision::Forward,
+        "unbound executable target forwards ordinary input");
+    unboundTarget.route.targetValid = true;
+    unboundTarget.runtime.SetTargetEligible(true);
+    (void)unboundTarget.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*tap),
+        inputweaver::Transition::Up));
+    Check(
+        unboundTarget.runtime.TargetEligible()
+            && unboundTarget.runtime.HandleInput(KeyboardEvent(
+                TriggerControl(*tap),
+                inputweaver::Transition::Down))
+                == inputweaver::InputDecision::Suppress,
+        "bound executable target resumes the active runtime");
+
     RuntimeHarness invalidTarget;
-    invalidTarget.route.targetValid = false;
+    invalidTarget.route.targetSupported = false;
     Check(
         invalidTarget.runtime.Activate(tap).error.code
             == inputweaver::RuntimeActivationErrorCode::InvalidTarget,

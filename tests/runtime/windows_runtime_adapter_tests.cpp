@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -769,6 +770,27 @@ void TestCompiledTargetResolution()
     }
 }
 
+void TestUnboundExecutableRoute()
+{
+    using namespace inputweaver;
+    TargetProcessContext target;
+    std::mutex targetMutex;
+    win32::WindowsRuntimeRoutePort route(&target, nullptr, &targetMutex);
+    RuntimeInputEvent input{};
+    ActivatedControl control{};
+    Check(
+        route.ValidateTarget(TargetSelectorKind::Executable)
+            && !route.TargetValid(TargetSelectorKind::Executable)
+            && !route.CanDispatch(TargetSelectorKind::Executable, input)
+            && !route.CanInject(TargetSelectorKind::Executable, control),
+        "stable unbound executable route validates without becoming live");
+
+    win32::WindowsRuntimeRoutePort missingRoute(nullptr);
+    Check(
+        !missingRoute.ValidateTarget(TargetSelectorKind::Executable),
+        "executable route rejects a missing binding view");
+}
+
 void TestRuntimeAdaptersAndExit()
 {
     using namespace inputweaver;
@@ -1025,6 +1047,7 @@ int main(int argc, char** argv)
     TestKeyboardInitialStateCapabilities();
     TestModifierStateSeeding();
     TestCompiledTargetResolution();
+    TestUnboundExecutableRoute();
     TestRuntimeAdaptersAndExit();
     TestExecutableResolutionAndCreateContract();
     TestChildWorkingDirectoryAndImmediateReturn();

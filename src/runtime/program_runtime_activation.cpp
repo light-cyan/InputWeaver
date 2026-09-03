@@ -255,6 +255,9 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
     if (!routePort.ValidateTarget(candidate->targetKind)) {
         return {false, {RuntimeActivationErrorCode::InvalidTarget}};
     }
+    candidate->targetEligible.store(
+        routePort.TargetValid(candidate->targetKind),
+        std::memory_order_release);
 
     controlPort.BeginActivation();
     for (const ControlRequirement& requirement
