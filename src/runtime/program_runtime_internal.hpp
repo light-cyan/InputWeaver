@@ -400,17 +400,17 @@ struct ProgramRuntime::Impl final {
               pauseWrite(state.pauseMutex, std::defer_lock),
               variables(state.variableMutex, std::defer_lock)
         {
-            if ((pauseMode == PauseLockMode::Read && !pauseRead.try_lock())
-                || (pauseMode == PauseLockMode::Write && !pauseWrite.try_lock())) {
-                return;
+            if (pauseMode == PauseLockMode::Read) {
+                pauseRead.lock();
+            } else if (pauseMode == PauseLockMode::Write) {
+                pauseWrite.lock();
             }
-            locked = variables.try_lock();
+            variables.lock();
         }
 
         std::shared_lock<std::shared_mutex> pauseRead;
         std::unique_lock<std::shared_mutex> pauseWrite;
         std::shared_lock<std::shared_mutex> variables;
-        bool locked{};
     };
 
     struct DispatchState final {
@@ -505,7 +505,7 @@ struct ProgramRuntime::Impl final {
         std::uint64_t nextTimedOrder{1U};
         std::uint64_t nextDebugExecutionMarker{1U};
         std::atomic<std::uint64_t> positiveSuspensions{0U};
-        std::atomic_flag pumpLock = ATOMIC_FLAG_INIT;
+        std::mutex pumpMutex;
     };
 
     struct OutputState final {

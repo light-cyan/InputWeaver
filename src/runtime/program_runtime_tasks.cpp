@@ -815,10 +815,10 @@ bool ProgramRuntime::Impl::RunTaskSlice(
 RuntimePumpResult ProgramRuntime::Impl::Pump(std::size_t maximumSlices) noexcept
 {
     State* const state = active.get();
-    if (state == nullptr
-        || state->scheduler.pumpLock.test_and_set(std::memory_order_acquire)) {
+    if (state == nullptr) {
         return {};
     }
+    const std::lock_guard pumpLock(state->scheduler.pumpMutex);
 
     CleanupStale(*state);
     DrainWork(*state);
@@ -849,7 +849,6 @@ RuntimePumpResult ProgramRuntime::Impl::Pump(std::size_t maximumSlices) noexcept
         ready = ready || status == TaskStatus::Ready;
         timed = timed || status == TaskStatus::Timed;
     }
-    state->scheduler.pumpLock.clear(std::memory_order_release);
     return {slices, ready || !state->dispatch.workQueue.Empty(), timed};
 }
 

@@ -2,7 +2,6 @@
 // Supported input: non-negative integers, +, -, *, /, and parentheses.
 // Results are rounded to at most six decimal places.
 
-TARGET = "notepad.exe";
 TAP_DURATION = 10ms;
 
 // Token codes: digits 0..9, + 10, - 11, * 12, / 13, ( 14, ) 15.

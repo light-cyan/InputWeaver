@@ -557,24 +557,19 @@ void TestConcurrentStateLocks()
     });
     const std::uint32_t trigger = TriggerControl(*program);
     constexpr std::size_t taskCount = 128U;
-    bool decisionsValid = true;
-    std::size_t acceptedTasks = 0U;
+    bool allInputsAccepted = true;
     for (std::size_t index = 0U; index < taskCount; ++index) {
         const inputweaver::InputDecision decision = harness.runtime.HandleInput(
             KeyboardEvent(trigger, inputweaver::Transition::Down));
-        decisionsValid = decisionsValid
-            && (decision == inputweaver::InputDecision::Suppress
-                || decision == inputweaver::InputDecision::Forward);
-        if (decision == inputweaver::InputDecision::Suppress) {
-            ++acceptedTasks;
-        }
+        allInputsAccepted = allInputsAccepted
+            && decision == inputweaver::InputDecision::Suppress;
         (void)harness.runtime.HandleInput(KeyboardEvent(
             trigger,
             inputweaver::Transition::Up));
     }
     for (std::size_t attempt = 0U;
          attempt < 200U
-            && harness.runtime.Metrics().completedTasks < acceptedTasks;
+            && harness.runtime.Metrics().completedTasks < taskCount;
          ++attempt) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
@@ -583,14 +578,13 @@ void TestConcurrentStateLocks()
     reader.join();
     bool finalValue = true;
     Check(
-        decisionsValid
-            && acceptedTasks != 0U
-            && harness.runtime.Metrics().completedTasks == acceptedTasks
+        allInputsAccepted
+            && harness.runtime.Metrics().completedTasks == taskCount
             && harness.runtime.ReadUserState(0U, finalValue)
-            && finalValue == ((acceptedTasks % 2U) != 0U)
+            && !finalValue
             && readerPasses.load(std::memory_order_relaxed) != 0U
             && !harness.runtime.FatalShutdownRequested(),
-        "nonblocking hook locks fail open while accepted toggles remain deterministic");
+        "blocking input snapshots retain every concurrent state event");
 }
 
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeEventSnapshotStorage(
@@ -1322,4 +1316,3 @@ void TestPredicateFaultAndDiagnostics()
     }
     Check(foundPredicateFault, "predicate fault is visible through bounded diagnostics");
 }
-

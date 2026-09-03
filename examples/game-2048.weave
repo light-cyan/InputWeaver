@@ -1,7 +1,6 @@
 // Open a plain-text editor in Visual Studio Code with word wrap disabled.
 // Type 2048() and press Enter. Arrow keys move tiles; R starts a new board.
 
-TARGET = "Code.exe";
 TAP_DURATION = 0ms;
 ACTION_GAP = 1ms;
 RAND_SEED = 2048;
@@ -39,7 +38,7 @@ state gameOver = off;
 state won = off;
 
 // Command parser: 2048()
-Digit2:down when gameActive == off and commandStage == 0 and LShift == idle and RShift == idle ~> set(commandStage, 1);
+Digit2:down when gameActive == off and LShift == idle and RShift == idle ~> set(commandStage, 1);
 Digit0:down when gameActive == off and commandStage == 1 and LShift == idle and RShift == idle ~> set(commandStage, 2);
 Digit4:down when gameActive == off and commandStage == 2 and LShift == idle and RShift == idle ~> set(commandStage, 3);
 Digit8:down when gameActive == off and commandStage == 3 and LShift == idle and RShift == idle ~> set(commandStage, 4);
@@ -62,32 +61,52 @@ Enter:down when gameActive == off and commandStage == 6 =>
     set(cursorX, 0)
     set(cursorY, 0)
 
-    press(LShift) | repeat 18 do tap(Digit3) end | release(LShift)
-    tap(Enter)
-    set(cursorX, 0)
-    set(cursorY, 1)
-
     set(row, 0)
     while row < 4 do
-        press(LShift) | tap(Digit3) | release(LShift)
-        repeat 16 do tap(Windows.VirtualKey(0xC0)) end
-        press(LShift) | tap(Digit3) | release(LShift)
+        set(column, 0)
+        while column < 4 do
+            press(LShift) | tap(Windows.VirtualKey(0xBB)) | release(LShift)
+            repeat 7 do tap(Windows.VirtualKey(0xBD)) end
+            set(column, column + 1)
+        end
+        press(LShift) | tap(Windows.VirtualKey(0xBB)) | release(LShift)
         tap(Enter)
         set(cursorX, 0)
         set(cursorY, cursorY + 1)
+
+        set(position, 0)
+        while position < 3 do
+            set(column, 0)
+            while column < 4 do
+                press(LShift) | tap(Windows.VirtualKey(0xDC)) | release(LShift)
+                repeat 7 do tap(Space) end
+                set(column, column + 1)
+            end
+            press(LShift) | tap(Windows.VirtualKey(0xDC)) | release(LShift)
+            tap(Enter)
+            set(cursorX, 0)
+            set(cursorY, cursorY + 1)
+            set(position, position + 1)
+        end
         set(row, row + 1)
     end
 
-    press(LShift) | repeat 18 do tap(Digit3) end | release(LShift)
-    set(cursorX, 18)
-    set(cursorY, 5)
+    set(column, 0)
+    while column < 4 do
+        press(LShift) | tap(Windows.VirtualKey(0xBB)) | release(LShift)
+        repeat 7 do tap(Windows.VirtualKey(0xBD)) end
+        set(column, column + 1)
+    end
+    press(LShift) | tap(Windows.VirtualKey(0xBB)) | release(LShift)
+    set(cursorX, 33)
+    set(cursorY, 16)
 
     while gameActive == on do
         if renderNeeded == on then
             set(renderIndex, 0)
             while renderIndex < 16 do
-                set(targetY, (renderIndex - renderIndex % 4) / 4 + 1)
-                set(targetX, renderIndex % 4 * 4 + 1)
+                set(targetY, (renderIndex - renderIndex % 4) / 4 * 4 + 2)
+                set(targetX, renderIndex % 4 * 8 + 1)
                 tap(Home)
                 set(cursorX, 0)
                 if cursorY < targetY then
@@ -98,51 +117,64 @@ Enter:down when gameActive == off and commandStage == 6 =>
                 set(cursorY, targetY)
                 repeat targetX do tap(ArrowRight) end
                 set(cursorX, targetX)
-                repeat 4 do tap(Delete) end
+                repeat 7 do tap(Delete) end
 
                 if board[renderIndex] == 0 then
-                    repeat 4 do tap(Windows.VirtualKey(0xC0)) end
+                    repeat 7 do tap(Space) end
                 else
                     if board[renderIndex] == 2 then
-                        repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                        repeat 3 do tap(Space) end
                         tap(Digit2)
+                        repeat 3 do tap(Space) end
                     else
                         if board[renderIndex] == 4 then
-                            repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                            repeat 3 do tap(Space) end
                             tap(Digit4)
+                            repeat 3 do tap(Space) end
                         else
                             if board[renderIndex] == 8 then
-                                repeat 3 do tap(Windows.VirtualKey(0xC0)) end
+                                repeat 3 do tap(Space) end
                                 tap(Digit8)
+                                repeat 3 do tap(Space) end
                             else
                                 if board[renderIndex] == 16 then
-                                    repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                    repeat 2 do tap(Space) end
                                     tap(Digit1) tap(Digit6)
+                                    repeat 3 do tap(Space) end
                                 else
                                     if board[renderIndex] == 32 then
-                                        repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                        repeat 2 do tap(Space) end
                                         tap(Digit3) tap(Digit2)
+                                        repeat 3 do tap(Space) end
                                     else
                                         if board[renderIndex] == 64 then
-                                            repeat 2 do tap(Windows.VirtualKey(0xC0)) end
+                                            repeat 2 do tap(Space) end
                                             tap(Digit6) tap(Digit4)
+                                            repeat 3 do tap(Space) end
                                         else
                                             if board[renderIndex] == 128 then
-                                                tap(Windows.VirtualKey(0xC0))
+                                                repeat 2 do tap(Space) end
                                                 tap(Digit1) tap(Digit2) tap(Digit8)
+                                                repeat 2 do tap(Space) end
                                             else
                                                 if board[renderIndex] == 256 then
-                                                    tap(Windows.VirtualKey(0xC0))
+                                                    repeat 2 do tap(Space) end
                                                     tap(Digit2) tap(Digit5) tap(Digit6)
+                                                    repeat 2 do tap(Space) end
                                                 else
                                                     if board[renderIndex] == 512 then
-                                                        tap(Windows.VirtualKey(0xC0))
+                                                        repeat 2 do tap(Space) end
                                                         tap(Digit5) tap(Digit1) tap(Digit2)
+                                                        repeat 2 do tap(Space) end
                                                     else
                                                         if board[renderIndex] == 1024 then
+                                                            tap(Space)
                                                             tap(Digit1) tap(Digit0) tap(Digit2) tap(Digit4)
+                                                            repeat 2 do tap(Space) end
                                                         else
+                                                            tap(Space)
                                                             tap(Digit2) tap(Digit0) tap(Digit4) tap(Digit8)
+                                                            repeat 2 do tap(Space) end
                                                         end
                                                     end
                                                 end
@@ -154,7 +186,7 @@ Enter:down when gameActive == off and commandStage == 6 =>
                         end
                     end
                 end
-                set(cursorX, targetX + 4)
+                set(cursorX, targetX + 7)
                 set(renderIndex, renderIndex + 1)
             end
             set(renderNeeded, off)
@@ -162,17 +194,17 @@ Enter:down when gameActive == off and commandStage == 6 =>
             if won == on or gameOver == on then
                 tap(Home)
                 set(cursorX, 0)
-                if cursorY < 5 then
-                    repeat 5 - cursorY do tap(ArrowDown) end
+                if cursorY < 16 then
+                    repeat 16 - cursorY do tap(ArrowDown) end
                 else
-                    repeat cursorY - 5 do tap(ArrowUp) end
+                    repeat cursorY - 16 do tap(ArrowUp) end
                 end
-                set(cursorY, 5)
+                set(cursorY, 16)
                 tap(End)
-                set(cursorX, 18)
+                set(cursorX, 33)
                 tap(Enter)
                 set(cursorX, 0)
-                set(cursorY, 6)
+                set(cursorY, 17)
                 press(LShift) |
                 if won == on then
                     tap(Y) tap(O) tap(U) tap(W) tap(I) tap(N)
@@ -182,7 +214,7 @@ Enter:down when gameActive == off and commandStage == 6 =>
                 | release(LShift)
                 tap(Enter)
                 set(cursorX, 0)
-                set(cursorY, 7)
+                set(cursorY, 18)
                 set(gameActive, off)
             end
         end
@@ -375,21 +407,8 @@ R:down when gameActive == on and LCtrl == idle and RCtrl == idle => set(pendingM
 R:again when gameActive == on =>;
 R:up when gameActive == on =>;
 
+// Enter or Backspace resets an incomplete command.
 Enter:down when gameActive == off ~> set(commandStage, 0);
 Enter:again when gameActive == off ~> set(commandStage, 0);
-Backspace:down when gameActive == off ~> set(commandStage, -1);
-Backspace:again when gameActive == off ~> set(commandStage, -1);
-Space:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Space:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-
-Digit0:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit2:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit4:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit8:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit9:down when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-
-Digit0:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit2:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit4:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit8:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
-Digit9:again when gameActive == off and commandStage >= 0 ~> set(commandStage, -1);
+Backspace:down when gameActive == off ~> set(commandStage, 0);
+Backspace:again when gameActive == off ~> set(commandStage, 0);

@@ -215,27 +215,16 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     void RequestStop() noexcept
     {
         SignalStopOnly();
-        std::unique_lock runtimeLock(runtimeCallMutex, std::try_to_lock);
-        if (runtimeLock.owns_lock()) {
-            NotifyRuntimeShutdownLocked();
+        const std::lock_guard runtimeLock(runtimeCallMutex);
+        if (runtime == nullptr || runtimeShutdownNotified) {
+            return;
         }
-    }
-
-    void NotifyRuntimeShutdownLocked() noexcept
-    {
-        bool expected = false;
-        if (runtime != nullptr
-            && runtimeShutdownNotified.compare_exchange_strong(
-                expected,
-                true,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            runtime->RequestShutdown();
-            currentGeneration.store(
-                runtime->Generation(),
-                std::memory_order_release);
-            DrainRuntimeDiagnostics();
-        }
+        runtimeShutdownNotified = true;
+        runtime->RequestShutdown();
+        currentGeneration.store(
+            runtime->Generation(),
+            std::memory_order_release);
+        DrainRuntimeDiagnostics();
     }
 
     void Wait() noexcept
@@ -251,7 +240,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
             if (runtime != nullptr) {
                 const std::lock_guard runtimeLock(runtimeCallMutex);
-                NotifyRuntimeShutdownLocked();
                 runtime->StopTaskThread();
                 for (unsigned int attempt = 0U; attempt < 3U; ++attempt) {
                     (void)runtime->Pump(1024U);
@@ -945,7 +933,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     HANDLE outputStoppedEvent{};
     std::atomic<bool> started{false};
     std::atomic<bool> shutdownRequested{false};
-    std::atomic<bool> runtimeShutdownNotified{false};
+    bool runtimeShutdownNotified{};
     std::mutex runtimeCallMutex;
     mutable std::mutex targetContextMutex;
     mutable std::mutex metricsMutex;

@@ -71,9 +71,6 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         !hasPauseRules
             ? PauseLockMode::None
             : pauseBucket == nullptr ? PauseLockMode::Read : PauseLockMode::Write);
-    if (!transaction.locked) {
-        return InputDecision::Forward;
-    }
     const auto accountDecision = [state](InputDecision decision) noexcept {
         if (decision == InputDecision::Suppress) {
             state->metrics.suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
