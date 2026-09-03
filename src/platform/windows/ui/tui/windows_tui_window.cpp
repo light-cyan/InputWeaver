@@ -333,10 +333,7 @@ LRESULT WindowsTuiWindow::HandleMessage(
     case WM_ERASEBKGND:
         return 1;
     case WM_SIZE:
-        if (wordParameter == SIZE_MINIMIZED) {
-            backgroundRequested_ = true;
-            running_ = false;
-        } else {
+        if (wordParameter != SIZE_MINIMIZED) {
             UpdateViewport();
         }
         return 0;
