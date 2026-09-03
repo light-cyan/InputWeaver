@@ -234,6 +234,42 @@ void TestActionVm()
         "action VM completes two cooperative repeat iterations");
 }
 
+void TestZeroDurationActionsStayInCurrentSlice()
+{
+    using namespace inputweaver;
+    CompiledProgramStorage storage = MakeActionFixtureStorage();
+    const SourceSpan source{0U, storage.source.byteLength};
+    storage.durationConstants[0U] = {0};
+    storage.settings.tapDuration = {0};
+    storage.settings.actionGap = {0};
+    storage.actionPrograms = {{{0U, 4U}, 0U, 1U, source}};
+    storage.actionCode = {
+        {ActionOpcode::Wait, 0U, 0U},
+        {ActionOpcode::Gap, 0U, 0U},
+        {ActionOpcode::Tap, 0U, 0U},
+        {ActionOpcode::End, 0U, 0U},
+    };
+    storage.debugInfo.actionInstructionSpans.assign(4U, source);
+
+    RuntimeHarness harness;
+    const auto program = Finalize(std::move(storage));
+    Check(harness.runtime.Activate(program).activated, "zero-duration fixture activates");
+    (void)harness.runtime.HandleInput(KeyboardEvent(
+        TriggerControl(*program),
+        Transition::Down));
+    const RuntimePumpResult result = harness.runtime.Pump(1U);
+    Check(
+        result.slices == 1U
+            && !result.readyWorkRemaining
+            && !result.timedWorkRemaining
+            && harness.runtime.ActiveTaskCount() == 0U
+            && harness.runtime.Metrics().completedTasks == 1U
+            && harness.output.requests.size() == 2U
+            && harness.output.requests[0U].transition == RuntimeOutputTransition::Down
+            && harness.output.requests[1U].transition == RuntimeOutputTransition::Up,
+        "zero-duration wait, gap, and tap complete in the current task slice");
+}
+
 void TestTaskProgressBudgets()
 {
     const inputweaver::RuntimeCapacities defaults{};

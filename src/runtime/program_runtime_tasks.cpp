@@ -120,11 +120,14 @@ std::uint32_t ProgramRuntime::Impl::SelectReadyTask(State& state) noexcept
     return selected;
 }
 
-void ProgramRuntime::Impl::ScheduleTimed(
+bool ProgramRuntime::Impl::ScheduleTimed(
     State& state,
     TaskInstance& task,
     DurationValue duration) noexcept
 {
+    if (duration.nanoseconds == 0) {
+        return false;
+    }
     const std::int64_t now = (std::max)(clock.NowNanoseconds(), std::int64_t{0});
     task.deadlineNanoseconds = AddDeadline(now, duration);
     if (task.deadlineNanoseconds > now) {
@@ -144,6 +147,7 @@ void ProgramRuntime::Impl::ScheduleTimed(
         task.position,
         task.deadlineNanoseconds,
         2U);
+    return true;
 }
 
 RuntimeEvaluationResult ProgramRuntime::Impl::EvaluateTaskExpression(
@@ -612,9 +616,24 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                     ClassifyTaskOperationFailure(state, task));
                 return true;
             }
+            if (!ScheduleTimed(state, task, state.program->Settings().tapDuration)) {
+                if (!ReleaseTaskControl(
+                        state,
+                        task,
+                        ControlRefId{instruction.operand0})) {
+                    FinishTask(
+                        state,
+                        slot,
+                        task.generation
+                            != state.generation.load(std::memory_order_acquire),
+                        ClassifyTaskOperationFailure(state, task));
+                    return true;
+                }
+                ++task.position;
+                break;
+            }
             task.resumeKind = TaskResumeKind::TapRelease;
             task.pendingTap = ControlRefId{instruction.operand0};
-            ScheduleTimed(state, task, state.program->Settings().tapDuration);
             return true;
         case ActionOpcode::Wait: {
             const ExpressionId expression{instruction.operand0};
@@ -633,13 +652,17 @@ bool ProgramRuntime::Impl::RunTaskSlice(
                 return true;
             }
             ++task.position;
-            ScheduleTimed(state, task, result.value.durationValue);
-            return true;
+            if (ScheduleTimed(state, task, result.value.durationValue)) {
+                return true;
+            }
+            break;
         }
         case ActionOpcode::Gap:
             ++task.position;
-            ScheduleTimed(state, task, state.program->Settings().actionGap);
-            return true;
+            if (ScheduleTimed(state, task, state.program->Settings().actionGap)) {
+                return true;
+            }
+            break;
         case ActionOpcode::Set:
         case ActionOpcode::Toggle:
         case ActionOpcode::SetArrayElement:

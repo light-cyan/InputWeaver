@@ -785,7 +785,7 @@ struct ProgramRuntime::Impl final {
     [[nodiscard]] RuntimeExecutionResult ClassifyTaskOperationFailure(
         const State& state,
         const TaskInstance& task) const noexcept;
-    void ScheduleTimed(
+    [[nodiscard]] bool ScheduleTimed(
         State& state,
         TaskInstance& task,
         DurationValue duration) noexcept;

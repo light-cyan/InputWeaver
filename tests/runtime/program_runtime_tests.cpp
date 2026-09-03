@@ -343,6 +343,7 @@ int main()
     TestArrayRuntime();
     TestArrowFlowAndOverlappingOwnership();
     TestActionVm();
+    TestZeroDurationActionsStayInCurrentSlice();
     TestTaskProgressBudgets();
     TestMaximumSynchronousDispatch();
     TestNestedRepeatScheduling();
