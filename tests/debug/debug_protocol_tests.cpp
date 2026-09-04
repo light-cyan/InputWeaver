@@ -80,7 +80,7 @@ void TestCaptureStarted()
 
     const auto decoded = RoundTrip(message);
     Check(
-        inputweaver::debug::kProtocolVersion == 4U
+        inputweaver::debug::kProtocolVersion == 5U
             && decoded.Succeeded()
             && decoded.message.captureStarted.captureUnixTimeMilliseconds
                 == 1'725'000'000'123LL
@@ -89,7 +89,7 @@ void TestCaptureStarted()
             && decoded.message.captureStarted.values[1].value.numberValue == 2.5
             && decoded.message.captureStarted.values[2].value.durationValue
                     .nanoseconds == 80'000'000,
-        "capture wall-clock anchor and values round trip in protocol version 4");
+        "capture wall-clock anchor and values round trip in protocol version 5");
 }
 
 void TestRuleMatched()
@@ -117,6 +117,16 @@ void TestRuleMatched()
 
 void TestTerminalAndIssueMessages()
 {
+    inputweaver::debug::Message completed{};
+    completed.header.kind = inputweaver::debug::MessageKind::StreamCompleted;
+    const auto decodedCompleted = RoundTrip(completed);
+    Check(
+        decodedCompleted.Succeeded()
+            && decodedCompleted.message.header.kind
+                == inputweaver::debug::MessageKind::StreamCompleted
+            && decodedCompleted.message.header.payloadBytes == 0U,
+        "stream completion marker round trips without a payload");
+
     inputweaver::debug::Message ended{};
     ended.header.kind = inputweaver::debug::MessageKind::ExecutionEnded;
     ended.executionEnded.executionMarker = 41U;

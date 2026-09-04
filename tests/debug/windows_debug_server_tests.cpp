@@ -218,6 +218,80 @@ template <typename Predicate>
     return predicate();
 }
 
+[[nodiscard]] HANDLE BeginRawCapture(
+    inputweaver::win32::WindowsDebugServer& server,
+    std::wstring_view token)
+{
+    HANDLE pipe = Connect(inputweaver::win32::MakeDebugPipeName(
+        GetCurrentProcessId(),
+        token));
+    if (pipe == INVALID_HANDLE_VALUE) {
+        return INVALID_HANDLE_VALUE;
+    }
+    inputweaver::debug::Message hello{};
+    hello.header.kind = inputweaver::debug::MessageKind::Hello;
+    if (!Send(pipe, hello)) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    const auto accepted = Receive(pipe);
+    if (!accepted.Succeeded()
+        || accepted.message.header.kind
+            != inputweaver::debug::MessageKind::HelloAccepted) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    inputweaver::debug::Message start{};
+    start.header.kind = inputweaver::debug::MessageKind::StartCapture;
+    start.header.targetSessionId = accepted.message.header.targetSessionId;
+    if (!Send(pipe, start)
+        || WaitForRequest(server)
+            != inputweaver::win32::DebugCaptureRequest::Start
+        || !server.BeginCapture({})) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    const auto started = Receive(pipe);
+    if (!started.Succeeded()
+        || started.message.header.kind
+            != inputweaver::debug::MessageKind::CaptureStarted) {
+        CloseHandle(pipe);
+        return INVALID_HANDLE_VALUE;
+    }
+    return pipe;
+}
+
+[[nodiscard]] bool FillDebugPipe(
+    inputweaver::win32::WindowsDebugServer& server,
+    HANDLE pipe)
+{
+    inputweaver::RuntimeDebugEvent issue{};
+    issue.kind = inputweaver::RuntimeDebugEventKind::RuntimeIssue;
+    issue.issue.kind = inputweaver::RuntimeDiagnosticKind::TaskExpressionFault;
+    for (std::size_t index = 0U; index < 2'000U; ++index) {
+        if (!server.Publish(issue)) {
+            return false;
+        }
+        if ((index % 8U) == 0U) {
+            Sleep(1U);
+        }
+        DWORD available{};
+        if (PeekNamedPipe(
+                pipe,
+                nullptr,
+                0U,
+                nullptr,
+                &available,
+                nullptr) == FALSE) {
+            return false;
+        }
+        if (available >= 60U * 1024U) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] inputweaver::CompiledProgramStorage MakeReadableTapStorage()
 {
     inputweaver::CompiledProgramStorage storage =
@@ -741,12 +815,122 @@ void TestDebugClientIntegration()
     server.Stop();
 }
 
+void TestFinalIssueDrain()
+{
+    inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
+        MakeReadableMappingStorage());
+    Check(
+        finalized.program != nullptr && finalized.errors.empty(),
+        "final issue fixture finalizes");
+    if (finalized.program == nullptr) {
+        return;
+    }
+
+    inputweaver::win32::WindowsDebugServer server;
+    const std::wstring token = L"final-issue-"
+        + std::to_wstring(GetCurrentProcessId())
+        + L"-"
+        + std::to_wstring(GetTickCount64());
+    std::wstring error;
+    Check(
+        server.Start(token, finalized.program, {}, error),
+        "debug server starts for final issue drain");
+    inputweaver::win32::WindowsDebugClient client;
+    const std::string narrowToken(token.begin(), token.end());
+    Check(
+        client.Connect({GetCurrentProcessId()}, narrowToken).Succeeded()
+            && client.StartCapture().Succeeded()
+            && WaitForRequest(server)
+                == inputweaver::win32::DebugCaptureRequest::Start
+            && server.BeginCapture({}),
+        "final issue capture starts");
+    Check(
+        WaitUntil([&] { return client.ReadState()->captureTrusted; }),
+        "final issue capture becomes trusted");
+
+    inputweaver::RuntimeDebugEvent issue{};
+    issue.kind = inputweaver::RuntimeDebugEventKind::RuntimeIssue;
+    issue.issue.kind = inputweaver::RuntimeDiagnosticKind::TaskExpressionFault;
+    Check(server.Publish(issue), "final runtime issue is queued");
+    server.Stop();
+    client.FinishAfterProcessExit();
+    const auto state = client.ReadState();
+    Check(
+        !state->connected && state->streamComplete
+            && state->lastFault == inputweaver::debug::DebugClientFault::None
+            && state->runtimeIssues.size() == 1U
+            && state->runtimeIssues[0].payload.issue.kind
+                == inputweaver::RuntimeDiagnosticKind::TaskExpressionFault,
+        "server shutdown proves the retained final issue snapshot is complete");
+}
+
+void TestFinalDrainFailures()
+{
+    inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
+        MakeReadableMappingStorage());
+    Check(
+        finalized.program != nullptr && finalized.errors.empty(),
+        "final drain failure fixture finalizes");
+    if (finalized.program == nullptr) {
+        return;
+    }
+
+    inputweaver::win32::WindowsDebugServer brokenServer;
+    const std::wstring brokenToken = L"broken-final-write-"
+        + std::to_wstring(GetCurrentProcessId())
+        + L"-"
+        + std::to_wstring(GetTickCount64());
+    std::wstring error;
+    Check(
+        brokenServer.Start(brokenToken, finalized.program, {}, error),
+        "debug server starts for final write failure");
+    HANDLE brokenPipe = BeginRawCapture(brokenServer, brokenToken);
+    Check(
+        brokenPipe != INVALID_HANDLE_VALUE
+            && FillDebugPipe(brokenServer, brokenPipe),
+        "debug writer reaches a full client pipe");
+    if (brokenPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(brokenPipe);
+    }
+    const ULONGLONG brokenStart = GetTickCount64();
+    brokenServer.Stop();
+    Check(
+        GetTickCount64() - brokenStart < 900U,
+        "final write failure ends without being mistaken for a drain timeout");
+
+    inputweaver::win32::WindowsDebugServer timeoutServer;
+    const std::wstring timeoutToken = L"final-drain-timeout-"
+        + std::to_wstring(GetCurrentProcessId())
+        + L"-"
+        + std::to_wstring(GetTickCount64());
+    error.clear();
+    Check(
+        timeoutServer.Start(timeoutToken, finalized.program, {}, error),
+        "debug server starts for final drain timeout");
+    HANDLE timeoutPipe = BeginRawCapture(timeoutServer, timeoutToken);
+    Check(
+        timeoutPipe != INVALID_HANDLE_VALUE
+            && FillDebugPipe(timeoutServer, timeoutPipe),
+        "unread debug output fills the client pipe");
+    const ULONGLONG timeoutStart = GetTickCount64();
+    timeoutServer.Stop();
+    const ULONGLONG timeoutElapsed = GetTickCount64() - timeoutStart;
+    Check(
+        timeoutElapsed >= 900U && timeoutElapsed < 2'500U,
+        "missing completion acknowledgement follows the bounded drain timeout");
+    if (timeoutPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(timeoutPipe);
+    }
+}
+
 } // namespace
 
 int main()
 {
     TestPipeSession();
     TestDebugClientIntegration();
+    TestFinalIssueDrain();
+    TestFinalDrainFailures();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " Windows debug server test(s) failed.\n";
         return 1;

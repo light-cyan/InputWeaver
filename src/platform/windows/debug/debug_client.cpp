@@ -175,7 +175,11 @@ struct WindowsDebugClient::Impl final {
     {
         if (connected.exchange(false, std::memory_order_acq_rel)) {
             try {
-                reducer.Disconnected(debug::DebugClientFault::ConnectionLost);
+                const auto state = reducer.ReadState();
+                reducer.Disconnected(
+                    state != nullptr && state->streamComplete
+                        ? debug::DebugClientFault::None
+                        : debug::DebugClientFault::ConnectionLost);
             } catch (...) {
             }
         }
@@ -241,6 +245,13 @@ struct WindowsDebugClient::Impl final {
             }
             if (action == debug::DebugReductionAction::RestartCapture
                 && !SendCommand(debug::MessageKind::StartCapture).Succeeded()) {
+                break;
+            }
+            if (result == FrameResult::Message
+                && message.header.kind == debug::MessageKind::StreamCompleted
+                && reducer.ReadState()->streamComplete
+                && !SendCommand(
+                    debug::MessageKind::StreamCompletedAck).Succeeded()) {
                 break;
             }
         }
@@ -396,6 +407,18 @@ struct WindowsDebugClient::Impl final {
         }
     }
 
+    void FinishAfterProcessExit() noexcept
+    {
+        if (reader.joinable()) {
+            reader.join();
+        }
+        stopping.store(true, std::memory_order_release);
+        {
+            std::lock_guard lock(writeMutex);
+            CleanupHandles();
+        }
+    }
+
     mutable std::mutex lifecycleMutex;
     std::mutex writeMutex;
     debug::DebugStateReducer reducer;
@@ -462,6 +485,12 @@ void WindowsDebugClient::Disconnect() noexcept
 {
     std::lock_guard lock(impl_->lifecycleMutex);
     impl_->Disconnect();
+}
+
+void WindowsDebugClient::FinishAfterProcessExit() noexcept
+{
+    std::lock_guard lock(impl_->lifecycleMutex);
+    impl_->FinishAfterProcessExit();
 }
 
 } // namespace inputweaver::win32

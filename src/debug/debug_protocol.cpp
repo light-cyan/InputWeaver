@@ -351,6 +351,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StartCapture:
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
+    case MessageKind::StreamCompletedAck:
+    case MessageKind::StreamCompleted:
         return true;
     case MessageKind::CaptureStarted:
         if (message.captureStarted.values.size() > kMaximumDebugValues
@@ -445,6 +447,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StartCapture:
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
+    case MessageKind::StreamCompletedAck:
+    case MessageKind::StreamCompleted:
         return true;
     case MessageKind::CaptureStarted: {
         if (!reader.I64(message.captureStarted.captureUnixTimeMilliseconds)) {
@@ -525,6 +529,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StartCapture:
     case MessageKind::StopCapture:
     case MessageKind::RequestExecutorStop:
+    case MessageKind::StreamCompletedAck:
     case MessageKind::CaptureStarted:
     case MessageKind::InputEvent:
     case MessageKind::RuleMatched:
@@ -532,6 +537,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::RuntimeIssue:
     case MessageKind::StateChanged:
     case MessageKind::ArrayChanged:
+    case MessageKind::StreamCompleted:
         return true;
     }
     return false;

@@ -23,6 +23,7 @@ public:
     [[nodiscard]] std::shared_ptr<const debug::DebugClientState> ReadState()
         const override;
     void Disconnect() noexcept override;
+    void FinishAfterProcessExit() noexcept;
 
 private:
     struct Impl;

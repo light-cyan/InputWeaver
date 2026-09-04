@@ -244,6 +244,34 @@ public:
         return executorStopReceived_.load(std::memory_order_acquire);
     }
 
+    [[nodiscard]] bool CloseStream(bool complete)
+    {
+        std::lock_guard lock(writeMutex_);
+        const HANDLE pipe = pipe_.load(std::memory_order_acquire);
+        if (pipe == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        bool sent = true;
+        if (complete) {
+            inputweaver::debug::Message completed{};
+            completed.header.kind =
+                inputweaver::debug::MessageKind::StreamCompleted;
+            completed.header.targetSessionId = kSessionId;
+            completed.header.protocolSequence = 1U;
+            sent = Send(pipe, completed);
+            const ULONGLONG deadline = GetTickCount64() + 5'000U;
+            while (sent
+                && !completionAckReceived_.load(std::memory_order_acquire)
+                && GetTickCount64() < deadline) {
+                Sleep(1U);
+            }
+            sent = sent
+                && completionAckReceived_.load(std::memory_order_acquire);
+        }
+        DisconnectNamedPipe(pipe);
+        return sent;
+    }
+
 private:
     [[nodiscard]] bool SendCapture(
         HANDLE pipe,
@@ -379,6 +407,9 @@ private:
             } else if (command.header.kind
                 == inputweaver::debug::MessageKind::RequestExecutorStop) {
                 executorStopReceived_.store(true, std::memory_order_release);
+            } else if (command.header.kind
+                == inputweaver::debug::MessageKind::StreamCompletedAck) {
+                completionAckReceived_.store(true, std::memory_order_release);
             } else {
                 failed_.store(true, std::memory_order_release);
                 break;
@@ -399,6 +430,7 @@ private:
     std::atomic<std::uint32_t> startCount_{0U};
     std::atomic<bool> stopCaptureReceived_{false};
     std::atomic<bool> executorStopReceived_{false};
+    std::atomic<bool> completionAckReceived_{false};
     std::thread thread_;
 };
 
@@ -505,11 +537,62 @@ void TestValidationFailures()
         "capture command requires a connection");
 }
 
+void TestFinalStreamClassification()
+{
+    const std::wstring tokenBase = L"client-final-"
+        + std::to_wstring(GetCurrentProcessId())
+        + L"-"
+        + std::to_wstring(GetTickCount64());
+
+    const std::wstring completeWideToken = tokenBase + L"-complete";
+    FakeDebugServer completeServer(completeWideToken);
+    Check(completeServer.Start(), "complete fake debug server starts");
+    inputweaver::win32::WindowsDebugClient completeClient;
+    const std::string completeToken(
+        completeWideToken.begin(),
+        completeWideToken.end());
+    Check(
+        completeClient.Connect(
+            {GetCurrentProcessId()},
+            completeToken).Succeeded()
+            && completeServer.CloseStream(true),
+        "server sends the terminal stream marker before closing");
+    completeClient.FinishAfterProcessExit();
+    const auto completeState = completeClient.ReadState();
+    Check(
+        completeState->streamComplete
+            && completeState->lastFault
+                == inputweaver::debug::DebugClientFault::None,
+        "terminal marker retains a complete fault-free snapshot");
+    completeServer.Stop();
+
+    const std::wstring abruptToken = tokenBase + L"-abrupt";
+    FakeDebugServer abruptServer(abruptToken);
+    Check(abruptServer.Start(), "abrupt fake debug server starts");
+    inputweaver::win32::WindowsDebugClient abruptClient;
+    const std::string narrowAbrupt(abruptToken.begin(), abruptToken.end());
+    Check(
+        abruptClient.Connect(
+            {GetCurrentProcessId()},
+            narrowAbrupt).Succeeded()
+            && abruptServer.CloseStream(false),
+        "server closes without a terminal stream marker");
+    abruptClient.FinishAfterProcessExit();
+    const auto abruptState = abruptClient.ReadState();
+    Check(
+        !abruptState->streamComplete
+            && abruptState->lastFault
+                == inputweaver::debug::DebugClientFault::ConnectionLost,
+        "unexpected EOF retains only a best-effort snapshot");
+    abruptServer.Stop();
+}
+
 } // namespace
 
 int main()
 {
     TestFakeServerSession();
+    TestFinalStreamClassification();
     TestValidationFailures();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " Windows debug client test(s) failed.\n";

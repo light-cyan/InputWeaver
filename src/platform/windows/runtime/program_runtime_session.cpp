@@ -266,7 +266,6 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 outputThread.join();
             }
             if (debugServer != nullptr) {
-                debugServer->EndCapture();
                 debugServer->Stop();
             }
             CaptureSessionMetrics();

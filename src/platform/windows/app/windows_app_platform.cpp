@@ -242,8 +242,14 @@ struct WindowsAppPlatform::Impl final {
                 return;
             }
             stopped = true;
+            const bool processExited = child.process
+                && WaitForSingleObject(child.process.Get(), 0U) == WAIT_OBJECT_0;
             if (debugClient != nullptr) {
-                debugClient->Disconnect();
+                if (processExited) {
+                    debugClient->FinishAfterProcessExit();
+                } else {
+                    debugClient->Disconnect();
+                }
             }
             if (child.process) {
                 DWORD exitCode{};
@@ -305,18 +311,26 @@ struct WindowsAppPlatform::Impl final {
         std::string_view name,
         app::ConsoleSource source,
         std::string_view text,
-        app::PlatformEventKind kind = app::PlatformEventKind::Output)
+        app::PlatformEventKind kind = app::PlatformEventKind::Output,
+        app::ExecutorMode executorMode = app::ExecutorMode::Run)
     {
         if (text.empty()) {
             return;
         }
-        QueueEvent({
-            kind,
-            id,
-            std::string{name},
-            source,
-            NormalizeOutput(text),
-            0U});
+        QueueEvent(
+            kind == app::PlatformEventKind::Error
+                ? app::PlatformEvent::Error(
+                    id,
+                    std::string{name},
+                    source,
+                    NormalizeOutput(text),
+                    executorMode)
+                : app::PlatformEvent::Output(
+                    id,
+                    std::string{name},
+                    source,
+                    NormalizeOutput(text),
+                    executorMode));
     }
 
     [[nodiscard]] CapturedProcessResult RunCompiler(
@@ -347,7 +361,8 @@ struct WindowsAppPlatform::Impl final {
         HANDLE handle,
         app::ProgramEntryId id,
         std::string name,
-        app::PlatformEventKind kind) noexcept
+        app::PlatformEventKind kind,
+        app::ExecutorMode executorMode) noexcept
     {
         try {
             std::array<char, 4'096U> buffer{};
@@ -371,7 +386,8 @@ struct WindowsAppPlatform::Impl final {
                         name,
                         app::ConsoleSource::Runtime,
                         std::string_view{pending}.substr(0U, lineEnd + 1U),
-                        kind);
+                        kind,
+                        executorMode);
                     pending.erase(0U, lineEnd + 1U);
                 }
                 while (pending.size() > kMaximumCapturedLineBytes) {
@@ -382,7 +398,8 @@ struct WindowsAppPlatform::Impl final {
                         std::string_view{pending}.substr(
                             0U,
                             kMaximumCapturedLineBytes),
-                        kind);
+                        kind,
+                        executorMode);
                     pending.erase(0U, kMaximumCapturedLineBytes);
                 }
             }
@@ -392,16 +409,16 @@ struct WindowsAppPlatform::Impl final {
                     name,
                     app::ConsoleSource::Runtime,
                     pending,
-                    kind);
+                    kind,
+                    executorMode);
             }
         } catch (...) {
-            QueueEvent({
-                app::PlatformEventKind::Error,
+            QueueEvent(app::PlatformEvent::Error(
                 id,
                 std::move(name),
                 app::ConsoleSource::Runtime,
                 "Runtime output capture failed.",
-                0U});
+                executorMode));
         }
     }
 
@@ -425,14 +442,16 @@ struct WindowsAppPlatform::Impl final {
             executor.child.standardOutput.Get(),
             executor.info.programId,
             executor.programName,
-            app::PlatformEventKind::Output);
+            app::PlatformEventKind::Output,
+            executor.info.mode);
         executor.errorReader = std::thread(
             &Impl::ReadExecutorOutput,
             this,
             executor.child.standardError.Get(),
             executor.info.programId,
             executor.programName,
-            app::PlatformEventKind::Error);
+            app::PlatformEventKind::Error,
+            executor.info.mode);
     }
 
     void FinishExecutor(std::unique_ptr<ManagedExecutor> executor)
@@ -443,13 +462,16 @@ struct WindowsAppPlatform::Impl final {
             || exitCode == STILL_ACTIVE) {
             exitCode = 1U;
         }
-        QueueEvent({
-            app::PlatformEventKind::ExecutorExited,
+        const std::shared_ptr<const debug::DebugClientState> finalDebugState =
+            executor->debugClient == nullptr
+            ? nullptr
+            : executor->debugClient->ReadState();
+        QueueEvent(app::PlatformEvent::ExecutorExited(
             executor->info.programId,
             executor->programName,
-            app::ConsoleSource::Runtime,
-            {},
-            exitCode});
+            exitCode,
+            executor->info.mode,
+            finalDebugState));
     }
 
     void CollectExited()
@@ -956,14 +978,12 @@ std::vector<app::PlatformEvent> WindowsAppPlatform::PollEvents()
     result.reserve(
         impl_->events.size() + (impl_->droppedOutputEvents == 0U ? 0U : 1U));
     if (impl_->droppedOutputEvents != 0U) {
-        result.push_back({
-            app::PlatformEventKind::Error,
+        result.push_back(app::PlatformEvent::Error(
             app::kInvalidProgramEntryId,
             "InputWeaver",
             app::ConsoleSource::App,
             "Dropped " + std::to_string(impl_->droppedOutputEvents)
-                + " queued child-output event(s).",
-            0U});
+                + " queued child-output event(s)."));
         impl_->droppedOutputEvents = 0U;
     }
     while (!impl_->events.empty()) {

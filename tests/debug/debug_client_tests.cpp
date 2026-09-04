@@ -611,6 +611,29 @@ void TestArrayState()
         "array element type drift requests a fresh capture");
 }
 
+void TestStreamCompletion()
+{
+    inputweaver::debug::DebugStateReducer reducer;
+    reducer.Connected(17U);
+    auto completed = MakeMessage(
+        inputweaver::debug::MessageKind::StreamCompleted,
+        1U);
+    Check(
+        reducer.Accept(completed)
+                == inputweaver::debug::DebugReductionAction::None
+            && reducer.ReadState()->streamComplete,
+        "terminal stream marker proves final snapshot completeness");
+
+    auto trailing = MakeMessage(
+        inputweaver::debug::MessageKind::StreamCompleted,
+        2U);
+    Check(
+        reducer.Accept(trailing)
+                == inputweaver::debug::DebugReductionAction::RestartCapture
+            && !reducer.ReadState()->streamComplete,
+        "messages after the terminal marker invalidate completeness");
+}
+
 } // namespace
 
 int main()
@@ -621,6 +644,7 @@ int main()
     TestStrictValidationAndCapacity();
     TestValueState();
     TestArrayState();
+    TestStreamCompletion();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " debug client test(s) failed.\n";
         return 1;

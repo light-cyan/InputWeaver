@@ -309,7 +309,7 @@ public:
     [[nodiscard]] inputweaver::app::ProgramEntryId DebugProgramId()
         const noexcept override
     {
-        return inputweaver::app::kInvalidProgramEntryId;
+        return debugId;
     }
 
     [[nodiscard]] std::shared_ptr<const inputweaver::debug::DebugClientState>
@@ -332,6 +332,8 @@ public:
     inputweaver::app::LaunchRequest launched{};
     std::vector<inputweaver::app::ExecutorInfo> executors;
     std::vector<inputweaver::app::PlatformEvent> events;
+    inputweaver::app::ProgramEntryId debugId{
+        inputweaver::app::kInvalidProgramEntryId};
     std::shared_ptr<const inputweaver::debug::DebugClientState> debugState;
     std::string source{"number count = 1;\nA:down => tap(B);"};
     std::string dump{"source display=test.weave\ncontrols 1\n"};
@@ -923,24 +925,21 @@ void TestController()
         "configured colors include darker completion green and blue controls");
     inputweaver::ui::tui::TuiController controller(application, colors);
     platform.events = {
-        {inputweaver::app::PlatformEventKind::Output,
+        inputweaver::app::PlatformEvent::Output(
          1U,
          "Game",
          inputweaver::app::ConsoleSource::Runtime,
-         "first output",
-         0U},
-        {inputweaver::app::PlatformEventKind::Output,
+         "first output"),
+        inputweaver::app::PlatformEvent::Output(
          1U,
          "Game",
          inputweaver::app::ConsoleSource::Runtime,
-         "second output",
-         0U},
-        {inputweaver::app::PlatformEventKind::Output,
+         "second output"),
+        inputweaver::app::PlatformEvent::Output(
          1U,
          "Game",
          inputweaver::app::ConsoleSource::Compiler,
-         "compiler output",
-         0U}};
+         "compiler output")};
     controller.Tick();
     controller.Handle({Key::Character, U'['});
     const std::string consoleText = CanvasText(controller.Render(80U, 24U));
@@ -1186,6 +1185,7 @@ void TestController()
     execution.actionText = "tap(B) | set(count, count + 1)";
     execution.result = inputweaver::RuntimeExecutionResult::Completed;
     debugState->ruleExecutions.push_back(std::move(execution));
+    platform.debugId = 1U;
     platform.debugState = debugState;
     controller.Handle({Key::Character, U']'});
     controller.Tick();
@@ -1300,6 +1300,62 @@ void TestController()
         faultDebug.Cells()[20U * 80U].style.foreground
             == colors.healthFault,
         "HEALTH uses the fault color only for a reported problem");
+    faultState->runtimeIssues.push_back({});
+    platform.debugId = inputweaver::app::kInvalidProgramEntryId;
+    platform.debugState.reset();
+    platform.events.push_back(inputweaver::app::PlatformEvent::ExecutorExited(
+        1U,
+        "main",
+        8U,
+        inputweaver::app::ExecutorMode::Debug,
+        faultState));
+    controller.Tick();
+    const auto terminatedDebug = controller.Render(80U, 24U);
+    const std::string terminatedText = CanvasText(terminatedDebug);
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
+        "terminated debug sessions retain Debug page attention");
+    Check(
+        terminatedText.find("TERMINATED") != std::string::npos,
+        "terminated debug sessions label the ended session");
+    Check(
+        terminatedText.find("Exit=8") != std::string::npos,
+        "terminated debug sessions show the exit code");
+    Check(
+        terminatedText.find("Runtime issues: 1") != std::string::npos,
+        "terminated debug sessions retain the runtime issue count");
+    Check(
+        terminatedText.find("Best-effort snapshot") != std::string::npos
+            && terminatedText.find("Fault: ConnectionLost")
+                != std::string::npos,
+        "incomplete terminated sessions disclose best-effort state");
+    Check(
+        terminatedText.find("Start/Stop Capture") == std::string::npos
+            && terminatedText.find("Stop Executor") == std::string::npos,
+        "terminated debug sessions expose only browsing controls");
+    Check(
+        terminatedDebug.Cells()[20U * 80U].style.foreground
+            == colors.healthFault,
+        "terminated debug sessions retain the fault color");
+
+    auto completeState =
+        std::make_shared<inputweaver::debug::DebugClientState>();
+    completeState->streamComplete = true;
+    platform.events.push_back(inputweaver::app::PlatformEvent::ExecutorExited(
+        1U,
+        "main",
+        0U,
+        inputweaver::app::ExecutorMode::Debug,
+        completeState));
+    controller.Tick();
+    const auto completeDebug = controller.Render(80U, 24U);
+    const std::string completeText = CanvasText(completeDebug);
+    Check(
+        completeText.find("Complete snapshot") != std::string::npos
+            && completeText.find("Fault: None") != std::string::npos
+            && completeDebug.Cells()[20U * 80U].style.foreground
+                == colors.healthTrusted,
+        "acknowledged terminal streams show a complete healthy snapshot");
     controller.Handle({Key::Character, U'['});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Program,

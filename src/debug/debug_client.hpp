@@ -119,6 +119,7 @@ struct DebugClientState final {
     bool captureRequested{};
     bool capturing{};
     bool captureTrusted{};
+    bool streamComplete{};
     std::uint64_t targetSessionId{};
     std::uint64_t captureEpoch{};
     DebugClientFault lastFault{DebugClientFault::None};

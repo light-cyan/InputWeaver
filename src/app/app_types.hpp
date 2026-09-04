@@ -109,13 +109,24 @@ struct ConsoleLine final {
     std::string text;
 };
 
+enum class DebugSessionStatus : std::uint8_t {
+    Active,
+    Terminated,
+};
+
+struct DebugSessionView final {
+    ProgramEntryId programId{kInvalidProgramEntryId};
+    DebugSessionStatus status{DebugSessionStatus::Active};
+    std::uint32_t exitCode{};
+    std::shared_ptr<const debug::DebugClientState> state;
+};
+
 struct ApplicationSnapshot final {
     std::uint64_t version{};
     std::vector<ProgramEntry> programs;
     std::vector<ExecutorInfo> executors;
     std::vector<ConsoleLine> consoleLines;
-    ProgramEntryId debugProgramId{kInvalidProgramEntryId};
-    std::shared_ptr<const debug::DebugClientState> debugState;
+    std::optional<DebugSessionView> debugSession;
 };
 
 enum class ApplicationAttention : std::uint8_t {

@@ -839,6 +839,26 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
     std::string_view pageRail;
     RgbColor headerColor{};
     std::vector<std::string> headerKeys;
+    const app::DebugSessionView* displayedDebugSession =
+        snapshot_.debugSession.has_value()
+        ? &*snapshot_.debugSession
+        : nullptr;
+    if (pendingDebugRun_.has_value() && displayedDebugSession != nullptr
+        && displayedDebugSession->status
+            == app::DebugSessionStatus::Terminated) {
+        displayedDebugSession = nullptr;
+    }
+    const bool debugTerminated = displayedDebugSession != nullptr
+        && displayedDebugSession->status == app::DebugSessionStatus::Terminated;
+    const app::ProgramEntryId displayedDebugId =
+        displayedDebugSession != nullptr
+        ? displayedDebugSession->programId
+        : pendingDebugRun_.has_value()
+            ? pendingDebugRun_->id
+            : app::kInvalidProgramEntryId;
+    const app::ExecutorInfo* displayedDebugExecutor = debugTerminated
+        ? nullptr
+        : ExecutorFor(displayedDebugId);
     if (page_ == Page::Console) {
         pageRail = "‹[ CONSOLE · Program · Debug ]›";
         headerTitle = "InputWeaver | " + std::string{pageRail};
@@ -953,33 +973,26 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             : debugRegion_ == DebugRegion::State
                 ? colors_.focusState
                 : colors_.focusActionExecutions;
-        const app::ProgramEntryId displayedDebugId =
-            snapshot_.debugProgramId != app::kInvalidProgramEntryId
-            ? snapshot_.debugProgramId
-            : pendingDebugRun_.has_value()
-                ? pendingDebugRun_->id
-                : app::kInvalidProgramEntryId;
-        const app::ExecutorInfo* debugExecutor = ExecutorFor(displayedDebugId);
         const std::string debugProgram = ProgramName(
             snapshot_,
             displayedDebugId);
         if (!debugProgram.empty()) {
             headerTitle += " | " + debugProgram;
         }
-        if (debugExecutor != nullptr) {
+        if (displayedDebugExecutor != nullptr) {
             headerTitle += " | TRACE";
-            if (debugExecutor->dryRun) {
+            if (displayedDebugExecutor->dryRun) {
                 headerTitle += " + SAFETY";
             }
         } else if (pendingDebugRun_.has_value()) {
             headerTitle += " | STARTING";
+        } else if (debugTerminated) {
+            headerTitle += " | TERMINATED";
         }
         if (debugInteraction_ == RegionInteraction::Selecting) {
             headerKeys = {
                 "[Arrow Keys] Region",
                 "[Enter] Enter",
-                "[C] Start/Stop Capture",
-                "[X] Stop Executor",
                 "[Esc] Program"};
         } else {
             std::string focusKey = debugRegion_ == DebugRegion::Events
@@ -991,9 +1004,14 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 "[↑]/[↓] " + focusKey,
                 "[PgUp]/[PgDn] Page",
                 "[Home]/[End] Edge",
-                "[C] Start/Stop Capture",
-                "[X] Stop Executor",
                 "[Esc] Regions"};
+        }
+        if (displayedDebugExecutor != nullptr) {
+            headerKeys.insert(
+                headerKeys.end() - 1,
+                {"[C] Start/Stop Capture", "[X] Stop Executor"});
+        } else if (pendingDebugRun_.has_value()) {
+            headerKeys.insert(headerKeys.end() - 1, "[X] Cancel Start");
         }
     }
     StyledLine headerSegments;
@@ -1424,7 +1442,10 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 1U);
         }
     } else {
-        const debug::DebugClientState* debugState = snapshot_.debugState.get();
+        const debug::DebugClientState* debugState =
+            displayedDebugSession == nullptr
+            ? nullptr
+            : displayedDebugSession->state.get();
         constexpr std::size_t healthRows = 4U;
         const std::size_t healthY = height - healthRows;
         const std::size_t bodyTop = headerHeight;
@@ -1445,8 +1466,6 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             debugRegion_ == DebugRegion::Executions,
             colors_.focusActionExecutions,
             colors_);
-        const app::ExecutorInfo* debugExecutor = ExecutorFor(
-            snapshot_.debugProgramId);
         canvas.Box(
             {0U, bodyTop, leftWidth, topHeight},
             "EVENTS",
@@ -1575,14 +1594,19 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
 
         const bool starting = pendingDebugRun_.has_value();
         const bool trusted = debugState != nullptr && debugState->captureTrusted;
-        const bool recovering = debugState != nullptr
+        const bool recovering = !debugTerminated && debugState != nullptr
             && debugState->captureRequested && !debugState->capturing;
-        const bool hasProblem = debugState != nullptr
-            && (debugState->lastFault != debug::DebugClientFault::None
-                || !debugState->runtimeIssues.empty());
-        const bool debugInactive = !starting
-            && debugExecutor == nullptr
-            && debugState == nullptr;
+        const bool hasClientFault = debugState != nullptr
+            && debugState->lastFault != debug::DebugClientFault::None;
+        const bool incompleteSnapshot = debugTerminated
+            && debugState != nullptr
+            && !debugState->streamComplete;
+        const bool hasProblem = (debugTerminated
+                && displayedDebugSession->exitCode != 0U)
+            || hasClientFault
+            || incompleteSnapshot
+            || (debugState != nullptr && !debugState->runtimeIssues.empty());
+        const bool debugInactive = !starting && displayedDebugSession == nullptr;
         const RgbColor healthColor = debugInactive
             ? colors_.unfocusedBorder
             : hasProblem
@@ -1595,7 +1619,29 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             : healthColor;
         std::string health1;
         std::string health2;
-        if (debugState == nullptr) {
+        if (debugTerminated) {
+            health1 = "Terminated | Exit="
+                + std::to_string(displayedDebugSession->exitCode)
+                + (debugState == nullptr
+                    ? " | No capture"
+                    : debugState->streamComplete
+                        ? " | Complete snapshot | PAUSE="
+                            + DebugPauseText(debugState)
+                        : " | Best-effort snapshot | PAUSE="
+                        + DebugPauseText(debugState));
+            health2 = "Fault: " + (debugState == nullptr
+                    ? std::string{"None"}
+                    : DebugFaultText(debugState->lastFault))
+                + " | Runtime issues: "
+                + std::to_string(
+                    debugState == nullptr
+                    ? 0U
+                    : debugState->runtimeIssues.size());
+            if (debugState != nullptr && !debugState->runtimeIssues.empty()) {
+                health2 += " | Latest: " + RuntimeDiagnosticText(
+                    debugState->runtimeIssues.back().payload);
+            }
+        } else if (debugState == nullptr) {
             health1 = starting
                 ? "Starting | Capture pending | Untrusted | PAUSE=unavailable"
                 : "Disconnected | Not capturing | Untrusted | PAUSE=unavailable";
@@ -1607,7 +1653,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     ? "Recovering"
                     : debugState->capturing ? "Capturing" : "Stopped")
                 + " | " + (trusted ? "Trusted" : "Untrusted");
-            if (debugExecutor != nullptr && debugExecutor->dryRun) {
+            if (displayedDebugExecutor != nullptr
+                && displayedDebugExecutor->dryRun) {
                 health1 += " | Dry-run";
             }
             health1 += " | PAUSE=" + DebugPauseText(debugState);

@@ -535,6 +535,10 @@ struct DebugStateReducer::Impl final {
         if (message.header.targetSessionId != state.targetSessionId) {
             return Recover(DebugClientFault::SessionMismatch);
         }
+        if (state.streamComplete) {
+            state.streamComplete = false;
+            return Recover(DebugClientFault::InconsistentState);
+        }
         if (sequenceUnknown
             && recoveryPending
             && message.header.kind == MessageKind::CaptureStarted) {
@@ -556,6 +560,11 @@ struct DebugStateReducer::Impl final {
             && message.header.protocolSequence
                 != (std::numeric_limits<std::uint64_t>::max)()) {
             nextProtocolSequence = message.header.protocolSequence + 1U;
+        }
+        if (message.header.kind == MessageKind::StreamCompleted) {
+            state.streamComplete = true;
+            Publish();
+            return DebugReductionAction::None;
         }
         if (!state.captureRequested) {
             return DebugReductionAction::None;
@@ -587,7 +596,9 @@ struct DebugStateReducer::Impl final {
         case MessageKind::StartCapture:
         case MessageKind::StopCapture:
         case MessageKind::RequestExecutorStop:
+        case MessageKind::StreamCompletedAck:
         case MessageKind::CaptureStarted:
+        case MessageKind::StreamCompleted:
             return Recover(DebugClientFault::InconsistentState);
         }
         return Recover(DebugClientFault::InconsistentState);

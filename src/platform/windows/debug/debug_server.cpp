@@ -34,6 +34,7 @@ namespace {
 inline constexpr std::size_t kMaximumInitialInputs = 256U;
 inline constexpr std::size_t kDebugQueueCapacity = 4096U;
 inline constexpr DWORD kPipeBufferBytes = 64U * 1024U;
+inline constexpr DWORD kFinalDrainTimeoutMilliseconds = 1'000U;
 
 enum class ProducerRecordKind : std::uint8_t {
     CaptureStarted,
@@ -939,6 +940,15 @@ struct WindowsDebugServer::Impl final {
                     protocolSequence,
                     writerEpoch);
             }
+            if (healthy && finalizing.load(std::memory_order_acquire)) {
+                debug::Message completed = MakeMessage(
+                    debug::MessageKind::StreamCompleted,
+                    captureEpoch.load(std::memory_order_acquire),
+                    CaptureTimeNanoseconds(),
+                    protocolSequence);
+                healthy = WriteMessage(pipe, completed);
+                break;
+            }
             if (healthy) {
                 const DWORD wait = WaitForMultipleObjects(
                     2U,
@@ -947,6 +957,9 @@ struct WindowsDebugServer::Impl final {
                     INFINITE);
                 healthy = wait == WAIT_OBJECT_0 + 1U;
             }
+        }
+        if (!healthy && writerFinalizedEvent != nullptr) {
+            SetEvent(writerFinalizedEvent);
         }
         if (!healthy
             && WaitForSingleObject(connectionStopEvent, 0U) != WAIT_OBJECT_0) {
@@ -997,6 +1010,7 @@ struct WindowsDebugServer::Impl final {
         captureReady.store(false, std::memory_order_release);
         captureActive.store(false, std::memory_order_release);
         ResetEvent(connectionStopEvent);
+        ResetEvent(writerFinalizedEvent);
         writerBroken.store(false, std::memory_order_release);
         std::thread writer;
         try {
@@ -1023,6 +1037,13 @@ struct WindowsDebugServer::Impl final {
             } else if (command.header.kind
                     == debug::MessageKind::RequestExecutorStop) {
                 callbacks.requestExecutorStop.Invoke();
+            } else if (command.header.kind
+                    == debug::MessageKind::StreamCompletedAck
+                && finalizing.load(std::memory_order_acquire)) {
+                if (writerFinalizedEvent != nullptr) {
+                    SetEvent(writerFinalizedEvent);
+                }
+                break;
             } else {
                 break;
             }
@@ -1080,6 +1101,7 @@ struct WindowsDebugServer::Impl final {
     std::uint64_t targetSessionId{};
     std::int64_t performanceFrequency{1};
     HANDLE queueEvent{};
+    HANDLE writerFinalizedEvent{};
     HANDLE connectionStopEvent{};
     support::BoundedMpmcQueue<ProducerRecord, kDebugQueueCapacity> queue;
     std::atomic<DebugCaptureRequest> pendingCaptureRequest{
@@ -1095,6 +1117,7 @@ struct WindowsDebugServer::Impl final {
     std::atomic<bool> stopping{false};
     std::atomic<bool> started{false};
     std::atomic<bool> writerBroken{false};
+    std::atomic<bool> finalizing{false};
     std::atomic<HANDLE> currentPipe{INVALID_HANDLE_VALUE};
     std::atomic<HANDLE> serverThreadHandle{nullptr};
     std::thread serverThread;
@@ -1161,8 +1184,10 @@ bool WindowsDebugServer::Start(
         impl_->targetSessionId = 1U;
     }
     impl_->queueEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    impl_->writerFinalizedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     impl_->connectionStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (impl_->queueEvent == nullptr || impl_->connectionStopEvent == nullptr) {
+    if (impl_->queueEvent == nullptr || impl_->writerFinalizedEvent == nullptr
+        || impl_->connectionStopEvent == nullptr) {
         errorMessage = L"Cannot create input debug synchronization events. Win32 error "
             + std::to_wstring(GetLastError()) + L".";
         Stop();
@@ -1195,8 +1220,18 @@ void WindowsDebugServer::Stop() noexcept
     if (!impl_->started.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
-    impl_->stopping.store(true, std::memory_order_release);
     impl_->captureReady.store(false, std::memory_order_release);
+    if (impl_->clientConnected.load(std::memory_order_acquire)
+        && !impl_->writerBroken.load(std::memory_order_acquire)
+        && impl_->queueEvent != nullptr
+        && impl_->writerFinalizedEvent != nullptr) {
+        impl_->finalizing.store(true, std::memory_order_release);
+        SetEvent(impl_->queueEvent);
+        (void)WaitForSingleObject(
+            impl_->writerFinalizedEvent,
+            kFinalDrainTimeoutMilliseconds);
+    }
+    impl_->stopping.store(true, std::memory_order_release);
     impl_->captureActive.store(false, std::memory_order_release);
     if (impl_->connectionStopEvent != nullptr) {
         SetEvent(impl_->connectionStopEvent);
@@ -1219,6 +1254,10 @@ void WindowsDebugServer::Stop() noexcept
     if (impl_->queueEvent != nullptr) {
         CloseHandle(impl_->queueEvent);
         impl_->queueEvent = nullptr;
+    }
+    if (impl_->writerFinalizedEvent != nullptr) {
+        CloseHandle(impl_->writerFinalizedEvent);
+        impl_->writerFinalizedEvent = nullptr;
     }
     if (impl_->connectionStopEvent != nullptr) {
         CloseHandle(impl_->connectionStopEvent);

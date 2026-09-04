@@ -84,6 +84,7 @@ private:
     ProgramEntryId nextId_{1U};
     std::uint64_t version_{};
     std::uint64_t nextConsoleSequence_{1U};
+    std::optional<DebugSessionView> terminatedDebugSession_;
     ApplicationAttention attention_{ApplicationAttention::None};
     bool awaitingDebugCapture_{};
     bool initialized_{};

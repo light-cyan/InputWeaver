@@ -874,16 +874,21 @@ void TuiController::HandleDebug(const KeyEvent& event)
         }
         return;
     }
-    if (IsCharacter(event, U'c')) {
-        const bool capturing = snapshot_.debugState != nullptr
-            && snapshot_.debugState->captureRequested;
+    const app::DebugSessionView* debugSession =
+        snapshot_.debugSession.has_value()
+        ? &*snapshot_.debugSession
+        : nullptr;
+    const bool active = debugSession != nullptr
+        && debugSession->status == app::DebugSessionStatus::Active;
+    if (IsCharacter(event, U'c') && active) {
+        const bool capturing = debugSession->state != nullptr
+            && debugSession->state->captureRequested;
         ShowOperationError(
             capturing ? application_.StopCapture() : application_.StartCapture());
         return;
     }
-    if (IsCharacter(event, U'x')
-        && snapshot_.debugProgramId != app::kInvalidProgramEntryId) {
-        ShowOperationError(application_.StopProgram(snapshot_.debugProgramId));
+    if (IsCharacter(event, U'x') && active) {
+        ShowOperationError(application_.StopProgram(debugSession->programId));
         return;
     }
     if (IsCharacter(event, U'x') && pendingDebugRun_.has_value()) {

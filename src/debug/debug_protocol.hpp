@@ -13,7 +13,7 @@
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 4U;
+inline constexpr std::uint16_t kProtocolVersion = 5U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
@@ -26,6 +26,7 @@ enum class MessageKind : std::uint16_t {
     StartCapture = 3U,
     StopCapture = 4U,
     RequestExecutorStop = 5U,
+    StreamCompletedAck = 6U,
     CaptureStarted = 16U,
     InputEvent = 17U,
     RuleMatched = 18U,
@@ -33,6 +34,7 @@ enum class MessageKind : std::uint16_t {
     RuntimeIssue = 21U,
     StateChanged = 22U,
     ArrayChanged = 23U,
+    StreamCompleted = 24U,
 };
 
 enum class InputDisposition : std::uint8_t {

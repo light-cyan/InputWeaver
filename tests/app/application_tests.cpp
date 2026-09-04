@@ -79,13 +79,11 @@ public:
         const inputweaver::app::ImportPublishRequest& request) override
     {
         lastImport = request;
-        events.push_back({
-            inputweaver::app::PlatformEventKind::Output,
+        events.push_back(inputweaver::app::PlatformEvent::Output(
             request.entry.id,
             request.entry.displayName,
             inputweaver::app::ConsoleSource::Compiler,
-            "Compiled successfully.",
-            0U});
+            "Compiled successfully."));
         return inputweaver::app::OperationResult::Success();
     }
 
@@ -167,6 +165,9 @@ public:
         const inputweaver::app::LaunchRequest& request) override
     {
         ++launchCount;
+        if (!launchResult.succeeded) {
+            return launchResult;
+        }
         executors.push_back({
             request.entry.id,
             request.options.debug
@@ -261,6 +262,8 @@ public:
     std::size_t launchCount{};
     std::size_t compileCount{};
     std::size_t dumpCount{};
+    inputweaver::app::OperationResult launchResult{
+        inputweaver::app::OperationResult::Success()};
     std::string source{"A:down => tap(B);"};
 };
 
@@ -366,30 +369,80 @@ void TestApplicationFlow()
             == inputweaver::app::ApplicationAttention::Debug,
         "trusted debug capture requests Debug page attention");
 
-    platform.events.push_back({
-        inputweaver::app::PlatformEventKind::Error,
+    platform.events.push_back(inputweaver::app::PlatformEvent::Error(
         1U,
         "Game",
         inputweaver::app::ConsoleSource::Runtime,
-        "Runtime error.",
-        0U});
+        "Runtime error."));
     application.Tick();
     Check(
         application.ConsumeAttention()
             == inputweaver::app::ApplicationAttention::Console,
         "runtime errors request Console page attention");
-    platform.events.push_back({
-        inputweaver::app::PlatformEventKind::ExecutorExited,
+    platform.events.push_back(inputweaver::app::PlatformEvent::ExecutorExited(
         1U,
         "Game",
-        inputweaver::app::ConsoleSource::Runtime,
-        {},
-        8U});
+        8U,
+        inputweaver::app::ExecutorMode::Run));
     application.Tick();
     Check(
         application.ConsumeAttention()
             == inputweaver::app::ApplicationAttention::Console,
         "nonzero executor exits request Console page attention");
+
+    platform.events.push_back(inputweaver::app::PlatformEvent::Error(
+        2U,
+        "Tools",
+        inputweaver::app::ConsoleSource::Runtime,
+        "Debug runtime error.",
+        inputweaver::app::ExecutorMode::Debug));
+    application.Tick();
+    Check(
+        application.ConsumeAttention()
+            == inputweaver::app::ApplicationAttention::Debug,
+        "debug runtime errors retain Debug page attention");
+
+    auto finalDebugState =
+        std::make_shared<inputweaver::debug::DebugClientState>();
+    finalDebugState->runtimeIssues.push_back({});
+    platform.debugId = inputweaver::app::kInvalidProgramEntryId;
+    platform.debugState.reset();
+    platform.executors.erase(
+        std::remove_if(
+            platform.executors.begin(),
+            platform.executors.end(),
+            [](const inputweaver::app::ExecutorInfo& executor) {
+                return executor.programId == 2U;
+            }),
+        platform.executors.end());
+    platform.events.push_back(inputweaver::app::PlatformEvent::ExecutorExited(
+        2U,
+        "Tools",
+        8U,
+        inputweaver::app::ExecutorMode::Debug,
+        finalDebugState));
+    application.Tick();
+    const auto terminatedDebug = application.ReadSnapshot().debugSession;
+    Check(
+        application.ConsumeAttention()
+                == inputweaver::app::ApplicationAttention::Debug
+            && terminatedDebug.has_value()
+            && terminatedDebug->programId == 2U
+            && terminatedDebug->status
+                == inputweaver::app::DebugSessionStatus::Terminated
+            && terminatedDebug->exitCode == 8U
+            && terminatedDebug->state == finalDebugState,
+        "debug executor exits retain their final snapshot on Debug");
+
+    platform.launchResult = inputweaver::app::OperationResult::Failure(
+        "Cannot create the executor stop event.");
+    Check(
+        !application.StartProgram(2U, {true, false, false}).succeeded
+            && application.ReadSnapshot().debugSession.has_value()
+            && application.ReadSnapshot().debugSession->state
+                == finalDebugState,
+        "debug launch failure preserves the previous terminated snapshot");
+    platform.launchResult = inputweaver::app::OperationResult::Success();
 
     inputweaver::app::RunConfiguration configuration{
         inputweaver::app::TargetMode::Global,

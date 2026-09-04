@@ -158,7 +158,7 @@ TUI 没有独立的编译按键。按 `[Space]` 运行时，如果 `.weavec` 不
 
 Console 汇总应用、编译器和执行器输出。连续的同程序、同来源输出只在第一行前显示一次 `[Program][Source]` 身份标记，文本会按区域宽度换行；内存中最多保留最近 2048 条原始输出行。
 
-应用操作失败、编译或运行启动失败、执行器写入标准错误，或者执行器以非零代码退出时，TUI 会自动切换到 Console 并保留对应输出。普通运行信息不会抢走当前页面，源码自动校验诊断仍留在源码视图中。
+应用操作失败、编译或运行启动失败、普通执行器写入标准错误，或者普通执行器以非零代码退出时，TUI 会自动切换到 Console 并保留对应输出。Debug 执行器的标准错误和退出信息仍写入 Console，但异常退出会进入并停留在 Debug 页查看最终捕获快照。普通运行信息不会抢走当前页面，源码自动校验诊断仍留在源码视图中。
 
 使用 `[Up]` / `[Down]` 逐行滚动，`[PageUp]` / `[PageDown]` 整页滚动，`[Home]` 跳到第一行，`[End]` 跳到最新一行，`]` 或 `[Esc]` 返回 Program。
 
@@ -166,7 +166,7 @@ Console 汇总应用、编译器和执行器输出。连续的同程序、同来
 
 Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。页面首先处于区域选择状态：EVENTS 的 `[Right]` 进入 STATE、`[Down]` 进入 ACTION EXECUTIONS，STATE 的 `[Left]` 返回 EVENTS、`[Down]` 进入 ACTION EXECUTIONS，ACTION EXECUTIONS 的 `[Up]` 返回 EVENTS。按 `[Enter]` 进入所选区域后，方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动该区域；按 `[Esc]` 返回区域选择。
 
-`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器。`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。`[` 返回 Program；区域选择状态下也可以使用 `[Esc]` 返回 Program。
+活动 Debug 会话中，`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器；`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。执行器结束后，这两个操作不再显示，最终捕获快照保留到下一次 Debug 会话开始。`[` 返回 Program；区域选择状态下也可以使用 `[Esc]` 返回 Program。
 
 ### EVENTS
 
@@ -204,7 +204,7 @@ STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值以及全
 
 ### HEALTH
 
-HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient 故障、运行时问题数量和最近问题。没有 Debug 会话时使用普通颜色；等待 Debug 启动或恢复捕获时使用恢复颜色，状态可信且没有问题时使用健康颜色，出现故障或运行时问题时使用故障颜色。
+HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient 故障、运行时问题数量和最近问题。执行器结束后显示 `Terminated` 和退出代码；完整的最终快照显示为 `Complete snapshot`，可能不完整的快照显示为 `Best-effort snapshot`。没有 Debug 会话时使用普通颜色；等待 Debug 启动或恢复捕获时使用恢复颜色，状态可信且没有问题时使用健康颜色，异常退出、best-effort 快照、故障或运行时问题使用故障颜色。
 
 开始新的捕获会清空 DebugClient 根据上一代消息建立的 EVENTS、按下控制、变量和数组视图、ACTION EXECUTIONS、运行时问题以及未完成执行关联，再由新的完整快照和后续增量重新建立可信视图；这个过程不会重置执行器内部的用户变量、数组或 `PAUSE`。
 

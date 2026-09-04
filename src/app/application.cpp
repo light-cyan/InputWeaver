@@ -248,6 +248,10 @@ OperationResult Application::DeleteProgram(ProgramEntryId id)
             programs_.end(),
             [id](const ProgramEntry& program) { return program.id == id; }),
         programs_.end());
+    if (terminatedDebugSession_.has_value()
+        && terminatedDebugSession_->programId == id) {
+        terminatedDebugSession_.reset();
+    }
     Changed();
     return OperationResult::Success();
 }
@@ -443,7 +447,12 @@ OperationResult Application::StartProgram(
         SetAttention(ApplicationAttention::Console);
         return launched;
     }
-    awaitingDebugCapture_ = options.debug;
+    const bool debugActive = options.debug
+        && platform_.DebugProgramId() != kInvalidProgramEntryId;
+    if (debugActive) {
+        terminatedDebugSession_.reset();
+    }
+    awaitingDebugCapture_ = debugActive;
     Changed();
     return OperationResult::Success();
 }
@@ -504,8 +513,16 @@ ApplicationSnapshot Application::ReadSnapshot() const
     snapshot.programs = programs_;
     snapshot.executors = platform_.ReadExecutors();
     snapshot.consoleLines.assign(consoleLines_.begin(), consoleLines_.end());
-    snapshot.debugProgramId = platform_.DebugProgramId();
-    snapshot.debugState = platform_.ReadDebugState();
+    const ProgramEntryId activeDebugId = platform_.DebugProgramId();
+    if (activeDebugId != kInvalidProgramEntryId) {
+        snapshot.debugSession = DebugSessionView{
+            activeDebugId,
+            DebugSessionStatus::Active,
+            0U,
+            platform_.ReadDebugState()};
+    } else {
+        snapshot.debugSession = terminatedDebugSession_;
+    }
     return snapshot;
 }
 
@@ -570,11 +587,18 @@ void Application::DrainPlatformEvents()
                 ConsoleSource::Runtime,
                 "Executor exited with code "
                     + std::to_string(event.exitCode) + ".");
-            if (event.exitCode != 0U) {
-                SetAttention(ApplicationAttention::Console);
-            }
-            if (platform_.DebugProgramId() == kInvalidProgramEntryId) {
+            if (event.executorMode == ExecutorMode::Debug) {
+                terminatedDebugSession_ = DebugSessionView{
+                    event.programId,
+                    DebugSessionStatus::Terminated,
+                    event.exitCode,
+                    event.finalDebugState};
                 awaitingDebugCapture_ = false;
+                if (event.exitCode != 0U) {
+                    SetAttention(ApplicationAttention::Debug);
+                }
+            } else if (event.exitCode != 0U) {
+                SetAttention(ApplicationAttention::Console);
             }
         } else {
             AppendConsole(
@@ -582,7 +606,10 @@ void Application::DrainPlatformEvents()
                 event.programName,
                 event.source,
                 event.text);
-            SetAttention(ApplicationAttention::Console);
+            SetAttention(
+                event.executorMode == ExecutorMode::Debug
+                    ? ApplicationAttention::Debug
+                    : ApplicationAttention::Console);
         }
         Changed();
     }

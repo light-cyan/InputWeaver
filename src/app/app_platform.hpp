@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace inputweaver::app {
@@ -57,6 +58,60 @@ struct PlatformEvent final {
     ConsoleSource source{ConsoleSource::App};
     std::string text;
     std::uint32_t exitCode{};
+    ExecutorMode executorMode{ExecutorMode::Run};
+    std::shared_ptr<const debug::DebugClientState> finalDebugState;
+
+    [[nodiscard]] static PlatformEvent Output(
+        ProgramEntryId programId,
+        std::string programName,
+        ConsoleSource source,
+        std::string text,
+        ExecutorMode executorMode = ExecutorMode::Run)
+    {
+        PlatformEvent event{};
+        event.kind = PlatformEventKind::Output;
+        event.programId = programId;
+        event.programName = std::move(programName);
+        event.source = source;
+        event.text = std::move(text);
+        event.executorMode = executorMode;
+        return event;
+    }
+
+    [[nodiscard]] static PlatformEvent Error(
+        ProgramEntryId programId,
+        std::string programName,
+        ConsoleSource source,
+        std::string text,
+        ExecutorMode executorMode = ExecutorMode::Run)
+    {
+        PlatformEvent event = Output(
+            programId,
+            std::move(programName),
+            source,
+            std::move(text),
+            executorMode);
+        event.kind = PlatformEventKind::Error;
+        return event;
+    }
+
+    [[nodiscard]] static PlatformEvent ExecutorExited(
+        ProgramEntryId programId,
+        std::string programName,
+        std::uint32_t exitCode,
+        ExecutorMode executorMode,
+        std::shared_ptr<const debug::DebugClientState> finalDebugState = {})
+    {
+        PlatformEvent event{};
+        event.kind = PlatformEventKind::ExecutorExited;
+        event.programId = programId;
+        event.programName = std::move(programName);
+        event.source = ConsoleSource::Runtime;
+        event.exitCode = exitCode;
+        event.executorMode = executorMode;
+        event.finalDebugState = std::move(finalDebugState);
+        return event;
+    }
 };
 
 class AppPlatform {
