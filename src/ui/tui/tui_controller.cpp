@@ -6,6 +6,8 @@
 namespace inputweaver::ui::tui {
 namespace {
 
+inline constexpr std::size_t kSourceHorizontalPanColumns = 4U;
+
 inline constexpr auto kValidationDelay = std::chrono::milliseconds{400};
 inline constexpr auto kDebugLaunchDelay = std::chrono::milliseconds{500};
 
@@ -756,9 +758,9 @@ void TuiController::HandleProgramPage(const KeyEvent& event)
     }
     if (programRegion_ == ProgramRegion::Source
         && IsCharacter(event, U'z') && SelectedProgram() != nullptr) {
-        programLayout_ = DocumentFullscreen()
-            ? ProgramLayout::Split
-            : ProgramLayout::DocumentFullscreen;
+        if (!DocumentFullscreen()) {
+            programLayout_ = ProgramLayout::DocumentFullscreen;
+        }
         return;
     }
     if (programRegion_ == ProgramRegion::Source
@@ -772,9 +774,9 @@ void TuiController::HandleProgramPage(const KeyEvent& event)
         if (documentView_ == DocumentView::Dump) {
             HandleViewport(dumpViewport_, event);
         } else if (event.key == Key::Left) {
-            sourceEditor_.Left();
+            sourceEditor_.PanLeft(kSourceHorizontalPanColumns);
         } else if (event.key == Key::Right) {
-            sourceEditor_.Right();
+            sourceEditor_.PanRight(kSourceHorizontalPanColumns);
         } else if (event.key == Key::Up) {
             sourceEditor_.Up();
         } else if (event.key == Key::Down) {

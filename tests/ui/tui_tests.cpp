@@ -467,6 +467,33 @@ void TestSupport()
     Check(
         reachedLastLine && sourceEditor.CursorLine() == 0U,
         "source viewer navigation reaches the first and last logical lines");
+    sourceEditor.Set("0123456789abcdef");
+    sourceEditor.PrepareView(
+        1U,
+        8U,
+        inputweaver::ui::tui::SourceHorizontalTracking::Manual);
+    sourceEditor.PanRight(4U);
+    const std::size_t manualColumn = sourceEditor.LeftColumn();
+    sourceEditor.Right();
+    sourceEditor.PrepareView(
+        1U,
+        8U,
+        inputweaver::ui::tui::SourceHorizontalTracking::Manual);
+    const std::size_t retainedColumn = sourceEditor.LeftColumn();
+    sourceEditor.PrepareView(
+        1U,
+        8U,
+        inputweaver::ui::tui::SourceHorizontalTracking::Cursor);
+    const std::size_t cursorColumn = sourceEditor.LeftColumn();
+    sourceEditor.End();
+    sourceEditor.PrepareView(
+        1U,
+        8U,
+        inputweaver::ui::tui::SourceHorizontalTracking::Cursor);
+    Check(
+        manualColumn == 4U && retainedColumn == 4U && cursorColumn == 1U
+            && sourceEditor.LeftColumn() == 9U,
+        "source view pans manually while editing keeps the cursor visible");
 
     inputweaver::ui::tui::SourceHighlightState highlightState{};
     const auto hasSpan = [](
@@ -1285,7 +1312,9 @@ void TestSourceEditorPage()
     FakePlatform platform;
     platform.dump.clear();
     platform.source =
-        "TARGET = GLOBAL;\nnumber count = 1;\nA:down => tap(B);";
+        "TARGET = GLOBAL; // 012345678901234567890123456789012345678901234567890123456789\n"
+        "number count = 1;\nA:down => tap(B);\n"
+        "abc界visible after a split wide character";
     platform.validation = {
         true,
         false,
@@ -1348,7 +1377,41 @@ void TestSourceEditorPage()
                 == colors.healthFault
             && sourceCanvas.Cells()[error].style.underline,
         "validation diagnostics render as red underlined source ranges");
+    controller.Handle({Key::Right, 0U});
+    const auto pannedSource = controller.Render(100U, 30U);
+    Check(
+        CanvasText(pannedSource).find("1 │ ET = GLOBAL;")
+                != std::string::npos
+            && CanvasText(pannedSource).find("4 │  visible")
+                != std::string::npos
+            && CanvasText(pannedSource).find("[↑]/[↓] Line")
+                != std::string::npos
+            && CanvasText(pannedSource).find("[←]/[→] Pan")
+                != std::string::npos,
+        "source browsing pans immediately without splitting wide characters");
+    controller.Handle({Key::Character, U']'});
+    controller.Handle({Key::Character, U'['});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("1 │ ET = GLOBAL;")
+            != std::string::npos,
+        "source horizontal position survives top-level page navigation");
+    controller.Handle({Key::Character, U'z'});
+    const std::string pannedFullscreen = CanvasText(controller.Render(100U, 30U));
+    controller.Handle({Key::Character, U'z'});
+    Check(
+        pannedFullscreen.find("DOCUMENT FULLSCREEN") != std::string::npos
+            && pannedFullscreen.find("1 │ ET = GLOBAL;")
+                != std::string::npos
+            && CanvasText(controller.Render(100U, 30U)).find("1 │ ET = GLOBAL;")
+                != std::string::npos,
+        "source horizontal position is shared by split and fullscreen layouts");
+    controller.Handle({Key::Left, 0U});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("1 │ TARGET = GLOBAL;")
+            != std::string::npos,
+        "source browsing pans back to the first display column");
 
+    controller.Handle({Key::Right, 0U});
     controller.Handle({Key::Character, U'e'});
     const auto splitEdit = controller.Render(100U, 30U);
     const std::size_t splitExit = FindAscii(splitEdit, "[Esc] Exit");
@@ -1357,19 +1420,33 @@ void TestSourceEditorPage()
             && CanvasText(splitEdit).find("[Enter] New Line")
                 == std::string::npos
             && CanvasText(splitEdit).find("NEXT RUN") == std::string::npos,
-        "split source editing places Escape at the top title's right edge");
+        "split source editing places Escape at the title edge");
+    Check(
+        CanvasText(splitEdit).find("1 │ ▏ARGET = GLOBAL;")
+            != std::string::npos,
+        "source editing reveals its cursor after manual browsing");
     controller.Handle({Key::Escape, 0U});
 
     controller.Handle({Key::Character, U'z'});
     const auto fullscreenView = controller.Render(100U, 30U);
+    const std::string fullscreenText = CanvasText(fullscreenView);
     Check(
-        CanvasText(fullscreenView).find("DOCUMENT FULLSCREEN")
+        fullscreenText.find("DOCUMENT FULLSCREEN") != std::string::npos
+            && fullscreenText.find("[↑]/[↓] Line") != std::string::npos
+            && fullscreenText.find("[←]/[→] Pan") != std::string::npos
+            && fullscreenText.find("[PgUp]/[PgDn] Page")
                 != std::string::npos
-            && CanvasText(fullscreenView).find("NEXT RUN")
+            && fullscreenText.find("[Home]/[End] First/Last")
                 != std::string::npos
-            && CanvasText(fullscreenView).find("[Space] Run")
-                != std::string::npos,
-        "fullscreen source keeps NEXT RUN at the bottom outside editing");
+            && fullscreenText.find("[Z] Split View") == std::string::npos
+            && fullscreenText.find("NEXT RUN") != std::string::npos
+            && fullscreenText.find("[Space] Run") != std::string::npos,
+        "fullscreen source shows complete browsing help and NEXT RUN");
+    controller.Handle({Key::Character, U'z'});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
+            != std::string::npos,
+        "Z leaves document fullscreen unchanged");
     controller.Handle({Key::Character, U']'});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,

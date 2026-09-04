@@ -244,6 +244,19 @@ void SourceEditor::LastLine() noexcept
     RememberColumn();
 }
 
+void SourceEditor::PanLeft(std::size_t columns) noexcept
+{
+    leftColumn_ -= (std::min)(leftColumn_, columns);
+}
+
+void SourceEditor::PanRight(std::size_t columns) noexcept
+{
+    const std::size_t maximum = MaximumLeftColumn(MaximumDisplayWidth());
+    if (leftColumn_ < maximum) {
+        leftColumn_ += (std::min)(maximum - leftColumn_, columns);
+    }
+}
+
 void SourceEditor::BeginSelection() noexcept
 {
     if (!selectionAnchor_.has_value()) {
@@ -258,19 +271,27 @@ void SourceEditor::ClearSelection() noexcept
 
 void SourceEditor::PrepareView(
     std::size_t visibleLines,
-    std::size_t visibleColumns)
+    std::size_t visibleColumns,
+    SourceHorizontalTracking horizontalTracking)
 {
     visibleLines_ = visibleLines;
+    visibleColumns_ = visibleColumns;
     if (cursorLine_ < topLine_) {
         topLine_ = cursorLine_;
     } else if (visibleLines != 0U && cursorLine_ >= topLine_ + visibleLines) {
         topLine_ = cursorLine_ - visibleLines + 1U;
     }
-    const std::size_t column = CursorDisplayColumn();
-    if (column < leftColumn_) {
-        leftColumn_ = column;
-    } else if (visibleColumns != 0U && column >= leftColumn_ + visibleColumns) {
-        leftColumn_ = column - visibleColumns + 1U;
+    if (horizontalTracking == SourceHorizontalTracking::Cursor) {
+        const std::size_t column = CursorDisplayColumn();
+        if (column < leftColumn_) {
+            leftColumn_ = column;
+        } else if (visibleColumns != 0U
+            && column >= leftColumn_ + visibleColumns) {
+            leftColumn_ = column - visibleColumns + 1U;
+        }
+        leftColumn_ = (std::min)(
+            leftColumn_,
+            MaximumLeftColumn(MaximumDisplayWidth() + 1U));
     }
 }
 
@@ -531,6 +552,32 @@ void SourceEditor::AdvanceRevision() noexcept
     if (revision_ == 0U) {
         ++revision_;
     }
+}
+
+std::size_t SourceEditor::MaximumDisplayWidth() const noexcept
+{
+    if (maximumDisplayWidthRevision_ == revision_) {
+        return maximumDisplayWidth_;
+    }
+    maximumDisplayWidth_ = 0U;
+    for (const std::string& line : lines_) {
+        maximumDisplayWidth_ = (std::max)(
+            maximumDisplayWidth_,
+            Utf8DisplayWidth(line));
+    }
+    maximumDisplayWidthRevision_ = revision_;
+    return maximumDisplayWidth_;
+}
+
+std::size_t SourceEditor::MaximumLeftColumn(
+    std::size_t contentWidth) const noexcept
+{
+    if (visibleColumns_ == 0U) {
+        return contentWidth == 0U ? 0U : contentWidth - 1U;
+    }
+    return contentWidth > visibleColumns_
+        ? contentWidth - visibleColumns_
+        : 0U;
 }
 
 } // namespace inputweaver::ui::tui

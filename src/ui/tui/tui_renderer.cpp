@@ -692,7 +692,12 @@ void RenderSource(
     const std::size_t codeWidth = body.width > gutterWidth
         ? body.width - gutterWidth
         : 1U;
-    editor.PrepareView(body.height, codeWidth);
+    editor.PrepareView(
+        body.height,
+        codeWidth,
+        editing
+            ? SourceHorizontalTracking::Cursor
+            : SourceHorizontalTracking::Manual);
 
     (void)highlights.Update(editor);
     for (std::size_t row = 0U; row < body.height; ++row) {
@@ -738,7 +743,7 @@ void RenderSource(
         Utf8CodePoint codePoint{};
         while (NextUtf8CodePoint(line, offset, codePoint)) {
             const std::size_t characterWidth = codePoint.displayWidth;
-            if (displayColumn + characterWidth <= editor.LeftColumn()) {
+            if (displayColumn < editor.LeftColumn()) {
                 displayColumn += characterWidth;
                 continue;
             }
@@ -916,22 +921,26 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     "[Esc] Regions"};
                 break;
             case ProgramRegion::Source:
-                headerKeys = DocumentFullscreen()
-                    ? std::vector<std::string>{
-                        "[E] Edit Source",
-                        "[Z] Split View",
-                        "[V] Source/Dump",
-                        "[X] Stop",
-                        "[Esc] Split View"}
-                    : std::vector<std::string>{
-                        "[↑]/[↓] Line",
-                        "[PgUp]/[PgDn] Page",
-                        "[Home]/[End] First/Last",
-                        "[E] Edit",
-                        "[Z] Fullscreen",
-                        "[V] Source/Dump",
-                        "[X] Stop",
-                        "[Esc] Regions"};
+                headerKeys = {
+                    "[↑]/[↓] Line",
+                    "[PgUp]/[PgDn] Page",
+                    "[Home]/[End] First/Last",
+                    "[E] Edit",
+                    "[V] Source/Dump",
+                    "[X] Stop",
+                    DocumentFullscreen()
+                        ? "[Esc] Split View"
+                        : "[Esc] Regions"};
+                if (documentView_ == DocumentView::Source) {
+                    headerKeys.insert(
+                        headerKeys.begin() + 1,
+                        "[←]/[→] Pan");
+                }
+                if (!DocumentFullscreen()) {
+                    headerKeys.insert(
+                        headerKeys.end() - 3,
+                        "[Z] Fullscreen");
+                }
                 break;
             }
             break;

@@ -74,7 +74,7 @@ Logging 有 `Off`、`Operational` 和 `Input Trace` 三种模式。启用日志�
 
 ### 源码与 Dump
 
-SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖向分隔线、当前行底色和语法高亮。浏览源码时，方向键和 `[PageUp]` / `[PageDown]` 移动视图位置，`[Home]` 跳到第一行，`[End]` 跳到最后一行。
+SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖向分隔线、当前行底色和语法高亮。浏览源码时，`[Left]` / `[Right]` 每次水平移动四个显示列，`[Up]` / `[Down]` 和 `[PageUp]` / `[PageDown]` 移动当前行，`[Home]` 跳到第一行，`[End]` 跳到最后一行。水平位置在分栏、文档全屏和顶层页面切换之间保留。
 
 语法颜色参考 Visual Studio Code 的默认配色并按 Weave 语义归类：
 
@@ -93,7 +93,7 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 
 `[V]` 在 Source 和 Compiled Dump 之间切换。没有已保存的 Dump 时，切换会立即调用编译器生成；生成失败会进入 Console。源码一旦保存，旧 Dump 会被移除，原 `.weavec` 文件可以暂时保留，但它的源码摘要不再匹配，因此不会被下一次运行复用。
 
-`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAM 和 PROGRAM INFORMATION，不改变前端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览；切换到其他顶层页面再返回 Program 时仍保持文档全屏。
+`[Z]` 从分栏进入文档全屏，`[Esc]` 返回分栏。这里的全屏只隐藏 PROGRAM 和 PROGRAM INFORMATION，不改变前端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都沿用分栏中的浏览按键；切换到其他顶层页面再返回 Program 时仍保持文档全屏。
 
 ### 源码编辑
 

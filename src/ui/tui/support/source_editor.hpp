@@ -10,6 +10,11 @@
 
 namespace inputweaver::ui::tui {
 
+enum class SourceHorizontalTracking : std::uint8_t {
+    Manual,
+    Cursor
+};
+
 class SourceEditor final {
 public:
     void Set(std::string_view source);
@@ -31,9 +36,14 @@ public:
     void End() noexcept;
     void FirstLine() noexcept;
     void LastLine() noexcept;
+    void PanLeft(std::size_t columns) noexcept;
+    void PanRight(std::size_t columns) noexcept;
     void BeginSelection() noexcept;
     void ClearSelection() noexcept;
-    void PrepareView(std::size_t visibleLines, std::size_t visibleColumns);
+    void PrepareView(
+        std::size_t visibleLines,
+        std::size_t visibleColumns,
+        SourceHorizontalTracking horizontalTracking);
 
     [[nodiscard]] std::string Text() const;
     [[nodiscard]] std::size_t LineCount() const noexcept;
@@ -87,6 +97,9 @@ private:
     void MoveVertical(std::ptrdiff_t lines) noexcept;
     void RememberColumn() noexcept;
     void AdvanceRevision() noexcept;
+    [[nodiscard]] std::size_t MaximumDisplayWidth() const noexcept;
+    [[nodiscard]] std::size_t MaximumLeftColumn(
+        std::size_t contentWidth) const noexcept;
 
     std::vector<std::string> lines_{1U};
     std::size_t cursorLine_{};
@@ -96,7 +109,10 @@ private:
     std::size_t topLine_{};
     std::size_t leftColumn_{};
     std::size_t visibleLines_{};
+    std::size_t visibleColumns_{};
     std::uint64_t revision_{1U};
+    mutable std::size_t maximumDisplayWidth_{};
+    mutable std::uint64_t maximumDisplayWidthRevision_{};
     std::optional<Position> selectionAnchor_;
     History undoHistory_;
     History redoHistory_;
