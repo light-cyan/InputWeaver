@@ -19,14 +19,8 @@ namespace inputweaver::ui::tui {
 
 enum class Page : std::uint8_t {
     Console,
-    Programs,
+    Program,
     Debug,
-};
-
-enum class DebugFocus : std::uint8_t {
-    Events,
-    Pressed,
-    Executions,
 };
 
 class TuiController final {
@@ -44,13 +38,31 @@ public:
     [[nodiscard]] Page CurrentPage() const noexcept;
 
 private:
-    enum class ProgramsState : std::uint8_t {
-        Programs,
+    enum class ProgramRegion : std::uint8_t {
+        List,
         Information,
         Source,
-        Fullscreen,
-        Editing,
-        FullscreenEditing,
+    };
+
+    enum class DebugRegion : std::uint8_t {
+        Events,
+        State,
+        Executions,
+    };
+
+    enum class RegionInteraction : std::uint8_t {
+        Selecting,
+        Active,
+    };
+
+    enum class ProgramLayout : std::uint8_t {
+        Split,
+        DocumentFullscreen,
+    };
+
+    enum class SourceMode : std::uint8_t {
+        Browse,
+        Edit,
     };
 
     enum class Mode : std::uint8_t {
@@ -78,6 +90,7 @@ private:
         app::ProgramEntryId id) const;
     void RefreshSnapshot();
     void SelectIndex(std::size_t index);
+    void ActivateSourceInSplitView() noexcept;
     void ReloadDocument();
     void ReloadDump();
     [[nodiscard]] bool FlushSource();
@@ -92,8 +105,11 @@ private:
     void ResetEditorCursorBlink() noexcept;
     void HandleModal(const KeyEvent& event);
     void HandleConsole(const KeyEvent& event);
-    void HandlePrograms(const KeyEvent& event);
+    void HandleProgramPage(const KeyEvent& event);
     void HandleDebug(const KeyEvent& event);
+    [[nodiscard]] bool HandlePageNavigation(const KeyEvent& event) noexcept;
+    void SelectProgramRegion(Key key) noexcept;
+    void SelectDebugRegion(Key key) noexcept;
     void HandleViewport(Viewport& viewport, const KeyEvent& event);
     void BeginLineEdit(Mode mode, std::string_view initial = {});
     void FinishProgramAddition();
@@ -109,9 +125,13 @@ private:
     app::Application& application_;
     ColorScheme colors_{};
     app::ApplicationSnapshot snapshot_{};
-    Page page_{Page::Programs};
-    ProgramsState programsState_{ProgramsState::Programs};
-    DebugFocus debugFocus_{DebugFocus::Events};
+    Page page_{Page::Program};
+    ProgramRegion programRegion_{ProgramRegion::List};
+    DebugRegion debugRegion_{DebugRegion::Events};
+    RegionInteraction programInteraction_{RegionInteraction::Selecting};
+    RegionInteraction debugInteraction_{RegionInteraction::Selecting};
+    ProgramLayout programLayout_{ProgramLayout::Split};
+    SourceMode sourceMode_{SourceMode::Browse};
     Mode mode_{Mode::None};
     std::size_t selectedIndex_{};
     std::size_t informationField_{};
@@ -139,7 +159,7 @@ private:
     Viewport programsViewport_;
     Viewport dumpViewport_;
     Viewport eventsViewport_;
-    Viewport pressedViewport_;
+    Viewport stateViewport_;
     Viewport executionsViewport_;
     std::chrono::steady_clock::time_point validationDue_{};
     std::chrono::steady_clock::time_point cursorVisibleSince_{

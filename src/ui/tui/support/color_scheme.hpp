@@ -19,11 +19,11 @@ struct ColorScheme final {
     RgbColor mutedText{};
     RgbColor unfocusedBorder{};
     RgbColor focusConsole{};
-    RgbColor focusPrograms{};
+    RgbColor focusProgram{};
     RgbColor focusProgramInformation{};
-    RgbColor focusSourceEditor{};
+    RgbColor focusSource{};
     RgbColor focusEvents{};
-    RgbColor focusPressed{};
+    RgbColor focusState{};
     RgbColor focusActionExecutions{};
     RgbColor selectionActiveForeground{};
     RgbColor selectionActiveBackground{};

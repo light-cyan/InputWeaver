@@ -679,6 +679,7 @@ void RenderSource(
     SourceHighlightDocument& highlights,
     std::span<const app::SourceDiagnostic> diagnostics,
     Rectangle body,
+    bool active,
     bool editing,
     std::chrono::steady_clock::time_point cursorVisibleSince,
     const ColorScheme& colors)
@@ -699,10 +700,11 @@ void RenderSource(
         if (lineIndex >= editor.LineCount()) {
             break;
         }
-        const bool current = lineIndex == editor.CursorLine();
+        const bool cursorLine = lineIndex == editor.CursorLine();
+        const bool activeLine = active && cursorLine;
         const bool errorLine = DiagnosticOnLine(diagnostics, lineIndex);
         TextStyle base = Foreground(colors.text);
-        if (current || errorLine) {
+        if (activeLine || errorLine) {
             base.background = errorLine
                 ? colors.editorErrorLine
                 : colors.editorCurrentLine;
@@ -717,7 +719,7 @@ void RenderSource(
             number.insert(0U, numberWidth - number.size(), ' ');
         }
         TextStyle gutter = Foreground(colors.mutedText);
-        if (current || errorLine) {
+        if (activeLine || errorLine) {
             gutter.background = base.background;
             gutter.hasBackground = true;
         }
@@ -795,7 +797,7 @@ void RenderSource(
                     errorStyle);
             }
         }
-        if (editing && current && EditorCursorVisible(cursorVisibleSince)) {
+        if (editing && cursorLine && EditorCursorVisible(cursorVisibleSince)) {
             const std::size_t cursorColumn = editor.CursorDisplayColumn();
             if (cursorColumn >= editor.LeftColumn()
                 && cursorColumn - editor.LeftColumn() < codeWidth) {
@@ -829,25 +831,27 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
     }
 
     std::string headerTitle;
+    std::string_view pageRail;
     RgbColor headerColor{};
     std::vector<std::string> headerKeys;
     if (page_ == Page::Console) {
-        headerTitle = "InputWeaver | CONSOLE";
+        pageRail = "‹[ CONSOLE · Program · Debug ]›";
+        headerTitle = "InputWeaver | " + std::string{pageRail};
         headerColor = colors_.focusConsole;
         headerKeys = {
             "[↑]/[↓] Line",
             "[PgUp]/[PgDn] Page",
             "[Home] First",
             "[End] Latest",
-            "[→] Programs",
-            "[Esc] Programs"};
-    } else if (page_ == Page::Programs) {
-        headerTitle = "InputWeaver | PROGRAMS";
-        headerColor = programsState_ == ProgramsState::Programs
-            ? colors_.focusPrograms
-            : programsState_ == ProgramsState::Information
+            "[Esc] Program"};
+    } else if (page_ == Page::Program) {
+        pageRail = "‹[ Console · PROGRAM · Debug ]›";
+        headerTitle = "InputWeaver | " + std::string{pageRail};
+        headerColor = programRegion_ == ProgramRegion::List
+            ? colors_.focusProgram
+            : programRegion_ == ProgramRegion::Information
                 ? colors_.focusProgramInformation
-                : colors_.focusSourceEditor;
+                : colors_.focusSource;
         if (DocumentFullscreen()) {
             headerTitle += " | DOCUMENT FULLSCREEN";
         }
@@ -887,59 +891,58 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             if (SourceEditing()) {
                 break;
             }
-            switch (programsState_) {
-            case ProgramsState::Programs:
+            if (programInteraction_ == RegionInteraction::Selecting) {
+                headerKeys = {
+                    "[Arrow Keys] Region",
+                    "[Enter] Enter",
+                    "[X] Stop",
+                    "[Esc] Background"};
+                break;
+            }
+            switch (programRegion_) {
+            case ProgramRegion::List:
                 headerKeys = {
                     "[↑]/[↓] Select",
                     "[A] Add",
                     "[D] Delete",
                     "[M] Move",
-                    "[Enter] Configure",
                     "[X] Stop",
-                    "[Tab] Focus",
-                    "[←] Console",
-                    "[→] Debug",
-                    "[Esc] Background"};
+                    "[Esc] Regions"};
                 break;
-            case ProgramsState::Information:
+            case ProgramRegion::Information:
                 headerKeys = {
                     "[↑]/[↓] Field",
                     "[Enter] Edit",
-                    "[Tab] Source",
-                    "[Esc] Programs"};
+                    "[Esc] Regions"};
                 break;
-            case ProgramsState::Source:
-                headerKeys = {
-                    "[↑]/[↓] Line",
-                    "[PgUp]/[PgDn] Page",
-                    "[Home]/[End] First/Last",
-                    "[E] Edit",
-                    "[Z] Fullscreen",
-                    "[V] Source/Dump",
-                    "[X] Stop",
-                    "[Tab] Programs",
-                    "[Esc] Programs"};
-                break;
-            case ProgramsState::Fullscreen:
-                headerKeys = {
-                    "[E] Edit Source",
-                    "[Z] Split View",
-                    "[V] Source/Dump",
-                    "[X] Stop",
-                    "[Esc] Split View"};
-                break;
-            case ProgramsState::Editing:
-            case ProgramsState::FullscreenEditing:
+            case ProgramRegion::Source:
+                headerKeys = DocumentFullscreen()
+                    ? std::vector<std::string>{
+                        "[E] Edit Source",
+                        "[Z] Split View",
+                        "[V] Source/Dump",
+                        "[X] Stop",
+                        "[Esc] Split View"}
+                    : std::vector<std::string>{
+                        "[↑]/[↓] Line",
+                        "[PgUp]/[PgDn] Page",
+                        "[Home]/[End] First/Last",
+                        "[E] Edit",
+                        "[Z] Fullscreen",
+                        "[V] Source/Dump",
+                        "[X] Stop",
+                        "[Esc] Regions"};
                 break;
             }
             break;
         }
     } else {
-        headerTitle = "InputWeaver | DEBUG";
-        headerColor = debugFocus_ == DebugFocus::Events
+        pageRail = "‹[ Console · Program · DEBUG ]›";
+        headerTitle = "InputWeaver | " + std::string{pageRail};
+        headerColor = debugRegion_ == DebugRegion::Events
             ? colors_.focusEvents
-            : debugFocus_ == DebugFocus::Pressed
-                ? colors_.focusPressed
+            : debugRegion_ == DebugRegion::State
+                ? colors_.focusState
                 : colors_.focusActionExecutions;
         const app::ProgramEntryId displayedDebugId =
             snapshot_.debugProgramId != app::kInvalidProgramEntryId
@@ -962,18 +965,27 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         } else if (pendingDebugRun_.has_value()) {
             headerTitle += " | STARTING";
         }
-        std::string focusKey = debugFocus_ == DebugFocus::Events
-            ? "Event"
-            : debugFocus_ == DebugFocus::Pressed ? "State Row" : "Execution";
-        headerKeys = {
-            "[↑]/[↓] " + focusKey,
-            "[PgUp]/[PgDn] Page",
-            "[Home]/[End] Edge",
-            "[Tab] Region",
-            "[C] Start/Stop Capture",
-            "[X] Stop Executor",
-            "[←] Programs",
-            "[Esc] Programs"};
+        if (debugInteraction_ == RegionInteraction::Selecting) {
+            headerKeys = {
+                "[Arrow Keys] Region",
+                "[Enter] Enter",
+                "[C] Start/Stop Capture",
+                "[X] Stop Executor",
+                "[Esc] Program"};
+        } else {
+            std::string focusKey = debugRegion_ == DebugRegion::Events
+                ? "Event"
+                : debugRegion_ == DebugRegion::State
+                    ? "State Row"
+                    : "Execution";
+            headerKeys = {
+                "[↑]/[↓] " + focusKey,
+                "[PgUp]/[PgDn] Page",
+                "[Home]/[End] Edge",
+                "[C] Start/Stop Capture",
+                "[X] Stop Executor",
+                "[Esc] Regions"};
+        }
     }
     StyledLine headerSegments;
     if (!statusMessage_.empty()) {
@@ -996,9 +1008,20 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         {0U, 0U, width, headerHeight},
         headerTitle,
         headerColor,
-        headerColor,
+        colors_.mutedText,
         colors_.text);
-    if (page_ == Page::Programs && SourceEditing()) {
+    const std::size_t pageRailByte = headerTitle.find(pageRail);
+    if (pageRailByte != std::string::npos) {
+        const std::size_t pageRailX = 2U + Utf8DisplayWidth(
+            std::string_view{headerTitle}.substr(0U, pageRailByte));
+        canvas.Text(
+            pageRailX,
+            0U,
+            pageRail,
+            Utf8DisplayWidth(pageRail),
+            Foreground(headerColor));
+    }
+    if (page_ == Page::Program && SourceEditing()) {
         constexpr std::string_view exitLabel = "[Esc] Exit";
         const std::size_t labelWidth = Utf8DisplayWidth(exitLabel);
         canvas.Text(
@@ -1060,7 +1083,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     innerWidth,
                     Foreground(colors_.text));
             });
-    } else if (page_ == Page::Programs) {
+    } else if (page_ == Page::Program) {
         const std::array<std::pair<std::string, RgbColor>, 4U> options{{
             {"[T] Trace and Debug: " + OnOff(nextRun_.debug),
              nextRun_.debug ? colors_.statusDebug : colors_.mutedText},
@@ -1105,6 +1128,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     sourceHighlights_,
                     sourceDiagnostics_,
                     body,
+                    programInteraction_ == RegionInteraction::Active
+                        && programRegion_ == ProgramRegion::Source,
                     SourceEditing(),
                     cursorVisibleSince_,
                     colors_);
@@ -1136,8 +1161,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             canvas.Box(
                 editorBox,
                 documentTitle,
-                colors_.focusSourceEditor,
-                colors_.focusSourceEditor,
+                colors_.focusSource,
+                colors_.focusSource,
                 colors_.text);
             const Rectangle documentBody{
                 1U,
@@ -1152,24 +1177,23 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 static_cast<std::size_t>(26U),
                 width * 3U / 10U);
             const std::size_t rightWidth = width - leftWidth;
-            const RgbColor programsBorder = RegionBorder(
-                programsState_ == ProgramsState::Programs,
-                colors_.focusPrograms,
+            const RgbColor programBorder = RegionBorder(
+                programRegion_ == ProgramRegion::List,
+                colors_.focusProgram,
                 colors_);
             const RgbColor informationBorder = RegionBorder(
-                programsState_ == ProgramsState::Information,
+                programRegion_ == ProgramRegion::Information,
                 colors_.focusProgramInformation,
                 colors_);
             const RgbColor sourceBorder = RegionBorder(
-                programsState_ == ProgramsState::Source
-                    || programsState_ == ProgramsState::Editing,
-                colors_.focusSourceEditor,
+                programRegion_ == ProgramRegion::Source,
+                colors_.focusSource,
                 colors_);
             canvas.Box(
                 {0U, contentTop, leftWidth, contentHeight},
-                "PROGRAMS",
-                programsBorder,
-                programsBorder,
+                "PROGRAM",
+                programBorder,
+                programBorder,
                 colors_.text);
             canvas.Box(
                 {leftWidth, contentTop, rightWidth, 6U},
@@ -1178,7 +1202,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 informationBorder,
                 colors_.text);
             canvas.Box(
-                {leftWidth, contentTop + 5U, rightWidth, contentHeight - 5U},
+                {leftWidth, contentTop + 6U, rightWidth, contentHeight - 6U},
                 documentTitle,
                 sourceBorder,
                 sourceBorder,
@@ -1194,11 +1218,14 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     break;
                 }
                 const bool selectedRow = index == selectedIndex_;
+                const bool programListActive =
+                    programInteraction_ == RegionInteraction::Active
+                    && programRegion_ == ProgramRegion::List;
                 const TextStyle selectedStyle = {
-                    programsState_ == ProgramsState::Programs
+                    programListActive
                         ? colors_.selectionActiveForeground
                         : colors_.selectionInactiveForeground,
-                    programsState_ == ProgramsState::Programs
+                    programListActive
                         ? colors_.selectionActiveBackground
                         : colors_.selectionInactiveBackground,
                     true,
@@ -1266,7 +1293,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 std::array<TextStyle, 3U> fieldStyles;
                 for (std::size_t field = 0U; field < fieldStyles.size(); ++field) {
                     fieldStyles[field] = Foreground(
-                        programsState_ == ProgramsState::Information
+                        programInteraction_ == RegionInteraction::Active
+                                && programRegion_ == ProgramRegion::Information
                                 && informationField_ == field
                             ? colors_.focusProgramInformation
                             : colors_.text);
@@ -1362,9 +1390,9 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
 
             const Rectangle documentBody{
                 leftWidth + 1U,
-                contentTop + 6U,
+                contentTop + 7U,
                 rightWidth - 2U,
-                contentHeight - 7U};
+                contentHeight - 8U};
             renderDocument(documentBody);
         }
         if (showNextRun) {
@@ -1397,15 +1425,15 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             bodyHeight * 2U / 5U);
         const std::size_t leftWidth = width * 2U / 3U;
         const RgbColor eventsBorder = RegionBorder(
-            debugFocus_ == DebugFocus::Events,
+            debugRegion_ == DebugRegion::Events,
             colors_.focusEvents,
             colors_);
-        const RgbColor pressedBorder = RegionBorder(
-            debugFocus_ == DebugFocus::Pressed,
-            colors_.focusPressed,
+        const RgbColor stateBorder = RegionBorder(
+            debugRegion_ == DebugRegion::State,
+            colors_.focusState,
             colors_);
         const RgbColor executionBorder = RegionBorder(
-            debugFocus_ == DebugFocus::Executions,
+            debugRegion_ == DebugRegion::Executions,
             colors_.focusActionExecutions,
             colors_);
         const app::ExecutorInfo* debugExecutor = ExecutorFor(
@@ -1419,12 +1447,11 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         canvas.Box(
             {leftWidth, bodyTop, width - leftWidth, topHeight},
             "STATE",
-            pressedBorder,
-            pressedBorder,
+            stateBorder,
+            stateBorder,
             colors_.text);
         canvas.Box(
-            {0U, bodyTop + topHeight - 1U, width,
-             bodyHeight - topHeight + 1U},
+            {0U, bodyTop + topHeight, width, bodyHeight - topHeight},
             "ACTION EXECUTIONS",
             executionBorder,
             executionBorder,
@@ -1445,7 +1472,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                         Foreground(colors_.text));
                 });
 
-            const std::size_t pressedWidth = width - leftWidth - 2U;
+            const std::size_t stateWidth = width - leftWidth - 2U;
             std::vector<std::string> stateCells;
             for (const debug::DebugVariableState& value : debugState->values) {
                 if (value.name == "PAUSE") {
@@ -1477,9 +1504,9 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             };
             for (std::string& cell : stateCells) {
                 const std::size_t cellWidth = Utf8DisplayWidth(cell);
-                if (cellWidth > pressedWidth) {
+                if (cellWidth > stateWidth) {
                     finishStateLine();
-                    for (std::string& line : WrapUtf8(cell, pressedWidth, 2U)) {
+                    for (std::string& line : WrapUtf8(cell, stateWidth, 2U)) {
                         StateLine wrapped;
                         wrapped.emplace_back(0U, std::move(line));
                         stateRows.push_back(std::move(wrapped));
@@ -1491,7 +1518,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     ? 0U
                     : usedWidth + gap;
                 if (!stateLine.empty()
-                    && offset + cellWidth > pressedWidth) {
+                    && offset + cellWidth > stateWidth) {
                     finishStateLine();
                 }
                 const std::size_t placedAt = stateLine.empty()
@@ -1501,24 +1528,24 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 usedWidth = placedAt + cellWidth;
             }
             finishStateLine();
-            const std::size_t pressedVisible = topHeight - 2U;
+            const std::size_t stateVisible = topHeight - 2U;
             RenderViewportRows(
-                pressedViewport_,
+                stateViewport_,
                 stateRows.size(),
-                pressedVisible,
+                stateVisible,
                 [&](std::size_t row, std::size_t sourceRow) {
                     for (const auto& [offset, text] : stateRows[sourceRow]) {
                         canvas.Text(
                             leftWidth + 1U + offset,
                             bodyTop + 1U + row,
                             text,
-                            pressedWidth - offset,
+                            stateWidth - offset,
                             Foreground(colors_.text));
                     }
                 });
 
             const std::size_t executionWidth = width - 2U;
-            const std::size_t executionVisible = bodyHeight - topHeight - 1U;
+            const std::size_t executionVisible = bodyHeight - topHeight - 2U;
             const std::vector<StyledLine> executionLines = ExecutionLines(
                 *debugState,
                 executionWidth,
@@ -1531,7 +1558,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     RenderStyledLine(
                         canvas,
                         1U,
-                        bodyTop + topHeight + row,
+                        bodyTop + topHeight + 1U + row,
                         executionWidth,
                         executionLines[index]);
                 });

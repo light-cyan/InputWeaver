@@ -8,36 +8,38 @@
 
 Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip`，进入其中的 `InputWeaver` 文件夹并运行 `InputWeaverHost.exe`。不要在 ZIP 内直接运行，也不要拆散同目录中的四个 EXE 和 `res` 文件夹；发行版已静态链接 MinGW 的 GCC 与 C++ 运行库，不要求目标电脑安装 MinGW。源码仓库的维护者可以运行 `script\package_release.bat`，在 `bin\release\` 中重新生成同样的目录和 ZIP。
 
-前端窗口至少保留 `80x24` 个文本单元格。程序启动后进入 Programs 页；Programs、Console 和 Debug 是三个顶层页面。顶部边框显示当前页面、当前程序或当前文档模式，边框颜色表示当前焦点区域；普通模式下，可用按键说明显示在顶部边框内。
+前端窗口至少保留 `80x24` 个文本单元格。程序启动后进入 Program 页；Program、Console 和 Debug 是三个顶层页面。顶部边框使用 `InputWeaver | ‹[ Console · PROGRAM · Debug ]›` 形式显示固定页面顺序，当前页面使用大写，整段页面轨道使用当前页面或区域颜色突出显示；普通模式下，可用按键说明显示在顶部边框内。
 
 顶层页面之间的移动如下：
 
 | 当前页面 | 按键 | 结果 |
 | --- | --- | --- |
-| Programs | `[Left]` | 进入 Console；文档全屏时不切页 |
-| Programs | `[Right]` | 进入 Debug；文档全屏时不切页 |
-| Console | `[Right]` 或 `[Esc]` | 返回 Programs |
-| Debug | `[Left]` 或 `[Esc]` | 返回 Programs |
+| Program | `[` | 进入 Console |
+| Program | `]` | 进入 Debug |
+| Console | `]` 或 `[Esc]` | 返回 Program |
+| Debug | `[` | 返回 Program |
 
-`[Esc]` 同时承担逐层退出：源码编辑时先退出编辑，文档全屏时再退出全屏，Program Information 或 Source 获得焦点时返回程序列表，最后从 Programs 的程序列表进入后台并隐藏到系统托盘。进入后台不停止正在运行的执行器。
+页面顺序固定为 Console、Program、Debug，并且不会从两端循环。页面切换只改变当前显示的页面；各页面的区域选择、区域进入、滚动、字段、源码和文档全屏状态保持不变。弹窗、确认、选项选择和单行输入期间不会切页；源码编辑中的 `[` 和 `]` 作为源码字符输入。
+
+`[Esc]` 同时承担逐层退出：源码编辑时先退出编辑，文档全屏时再退出全屏，已进入 Program 或 Debug 区域时返回该页的区域选择，Debug 区域选择和 Console 返回 Program，最后从 Program 区域选择进入后台并隐藏到系统托盘。进入后台不停止正在运行的执行器。
 
 ## 系统托盘与后台运行
 
-托盘宿主启动后会在 Windows 系统通知区注册 InputWeaver 图标，并启动一个拥有自身 Win32 窗口的独立前端。前端进程直接拥有窗口和任务栏按钮，两处都使用 InputWeaver 图标。最小化前端窗口会将其保留在任务栏；在 Programs 程序列表按 `[Esc]` 或关闭前端窗口，会结束这个前端并使其从任务栏消失。托盘宿主、应用状态和已启动执行器保持运行。
+托盘宿主启动后会在 Windows 系统通知区注册 InputWeaver 图标，并启动一个拥有自身 Win32 窗口的独立前端。前端进程直接拥有窗口和任务栏按钮，两处都使用 InputWeaver 图标。最小化前端窗口会将其保留在任务栏；在 Program 区域选择状态按 `[Esc]` 或关闭前端窗口，会结束这个前端并使其从任务栏消失。托盘宿主、应用状态和已启动执行器保持运行。
 
 单击或双击托盘图标会恢复并聚焦正常响应的前端，或回收失联前端并创建新的前端以恢复原有 TUI 状态。右击托盘图标可以选择 `Show TUI` 或 `Hide TUI`；选择 `Exit InputWeaver` 才会真正退出托盘宿主，并请求停止本次 TUI 管理的全部执行器。运行中的前端故障通过托盘通知报告，不会用模态对话框阻塞托盘操作；源码保存失败时，前端保持打开，以便查看错误。
 
 请始终启动 `InputWeaverHost.exe`。`InputWeaverTUI.exe` 是由托盘宿主按需启动的内部前端，只能继承宿主明确提供的两条进程间通信管道，不作为独立入口使用。
 
-## Programs 页
+## Program 页
 
-Programs 页的分栏布局由左侧 PROGRAMS、右上 PROGRAM INFORMATION、右下 SOURCE 或 COMPILED DUMP，以及底部 NEXT RUN 组成。按 `[Tab]` 在程序列表、程序信息和源码区域之间循环切换焦点；当前焦点由边框颜色表示。
+Program 页的分栏布局由左侧 PROGRAM、右上 PROGRAM INFORMATION、右下 SOURCE 或 COMPILED DUMP，以及底部 NEXT RUN 组成。页面首先处于区域选择状态，方向键按照区域的实际位置移动选择：PROGRAM 的 `[Right]` 进入 PROGRAM INFORMATION，PROGRAM INFORMATION 的 `[Left]` 返回 PROGRAM、`[Down]` 进入 SOURCE，SOURCE 的 `[Left]` 返回 PROGRAM、`[Up]` 进入 PROGRAM INFORMATION。按 `[Enter]` 进入所选区域后，方向键操作该区域的内容；按 `[Esc]` 返回区域选择。当前所选区域由边框颜色表示。
 
-运行中的程序在列表右侧显示状态标签：普通执行器为 `[RUN]`，Debug 执行器为 `[DBG]`，无注入模拟增加 `[DRY]`，已授予 `exec` 权限增加 `[EXEC]`。所选程序行始终使用反色显示；焦点不在程序列表时使用较弱的反色。
+运行中的程序在列表右侧显示状态标签：普通执行器为 `[RUN]`，Debug 执行器为 `[DBG]`，无注入模拟增加 `[DRY]`，已授予 `exec` 权限增加 `[EXEC]`。所选程序行始终使用反色显示；未进入 PROGRAM 区域时使用较弱的反色。
 
-### Programs
+### Program
 
-下列程序管理按键只在 PROGRAMS 列表获得焦点时生效：
+下列程序管理按键只在进入 PROGRAM 区域后生效：
 
 | 按键 | 功能 |
 | --- | --- |
@@ -45,7 +47,6 @@ Programs 页的分栏布局由左侧 PROGRAMS、右上 PROGRAM INFORMATION、右
 | `[A]` | 打开居中的横向 Add Program 选择栏 |
 | `[D]` | 确认删除所选程序 |
 | `[M]` | 进入排序模式 |
-| `[Enter]` | 进入 Program Information |
 
 Add Program 使用 `[Left]` / `[Right]` 选择 `New Blank`、`Import .weave` 或 `Cancel`，再按 `[Enter]` 确认。新建空白程序会创建一个空白的可编辑 `.weave` 副本，不会预先编译。导入只接受一个现有 `.weave` 文件，路径输入支持正常键入、`[Ctrl+V]` 粘贴以及向前端窗口拖放文件。
 
@@ -92,7 +93,7 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 
 `[V]` 在 Source 和 Compiled Dump 之间切换。没有已保存的 Dump 时，切换会立即调用编译器生成；生成失败会进入 Console。源码一旦保存，旧 Dump 会被移除，原 `.weavec` 文件可以暂时保留，但它的源码摘要不再匹配，因此不会被下一次运行复用。
 
-`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAMS、PROGRAM INFORMATION 和 NEXT RUN，不改变前端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览。
+`[Z]` 切换文档全屏。这里的全屏只隐藏 PROGRAM 和 PROGRAM INFORMATION，不改变前端窗口状态。进入全屏不会自动进入编辑，源码和 Dump 都可以全屏浏览；切换到其他顶层页面再返回 Program 时仍保持文档全屏。
 
 ### 源码编辑
 
@@ -118,7 +119,7 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 
 ### 自动保存、校验和编译
 
-停止编辑约 400 毫秒后，TUI 会把源码保存到程序库，并调用 `InputWeaverCompiler.exe validate` 完成与正式编译相同的词法、语法、语义和类型检查，但不写出 `.weavec`。离开编辑、切换程序或焦点、生成 Dump、运行和删除前也会先保存当前源码。
+停止编辑约 400 毫秒后，TUI 会把源码保存到程序库，并调用 `InputWeaverCompiler.exe validate` 完成与正式编译相同的词法、语法、语义和类型检查，但不写出 `.weavec`。离开编辑、切换程序、生成 Dump、运行和删除前也会先保存当前源码。
 
 校验错误所在的整行使用暗红底色，诊断对应的源码区间使用亮红色并带下划线。自动校验只更新源码视图，不会因为普通语法错误抢走当前页面；保存失败、生成 Dump 失败、正式编译失败或运行启动失败会切换到 Console，并保留完整输出。
 
@@ -135,7 +136,7 @@ TUI 没有独立的编译按键。按 `[Space]` 运行时，如果 `.weavec` 不
 | `[P]` | Authorize Execution Permission | 使用 `--allow-exec` 授权当前运行执行 `exec` |
 | `[Space]` | Run | 使用当前三个选项运行所选程序 |
 
-`[T]`、`[S]`、`[P]`、`[Space]` 和 `[X]` 在 Programs 页的任意非编辑焦点中都可使用。成功启动后 NEXT RUN 选项恢复为关闭。`[X]` 请求停止所选程序的执行器；每个程序最多有一个执行器，不同程序可以同时普通运行，整个应用最多管理一个 Debug 执行器。启动另一个程序的 Debug 时，当前 Debug 执行器会先被停止。
+`[T]`、`[S]`、`[P]`、`[Space]` 和 `[X]` 在 Program 页的区域选择和任意非编辑区域中都可使用。所选程序已经运行时，`[Space]` 保持当前页面和 NEXT RUN 选项不变；成功启动后 NEXT RUN 选项恢复为关闭。`[X]` 请求停止所选程序的执行器；每个程序最多有一个执行器，不同程序可以同时普通运行，整个应用最多管理一个 Debug 执行器。启动另一个程序的 Debug 时，当前 Debug 执行器会先被停止。
 
 选择 Trace and Debug 后按 `[Space]`，TUI 会立即切换到 Debug 页，并等待 500 毫秒后再保存后的正式编译、启动执行器和建立捕获，让启动按键有时间释放。等待期间 Debug 标题显示 `STARTING`，`[X]` 可以取消待启动操作。
 
@@ -159,13 +160,13 @@ Console 汇总应用、编译器和执行器输出。连续的同程序、同来
 
 应用操作失败、编译或运行启动失败、执行器写入标准错误，或者执行器以非零代码退出时，TUI 会自动切换到 Console 并保留对应输出。普通运行信息不会抢走当前页面，源码自动校验诊断仍留在源码视图中。
 
-使用 `[Up]` / `[Down]` 逐行滚动，`[PageUp]` / `[PageDown]` 整页滚动，`[Home]` 跳到第一行，`[End]` 跳到最新一行，`[Right]` 或 `[Esc]` 返回 Programs。
+使用 `[Up]` / `[Down]` 逐行滚动，`[PageUp]` / `[PageDown]` 整页滚动，`[Home]` 跳到第一行，`[End]` 跳到最新一行，`]` 或 `[Esc]` 返回 Program。
 
 ## Debug 页
 
-Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。`[Tab]` 在前三个可滚动区域之间循环切换焦点；方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动当前区域。
+Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。页面首先处于区域选择状态：EVENTS 的 `[Right]` 进入 STATE、`[Down]` 进入 ACTION EXECUTIONS，STATE 的 `[Left]` 返回 EVENTS、`[Down]` 进入 ACTION EXECUTIONS，ACTION EXECUTIONS 的 `[Up]` 返回 EVENTS。按 `[Enter]` 进入所选区域后，方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动该区域；按 `[Esc]` 返回区域选择。
 
-`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器。`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。`[Left]` 或 `[Esc]` 返回 Programs。
+`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器。`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。`[` 返回 Program；区域选择状态下也可以使用 `[Esc]` 返回 Program。
 
 ### EVENTS
 

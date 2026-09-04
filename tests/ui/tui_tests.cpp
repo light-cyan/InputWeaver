@@ -52,9 +52,10 @@ void Check(bool condition, std::string_view name)
 
 [[nodiscard]] std::size_t FindAscii(
     const inputweaver::ui::tui::Canvas& canvas,
-    std::string_view text)
+    std::string_view text,
+    std::size_t firstRow = 0U)
 {
-    for (std::size_t row = 0U; row < canvas.Height(); ++row) {
+    for (std::size_t row = firstRow; row < canvas.Height(); ++row) {
         for (std::size_t column = 0U;
              column + text.size() <= canvas.Width();
              ++column) {
@@ -72,6 +73,63 @@ void Check(bool condition, std::string_view name)
         }
     }
     return canvas.Cells().size();
+}
+
+[[nodiscard]] bool BodyBorderHasColor(
+    const inputweaver::ui::tui::Canvas& canvas,
+    std::string_view title,
+    inputweaver::ui::tui::RgbColor color)
+{
+    const std::size_t titlePosition = FindAscii(canvas, title, 1U);
+    if (titlePosition >= canvas.Cells().size()
+        || titlePosition % canvas.Width() < 2U) {
+        return false;
+    }
+    const inputweaver::ui::tui::Cell& border =
+        canvas.Cells()[titlePosition - 2U];
+    return border.codePoint == U'┌' && border.style.foreground == color;
+}
+
+[[nodiscard]] bool BodyBordersSelect(
+    const inputweaver::ui::tui::Canvas& canvas,
+    std::span<const std::string_view> titles,
+    std::string_view selectedTitle,
+    inputweaver::ui::tui::RgbColor selectedColor,
+    inputweaver::ui::tui::RgbColor unfocusedColor)
+{
+    return std::all_of(
+        titles.begin(),
+        titles.end(),
+        [&](std::string_view title) {
+            return BodyBorderHasColor(
+                canvas,
+                title,
+                title == selectedTitle ? selectedColor : unfocusedColor);
+        });
+}
+
+[[nodiscard]] bool UpperBoxClosesBefore(
+    const inputweaver::ui::tui::Canvas& canvas,
+    std::string_view upperTitle,
+    std::string_view lowerTitle,
+    inputweaver::ui::tui::RgbColor color)
+{
+    const std::size_t upper = FindAscii(canvas, upperTitle, 1U);
+    const std::size_t lower = FindAscii(canvas, lowerTitle, 1U);
+    if (upper >= canvas.Cells().size() || lower >= canvas.Cells().size()
+        || upper % canvas.Width() < 2U) {
+        return false;
+    }
+    const std::size_t upperX = upper % canvas.Width() - 2U;
+    const std::size_t upperRow = upper / canvas.Width();
+    const std::size_t lowerRow = lower / canvas.Width();
+    if (lowerRow <= upperRow + 1U) {
+        return false;
+    }
+    const inputweaver::ui::tui::Cell& lowerLeft =
+        canvas.Cells()[(lowerRow - 1U) * canvas.Width() + upperX];
+    return lowerLeft.codePoint == U'└'
+        && lowerLeft.style.foreground == color;
 }
 
 class FakePlatform final : public inputweaver::app::AppPlatform {
@@ -857,7 +915,7 @@ void TestController()
          "compiler output",
          0U}};
     controller.Tick();
-    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Character, U'['});
     const std::string consoleText = CanvasText(controller.Render(80U, 24U));
     const std::size_t runtimeIdentity = consoleText.find("[Game][Runtime]");
     const std::size_t firstOutput = consoleText.find("first output");
@@ -872,7 +930,7 @@ void TestController()
             && secondOutput < compilerIdentity,
         "Console renders one identity line for each consecutive source group");
     controller.Handle({Key::Escape, 0U});
-    controller.Handle({Key::Right, 0U});
+    controller.Handle({Key::Character, U']'});
     const auto inactiveDebug = controller.Render(80U, 24U);
     const std::string inactiveDebugText = CanvasText(inactiveDebug);
     Check(
@@ -882,27 +940,27 @@ void TestController()
                 == colors.text
             && inactiveDebugText.find("Epoch") == std::string::npos,
         "inactive HEALTH uses ordinary colors and omits capture epochs");
-    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Character, U'['});
     const auto canvas = controller.Render(80U, 30U);
     Check(
         canvas.Width() == 80U && canvas.Height() == 30U,
-        "Programs page renders to requested dimensions");
-    const auto minimumPrograms = controller.Render(80U, 24U);
+        "Program page renders to requested dimensions");
+    const auto minimumProgram = controller.Render(80U, 24U);
     Check(
-        minimumPrograms.Cells()[20U * 80U].codePoint == U'┌'
-            && minimumPrograms.Cells()[23U * 80U].codePoint == U'└',
+        minimumProgram.Cells()[20U * 80U].codePoint == U'┌'
+            && minimumProgram.Cells()[23U * 80U].codePoint == U'└',
         "NEXT RUN remains boxed at the minimum viewport size");
     Check(
-        CanvasText(minimumPrograms).find("[E] Edit") == std::string::npos
-            && CanvasText(minimumPrograms).find("[Z] Fullscreen")
+        CanvasText(minimumProgram).find("[E] Edit") == std::string::npos
+            && CanvasText(minimumProgram).find("[Z] Fullscreen")
                 == std::string::npos
-            && CanvasText(minimumPrograms).find("[C] Compile")
+            && CanvasText(minimumProgram).find("[C] Compile")
                 == std::string::npos
-            && CanvasText(minimumPrograms).find("[V] Source/Dump")
+            && CanvasText(minimumProgram).find("[V] Source/Dump")
                 == std::string::npos
-            && FindAscii(minimumPrograms, "[Space] Run") / 80U >= 20U,
-        "Programs header omits document commands while NEXT RUN owns Run");
-    const std::size_t offModePosition = FindAscii(minimumPrograms, "[S]");
+            && FindAscii(minimumProgram, "[Space] Run") / 80U >= 20U,
+        "Program header omits document commands while NEXT RUN owns Run");
+    const std::size_t offModePosition = FindAscii(minimumProgram, "[S]");
     controller.Handle({
         Key::Character,
         U'd',
@@ -913,9 +971,20 @@ void TestController()
         0U,
         false,
         inputweaver::ui::tui::KeyEventSource::Paste});
+    controller.Handle({
+        Key::Character,
+        U'[',
+        false,
+        inputweaver::ui::tui::KeyEventSource::Paste});
+    controller.Handle({
+        Key::Character,
+        U']',
+        false,
+        inputweaver::ui::tui::KeyEventSource::Drop});
     Check(
-        application.ReadSnapshot().programs.size() == 1U,
-        "pasted text cannot execute Programs commands or confirmations");
+        application.ReadSnapshot().programs.size() == 1U
+            && controller.CurrentPage() == inputweaver::ui::tui::Page::Program,
+        "paste and drop cannot execute Program commands or page navigation");
     controller.Handle({Key::Character, U't'});
     const auto enabledMode = controller.Render(80U, 24U);
     Check(
@@ -923,6 +992,7 @@ void TestController()
         "fixed-width ON and OFF labels keep NEXT RUN positions stable");
     controller.Handle({Key::Character, U't'});
 
+    controller.Handle({Key::Right, 0U});
     controller.Handle({Key::Enter, 0U});
     const auto informationCanvas = controller.Render(80U, 24U);
     Check(
@@ -933,8 +1003,21 @@ void TestController()
             && CanvasText(informationCanvas).find("[X] Stop")
                 == std::string::npos,
         "information focus shows only information editing commands");
+    controller.Handle({Key::Enter, 0U});
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program
+            && CanvasText(controller.Render(80U, 24U)).find("[]")
+                != std::string::npos,
+        "brackets remain text while editing an information field");
+    controller.Handle({Key::Escape, 0U});
     controller.Handle({Key::Down, 0U});
     controller.Handle({Key::Enter, 0U});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program,
+        "option selection captures bracket page navigation");
     controller.Handle({Key::Down, 0U});
     controller.Handle({Key::Enter, 0U});
     for (const char character : std::string{"game.exe"}) {
@@ -951,6 +1034,28 @@ void TestController()
                 == "game.exe",
         "Target mode and executable selector edit in the information region");
     controller.Handle({Key::Escape, 0U});
+
+    controller.Handle({Key::Character, U' '});
+    Check(
+        platform.executors.size() == 1U
+            && platform.executors[0].mode
+                == inputweaver::app::ExecutorMode::Run,
+        "Space starts the selected program normally");
+    controller.Handle({Key::Character, U't'});
+    controller.Handle({Key::Character, U' '});
+    std::this_thread::sleep_for(std::chrono::milliseconds{550});
+    controller.Tick();
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program
+            && platform.executors.size() == 1U
+            && platform.executors[0].mode
+                == inputweaver::app::ExecutorMode::Run
+            && CanvasText(controller.Render(80U, 24U))
+                    .find("[T] Trace and Debug: ON")
+                != std::string::npos,
+        "a running selected program ignores a requested Debug relaunch");
+    controller.Handle({Key::Character, U'x'});
+    controller.Handle({Key::Character, U't'});
 
     controller.Handle({Key::Character, U't'});
     controller.Handle({Key::Character, U's'});
@@ -973,12 +1078,16 @@ void TestController()
         "T/S/P options reach the delayed debug launch");
     controller.Handle({Key::Escape, 0U});
 
+    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Character, U'a'});
+    controller.Handle({Key::Character, U']'});
     const auto addModal = controller.Render(80U, 24U);
     Check(
-        CanvasText(addModal).find("[←]/[→] Select") != std::string::npos
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program
+            && CanvasText(addModal).find("[←]/[→] Select") != std::string::npos
             && FindAscii(addModal, "> New Blank") % 80U == 20U,
-        "horizontal add choices use matching keys and a centered group");
+        "horizontal add choices capture page navigation and remain centered");
     controller.Handle({Key::Right, 0U});
     controller.Handle({Key::Enter, 0U});
     for (const char character : std::string{"media.weave"}) {
@@ -1051,10 +1160,11 @@ void TestController()
     execution.result = inputweaver::RuntimeExecutionResult::Completed;
     debugState->ruleExecutions.push_back(std::move(execution));
     platform.debugState = debugState;
+    controller.Handle({Key::Character, U']'});
     controller.Tick();
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
-        "Right opens Debug page");
+        "right bracket opens Debug page");
     const auto minimumDebug = controller.Render(80U, 24U);
     Check(
         minimumDebug.Cells()[20U * 80U].codePoint == U'┌'
@@ -1149,11 +1259,11 @@ void TestController()
         stateNumber < stateControl
             && stateControl < wideDebug.Cells().size(),
         "STATE keeps user values before pressed controls");
-    controller.Handle({Key::Tab, 0U});
-    const auto pressedDebug = controller.Render(80U, 24U);
+    controller.Handle({Key::Right, 0U});
+    const auto stateDebug = controller.Render(80U, 24U);
     Check(
-        pressedDebug.Cells()[0U].style.foreground == colors.focusPressed,
-        "Debug header color follows the focused pressed region");
+        stateDebug.Cells()[0U].style.foreground == colors.focusState,
+        "Debug header color follows the selected State region");
     auto faultState = std::make_shared<inputweaver::debug::DebugClientState>();
     faultState->lastFault = inputweaver::debug::DebugClientFault::ConnectionLost;
     platform.debugState = faultState;
@@ -1163,10 +1273,10 @@ void TestController()
         faultDebug.Cells()[20U * 80U].style.foreground
             == colors.healthFault,
         "HEALTH uses the fault color only for a reported problem");
-    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Character, U'['});
     Check(
-        controller.CurrentPage() == inputweaver::ui::tui::Page::Programs,
-        "Left returns to Programs page");
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program,
+        "left bracket returns to Program page");
 }
 
 void TestSourceEditorPage()
@@ -1187,8 +1297,20 @@ void TestSourceEditorPage()
     inputweaver::ui::tui::TuiController controller(application, colors);
     std::this_thread::sleep_for(std::chrono::milliseconds{450});
     controller.Tick();
-    controller.Handle({Key::Tab, 0U});
-    controller.Handle({Key::Tab, 0U});
+    controller.Handle({Key::Right, 0U});
+    controller.Handle({Key::Down, 0U});
+    const auto selectedSourceCanvas = controller.Render(100U, 30U);
+    const std::size_t selectedTarget = FindAscii(selectedSourceCanvas, "TARGET");
+    const std::size_t selectedKeyword = FindAscii(selectedSourceCanvas, "number");
+    Check(
+        selectedTarget < selectedSourceCanvas.Cells().size()
+            && !selectedSourceCanvas.Cells()[selectedTarget].style.hasBackground
+            && selectedKeyword < selectedSourceCanvas.Cells().size()
+            && selectedSourceCanvas.Cells()[selectedKeyword].style.hasBackground
+            && selectedSourceCanvas.Cells()[selectedKeyword].style.background
+                == colors.editorErrorLine,
+        "selected Source keeps its current line inactive and diagnostics visible");
+    controller.Handle({Key::Enter, 0U});
 
     const auto sourceCanvas = controller.Render(100U, 30U);
     const std::string sourceText = CanvasText(sourceCanvas);
@@ -1200,15 +1322,18 @@ void TestSourceEditorPage()
         sourceText.find("SOURCE") != std::string::npos
             && sourceText.find("1 │ TARGET = GLOBAL;") != std::string::npos
             && sourceText.find("2 │ number count = 1;") != std::string::npos,
-        "Programs page shows editable source with line numbers and a gutter");
+        "Program page shows editable source with line numbers and a gutter");
     Check(
         target < sourceCanvas.Cells().size()
             && sourceCanvas.Cells()[target].style.foreground
                 == colors.syntaxVariable
+            && sourceCanvas.Cells()[target].style.hasBackground
+            && sourceCanvas.Cells()[target].style.background
+                == colors.editorCurrentLine
             && global < sourceCanvas.Cells().size()
             && sourceCanvas.Cells()[global].style.foreground
                 == colors.syntaxConstant,
-        "source view distinguishes TARGET variables from GLOBAL constants");
+        "active source view highlights its current line and syntax");
     Check(
         keyword < sourceCanvas.Cells().size()
             && sourceCanvas.Cells()[keyword].style.foreground
@@ -1245,6 +1370,15 @@ void TestSourceEditorPage()
             && CanvasText(fullscreenView).find("[Space] Run")
                 != std::string::npos,
         "fullscreen source keeps NEXT RUN at the bottom outside editing");
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
+        "document fullscreen permits top-level page navigation");
+    controller.Handle({Key::Character, U'['});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
+            != std::string::npos,
+        "Program restores document fullscreen after visiting Debug");
     controller.Handle({Key::Character, U'e'});
     const auto cursorVisible = controller.Render(100U, 30U);
     const std::size_t fullscreenExit = FindAscii(cursorVisible, "[Esc] Exit");
@@ -1316,10 +1450,15 @@ void TestSourceEditorPage()
             && undoRestoredSelection && redoRemovedSelection,
         "Cut, Undo, and Redo share the source editor command history");
     controller.Handle({Key::Home, 0U});
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == inputweaver::ui::tui::Page::Program,
+        "source editing consumes bracket characters as text");
     controller.Handle({Key::Character, U'/'});
     controller.Handle({Key::Escape, 0U});
     Check(
-        platform.source.starts_with("/TARGET")
+        platform.source.starts_with("[]/TARGET")
             && CanvasText(controller.Render(100U, 30U))
                     .find("DOCUMENT FULLSCREEN")
                 != std::string::npos,
@@ -1328,7 +1467,7 @@ void TestSourceEditorPage()
     Check(
         CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
             == std::string::npos,
-        "second Escape restores the split Programs layout");
+        "second Escape restores the split Program layout");
 
     controller.Handle({Key::Character, U'v'});
     Check(
@@ -1343,12 +1482,269 @@ void TestSourceEditorPage()
     Check(platform.executors.empty(), "X stops the selected program");
 
     controller.Handle({Key::Escape, 0U});
+    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Character, U'a'});
     controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Enter, 0U});
     Check(
         application.ReadSnapshot().programs.size() == 2U,
         "A creates a named blank program without an import path");
+}
+
+void TestSpatialNavigation()
+{
+    using inputweaver::ui::tui::Key;
+    using inputweaver::ui::tui::Page;
+    FakePlatform platform;
+    inputweaver::app::Application application(platform);
+    Check(application.Initialize().succeeded, "navigation application initializes");
+    const auto colors = LoadColors();
+    inputweaver::ui::tui::TuiController controller(application, colors);
+
+    constexpr std::array<std::string_view, 3U> programTitles{
+        "PROGRAM", "PROGRAM INFORMATION", "SOURCE"};
+    const auto programRegionIs = [&](
+                                      std::string_view title,
+                                      inputweaver::ui::tui::RgbColor color) {
+        const auto canvas = controller.Render(100U, 30U);
+        return BodyBordersSelect(
+            canvas,
+            programTitles,
+            title,
+            color,
+            colors.unfocusedBorder)
+            && UpperBoxClosesBefore(
+                canvas,
+                "PROGRAM INFORMATION",
+                "SOURCE",
+                title == "PROGRAM INFORMATION"
+                    ? color
+                    : colors.unfocusedBorder);
+    };
+    constexpr std::array<std::string_view, 3U> debugTitles{
+        "EVENTS", "STATE", "ACTION EXECUTIONS"};
+    const auto debugRegionIs = [&](
+                                   std::string_view title,
+                                   inputweaver::ui::tui::RgbColor color) {
+        const auto canvas = controller.Render(100U, 30U);
+        return BodyBordersSelect(
+            canvas,
+            debugTitles,
+            title,
+            color,
+            colors.unfocusedBorder)
+            && UpperBoxClosesBefore(
+                canvas,
+                "EVENTS",
+                "ACTION EXECUTIONS",
+                title == "EVENTS" ? color : colors.unfocusedBorder)
+            && UpperBoxClosesBefore(
+                canvas,
+                "STATE",
+                "ACTION EXECUTIONS",
+                title == "STATE" ? color : colors.unfocusedBorder);
+    };
+    struct RegionStep final {
+        Key key;
+        std::string_view title;
+        inputweaver::ui::tui::RgbColor color;
+        std::string_view assertion;
+    };
+
+    const auto initial = controller.Render(80U, 24U);
+    const std::string initialText = CanvasText(initial);
+    const std::size_t activeProgram = FindAscii(initial, "PROGRAM");
+    const std::size_t railConsole = FindAscii(initial, "Console");
+    const std::size_t railDebug = FindAscii(initial, "Debug");
+    Check(
+        initialText.find("InputWeaver | ‹[ Console · PROGRAM · Debug ]›")
+                != std::string::npos
+            && activeProgram < initial.Cells().size()
+            && initial.Cells()[activeProgram].style.foreground
+                == colors.focusProgram
+            && railConsole < initial.Cells().size()
+            && initial.Cells()[railConsole].style.foreground
+                == colors.focusProgram
+            && railDebug < initial.Cells().size()
+            && initial.Cells()[railDebug].style.foreground
+                == colors.focusProgram
+            && initialText.find("[Arrow Keys] Region") != std::string::npos
+            && programRegionIs("PROGRAM", colors.focusProgram),
+        "Program page rail and initial region-selection state render distinctly");
+
+    const std::array programSteps{
+        RegionStep{Key::Up, "PROGRAM", colors.focusProgram,
+                   "Program retains its upper boundary"},
+        RegionStep{Key::Down, "PROGRAM", colors.focusProgram,
+                   "Program retains its lower boundary"},
+        RegionStep{Key::Left, "PROGRAM", colors.focusProgram,
+                   "Program retains its left boundary"},
+        RegionStep{Key::Tab, "PROGRAM", colors.focusProgram,
+                   "Program region selection ignores Tab"},
+        RegionStep{Key::Right, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Program moves right to Information"},
+        RegionStep{Key::Up, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Information retains its upper boundary"},
+        RegionStep{Key::Right, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Information retains its right boundary"},
+        RegionStep{Key::Down, "SOURCE", colors.focusSource,
+                   "Information moves down to Source"},
+        RegionStep{Key::Down, "SOURCE", colors.focusSource,
+                   "Source retains its lower boundary"},
+        RegionStep{Key::Right, "SOURCE", colors.focusSource,
+                   "Source retains its right boundary"},
+        RegionStep{Key::Up, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Source moves up to Information"},
+        RegionStep{Key::Left, "PROGRAM", colors.focusProgram,
+                   "Information moves left to Program"},
+        RegionStep{Key::Right, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Program moves right to Information again"},
+        RegionStep{Key::Down, "SOURCE", colors.focusSource,
+                   "Information moves down to Source again"},
+        RegionStep{Key::Left, "PROGRAM", colors.focusProgram,
+                   "Source moves left to Program"}};
+    for (const RegionStep& step : programSteps) {
+        controller.Handle({step.key, 0U});
+        Check(programRegionIs(step.title, step.color), step.assertion);
+    }
+    controller.Handle({Key::Enter, 0U});
+    const std::string activeProgramText = CanvasText(controller.Render(100U, 30U));
+    Check(
+        activeProgramText.find("[Esc] Regions") != std::string::npos
+            && activeProgramText.find("[Arrow Keys] Region")
+                == std::string::npos,
+        "Enter activates the selected Program region");
+    controller.Handle({Key::Character, U'd'});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("DELETE PROGRAM")
+            != std::string::npos,
+        "D opens the program deletion confirmation");
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == Page::Program
+            && CanvasText(controller.Render(100U, 30U)).find("DELETE PROGRAM")
+                != std::string::npos,
+        "program deletion confirmation captures bracket page navigation");
+    controller.Handle({Key::Escape, 0U});
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    const std::string restoredActiveProgram =
+        CanvasText(controller.Render(100U, 30U));
+    Check(
+        controller.CurrentPage() == Page::Program
+            && programRegionIs("PROGRAM", colors.focusProgram)
+            && restoredActiveProgram.find("[Esc] Regions")
+                != std::string::npos,
+        "Program preserves an active region across page changes");
+    controller.Handle({Key::Escape, 0U});
+    Check(
+        CanvasText(controller.Render(100U, 30U)).find("[Arrow Keys] Region")
+            != std::string::npos,
+        "Escape returns Program to region selection");
+
+    controller.Handle({Key::Character, U'['});
+    const std::string consoleTitle = CanvasText(controller.Render(80U, 24U));
+    Check(
+        controller.CurrentPage() == Page::Console
+            && consoleTitle.find("InputWeaver | ‹[ CONSOLE · Program · Debug ]›")
+                != std::string::npos,
+        "left bracket opens Console and renders its page rail");
+    controller.Handle({Key::Character, U'['});
+    Check(
+        controller.CurrentPage() == Page::Console,
+        "left bracket retains the outer Console boundary");
+    controller.Handle({Key::Character, U']'});
+    controller.Handle({Key::Character, U']'});
+    const std::string debugTitle = CanvasText(controller.Render(80U, 24U));
+    Check(
+        controller.CurrentPage() == Page::Debug
+            && debugTitle.find("InputWeaver | ‹[ Console · Program · DEBUG ]›")
+                != std::string::npos,
+        "right bracket crosses Program and opens Debug");
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == Page::Debug,
+        "right bracket retains the outer Debug boundary");
+
+    Check(
+        debugRegionIs("EVENTS", colors.focusEvents),
+        "Debug initially selects the Events body region");
+    const std::array debugSteps{
+        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
+                   "Events retains its upper boundary"},
+        RegionStep{Key::Left, "EVENTS", colors.focusEvents,
+                   "Events retains its left boundary"},
+        RegionStep{Key::Right, "STATE", colors.focusState,
+                   "Events moves right to State"},
+        RegionStep{Key::Up, "STATE", colors.focusState,
+                   "State retains its upper boundary"},
+        RegionStep{Key::Right, "STATE", colors.focusState,
+                   "State retains its right boundary"},
+        RegionStep{Key::Left, "EVENTS", colors.focusEvents,
+                   "State moves left to Events"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS",
+                   colors.focusActionExecutions,
+                   "Events moves down to Executions"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS",
+                   colors.focusActionExecutions,
+                   "Executions retains its lower boundary"},
+        RegionStep{Key::Left, "ACTION EXECUTIONS",
+                   colors.focusActionExecutions,
+                   "Executions retains its left boundary"},
+        RegionStep{Key::Right, "ACTION EXECUTIONS",
+                   colors.focusActionExecutions,
+                   "Executions retains its right boundary"},
+        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
+                   "Executions moves up to Events"},
+        RegionStep{Key::Right, "STATE", colors.focusState,
+                   "Events moves right to State again"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS",
+                   colors.focusActionExecutions,
+                   "State moves down to Executions"},
+        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
+                   "Executions moves up to Events again"},
+        RegionStep{Key::Right, "STATE", colors.focusState,
+                   "Events moves right to State for preservation"}};
+    for (const RegionStep& step : debugSteps) {
+        controller.Handle({step.key, 0U});
+        Check(debugRegionIs(step.title, step.color), step.assertion);
+    }
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == Page::Debug
+            && debugRegionIs("STATE", colors.focusState)
+            && CanvasText(controller.Render(100U, 30U))
+                    .find("[Arrow Keys] Region")
+                != std::string::npos,
+        "Debug preserves its selected State region across page changes");
+    controller.Handle({Key::Enter, 0U});
+    controller.Handle({Key::Character, U'['});
+    controller.Handle({Key::Character, U']'});
+    Check(
+        controller.CurrentPage() == Page::Debug
+            && debugRegionIs("STATE", colors.focusState)
+            && CanvasText(controller.Render(100U, 30U)).find("[Esc] Regions")
+                != std::string::npos,
+        "Debug preserves its active State region across page changes");
+    controller.Handle({Key::Escape, 0U});
+    Check(
+        controller.CurrentPage() == Page::Debug
+            && CanvasText(controller.Render(100U, 30U))
+                    .find("[Arrow Keys] Region")
+                != std::string::npos,
+        "Escape returns Debug to region selection");
+    controller.Handle({Key::Escape, 0U});
+    Check(
+        controller.CurrentPage() == Page::Program,
+        "Escape returns Debug region selection to Program");
 }
 
 void TestBackgroundAndExitNavigation()
@@ -1360,23 +1756,23 @@ void TestBackgroundAndExitNavigation()
     Check(application.Initialize().succeeded, "quit navigation initializes");
     inputweaver::ui::tui::TuiController controller(application, LoadColors());
 
-    controller.Handle({Key::Left, 0U});
+    controller.Handle({Key::Character, U'['});
     controller.Handle({Key::Escape, 0U});
     Check(
-        controller.Running() && controller.CurrentPage() == Page::Programs,
-        "Escape returns Console to Programs without exiting");
+        controller.Running() && controller.CurrentPage() == Page::Program,
+        "Escape returns Console to Program without exiting");
 
-    controller.Handle({Key::Right, 0U});
+    controller.Handle({Key::Character, U']'});
     controller.Handle({Key::Escape, 0U});
     Check(
-        controller.Running() && controller.CurrentPage() == Page::Programs,
-        "Escape returns Debug to Programs without exiting");
+        controller.Running() && controller.CurrentPage() == Page::Program,
+        "Escape returns Debug to Program without exiting");
 
     controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Escape, 0U});
     Check(
         controller.Running(),
-        "Escape returns a secondary Programs focus to the program list");
+        "Escape returns an active Program region to region selection");
     platform.executors.push_back({
         1U,
         inputweaver::app::ExecutorMode::Run,
@@ -1405,6 +1801,7 @@ int main()
     TestSupport();
     TestController();
     TestSourceEditorPage();
+    TestSpatialNavigation();
     TestBackgroundAndExitNavigation();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " TUI test(s) failed.\n";

@@ -61,9 +61,6 @@ void TuiController::Tick()
     RefreshSnapshot();
     if (attention == app::ApplicationAttention::Console) {
         CloseMode();
-        if (SourceEditing() || DocumentFullscreen()) {
-            programsState_ = ProgramsState::Source;
-        }
         SwitchPage(Page::Console);
         consoleViewport_.End();
         return;
@@ -95,11 +92,11 @@ void TuiController::Handle(const KeyEvent& event)
             }
             return;
         }
-        if (SourceEditing()
+        if (page_ == Page::Program && SourceEditing()
             && (event.key == Key::Character
                 || event.key == Key::Enter
                 || event.key == Key::Tab)) {
-            HandlePrograms(event);
+            HandleProgramPage(event);
         }
         return;
     }
@@ -107,12 +104,19 @@ void TuiController::Handle(const KeyEvent& event)
         HandleModal(event);
         return;
     }
+    if (page_ == Page::Program && SourceEditing()) {
+        HandleProgramPage(event);
+        return;
+    }
+    if (HandlePageNavigation(event)) {
+        return;
+    }
     switch (page_) {
     case Page::Console:
         HandleConsole(event);
         break;
-    case Page::Programs:
-        HandlePrograms(event);
+    case Page::Program:
+        HandleProgramPage(event);
         break;
     case Page::Debug:
         HandleDebug(event);
@@ -182,14 +186,12 @@ std::size_t TuiController::DisplayProgramCount() const noexcept
 
 bool TuiController::SourceEditing() const noexcept
 {
-    return programsState_ == ProgramsState::Editing
-        || programsState_ == ProgramsState::FullscreenEditing;
+    return sourceMode_ == SourceMode::Edit;
 }
 
 bool TuiController::DocumentFullscreen() const noexcept
 {
-    return programsState_ == ProgramsState::Fullscreen
-        || programsState_ == ProgramsState::FullscreenEditing;
+    return programLayout_ == ProgramLayout::DocumentFullscreen;
 }
 
 const app::ExecutorInfo* TuiController::ExecutorFor(
@@ -253,6 +255,14 @@ void TuiController::SelectIndex(std::size_t index)
     }
 }
 
+void TuiController::ActivateSourceInSplitView() noexcept
+{
+    programRegion_ = ProgramRegion::Source;
+    programInteraction_ = RegionInteraction::Active;
+    programLayout_ = ProgramLayout::Split;
+    sourceMode_ = SourceMode::Browse;
+}
+
 void TuiController::ReloadDocument()
 {
     const app::ProgramEntry* program = SelectedProgram();
@@ -261,7 +271,7 @@ void TuiController::ReloadDocument()
         : program->id;
     sourceDirty_ = false;
     if (DocumentFullscreen() || SourceEditing()) {
-        programsState_ = ProgramsState::Source;
+        ActivateSourceInSplitView();
     }
     sourceDiagnostics_.clear();
     documentView_ = DocumentView::Source;
@@ -496,13 +506,34 @@ void TuiController::HandleModal(const KeyEvent& event)
 void TuiController::HandleConsole(const KeyEvent& event)
 {
     if (event.key == Key::Escape) {
-        SwitchPage(Page::Programs);
+        SwitchPage(Page::Program);
         return;
     }
     HandleViewport(consoleViewport_, event);
-    if (event.key == Key::Right) {
-        SwitchPage(Page::Programs);
+}
+
+bool TuiController::HandlePageNavigation(const KeyEvent& event) noexcept
+{
+    if (event.key != Key::Character) {
+        return false;
     }
+    if (event.character == U'[') {
+        if (page_ == Page::Program) {
+            SwitchPage(Page::Console);
+        } else if (page_ == Page::Debug) {
+            SwitchPage(Page::Program);
+        }
+        return true;
+    }
+    if (event.character == U']') {
+        if (page_ == Page::Console) {
+            SwitchPage(Page::Program);
+        } else if (page_ == Page::Program) {
+            SwitchPage(Page::Debug);
+        }
+        return true;
+    }
+    return false;
 }
 
 void TuiController::StartSelectedProgram()
@@ -511,20 +542,22 @@ void TuiController::StartSelectedProgram()
     if (program == nullptr || !FlushSource()) {
         return;
     }
+    const app::ProgramEntryId programId = program->id;
+    RefreshSnapshot();
+    if (ExecutorFor(programId) != nullptr) {
+        return;
+    }
     if (nextRun_.debug) {
-        const app::ExecutorInfo* executor = ExecutorFor(program->id);
-        if (executor == nullptr) {
-            pendingDebugRun_ = PendingDebugRun{
-                program->id,
-                nextRun_,
-                std::chrono::steady_clock::now() + kDebugLaunchDelay};
-            ResetNextRun();
-        }
+        pendingDebugRun_ = PendingDebugRun{
+            programId,
+            nextRun_,
+            std::chrono::steady_clock::now() + kDebugLaunchDelay};
+        ResetNextRun();
         SwitchPage(Page::Debug);
         return;
     }
     const app::OperationResult result = application_.StartProgram(
-        program->id,
+        programId,
         nextRun_);
     if (RequireSuccess(result)) {
         ResetNextRun();
@@ -588,9 +621,7 @@ void TuiController::HandleSourceEditor(const KeyEvent& event)
     if (event.key == Key::Escape) {
         if (FlushSource()) {
             sourceEditor_.ClearSelection();
-            programsState_ = programsState_ == ProgramsState::FullscreenEditing
-                ? ProgramsState::Fullscreen
-                : ProgramsState::Source;
+            sourceMode_ = SourceMode::Browse;
         }
         return;
     }
@@ -669,21 +700,19 @@ void TuiController::HandleSourceEditor(const KeyEvent& event)
     }
 }
 
-void TuiController::HandlePrograms(const KeyEvent& event)
+void TuiController::HandleProgramPage(const KeyEvent& event)
 {
     if (SourceEditing()) {
         HandleSourceEditor(event);
         return;
     }
     if (event.key == Key::Escape) {
-        if (programsState_ == ProgramsState::Fullscreen) {
-            programsState_ = ProgramsState::Source;
-        } else if (programsState_ == ProgramsState::Programs) {
-            if (FlushSource()) {
-                backgroundRequested_ = true;
-            }
-        } else {
-            programsState_ = ProgramsState::Programs;
+        if (DocumentFullscreen()) {
+            programLayout_ = ProgramLayout::Split;
+        } else if (programInteraction_ == RegionInteraction::Active) {
+            programInteraction_ = RegionInteraction::Selecting;
+        } else if (FlushSource()) {
+            backgroundRequested_ = true;
         }
         return;
     }
@@ -699,25 +728,6 @@ void TuiController::HandlePrograms(const KeyEvent& event)
         nextRun_.allowExec = !nextRun_.allowExec;
         return;
     }
-    if (IsCharacter(event, U'e') && SelectedProgram() != nullptr) {
-        documentView_ = DocumentView::Source;
-        sourceEditor_.ClearSelection();
-        programsState_ = DocumentFullscreen()
-            ? ProgramsState::FullscreenEditing
-            : ProgramsState::Editing;
-        ResetEditorCursorBlink();
-        return;
-    }
-    if (IsCharacter(event, U'z') && SelectedProgram() != nullptr) {
-        programsState_ = DocumentFullscreen()
-            ? ProgramsState::Source
-            : ProgramsState::Fullscreen;
-        return;
-    }
-    if (IsCharacter(event, U'v')) {
-        ToggleDump();
-        return;
-    }
     if (event.key == Key::Character && event.character == U' ') {
         StartSelectedProgram();
         return;
@@ -727,30 +737,38 @@ void TuiController::HandlePrograms(const KeyEvent& event)
         return;
     }
 
-    if (!DocumentFullscreen() && event.key == Key::Left) {
-        (void)FlushSource();
-        SwitchPage(Page::Console);
-        return;
-    }
-    if (!DocumentFullscreen() && event.key == Key::Right) {
-        (void)FlushSource();
-        SwitchPage(Page::Debug);
-        return;
-    }
-    if (!DocumentFullscreen() && event.key == Key::Tab) {
-        if (programsState_ == ProgramsState::Source) {
-            (void)FlushSource();
+    if (programInteraction_ == RegionInteraction::Selecting) {
+        if (event.key == Key::Enter) {
+            programInteraction_ = RegionInteraction::Active;
+        } else {
+            SelectProgramRegion(event.key);
         }
-        programsState_ = programsState_ == ProgramsState::Programs
-            ? ProgramsState::Information
-            : programsState_ == ProgramsState::Information
-                ? ProgramsState::Source
-                : ProgramsState::Programs;
         return;
     }
-    switch (programsState_) {
-    case ProgramsState::Source:
-    case ProgramsState::Fullscreen:
+
+    if (programRegion_ == ProgramRegion::Source
+        && IsCharacter(event, U'e') && SelectedProgram() != nullptr) {
+        documentView_ = DocumentView::Source;
+        sourceEditor_.ClearSelection();
+        sourceMode_ = SourceMode::Edit;
+        ResetEditorCursorBlink();
+        return;
+    }
+    if (programRegion_ == ProgramRegion::Source
+        && IsCharacter(event, U'z') && SelectedProgram() != nullptr) {
+        programLayout_ = DocumentFullscreen()
+            ? ProgramLayout::Split
+            : ProgramLayout::DocumentFullscreen;
+        return;
+    }
+    if (programRegion_ == ProgramRegion::Source
+        && IsCharacter(event, U'v')) {
+        ToggleDump();
+        return;
+    }
+
+    switch (programRegion_) {
+    case ProgramRegion::Source:
         if (documentView_ == DocumentView::Dump) {
             HandleViewport(dumpViewport_, event);
         } else if (event.key == Key::Left) {
@@ -771,7 +789,7 @@ void TuiController::HandlePrograms(const KeyEvent& event)
             sourceEditor_.LastLine();
         }
         return;
-    case ProgramsState::Information:
+    case ProgramRegion::Information:
         if (event.key == Key::Up) {
             informationField_ = informationField_ == 0U
                 ? 2U
@@ -792,11 +810,8 @@ void TuiController::HandlePrograms(const KeyEvent& event)
             }
         }
         return;
-    case ProgramsState::Programs:
+    case ProgramRegion::List:
         break;
-    case ProgramsState::Editing:
-    case ProgramsState::FullscreenEditing:
-        return;
     }
 
     if (event.key == Key::Up && selectedIndex_ > 0U) {
@@ -808,8 +823,6 @@ void TuiController::HandlePrograms(const KeyEvent& event)
         if (FlushSource()) {
             SelectIndex(selectedIndex_ + 1U);
         }
-    } else if (event.key == Key::Enter) {
-        programsState_ = ProgramsState::Information;
     } else if (IsCharacter(event, U'a')) {
         mode_ = Mode::AddSelect;
         choice_ = 0U;
@@ -824,22 +837,39 @@ void TuiController::HandlePrograms(const KeyEvent& event)
     }
 }
 
+void TuiController::SelectProgramRegion(Key key) noexcept
+{
+    switch (programRegion_) {
+    case ProgramRegion::List:
+        if (key == Key::Right) {
+            programRegion_ = ProgramRegion::Information;
+        }
+        break;
+    case ProgramRegion::Information:
+        if (key == Key::Left) {
+            programRegion_ = ProgramRegion::List;
+        } else if (key == Key::Down) {
+            programRegion_ = ProgramRegion::Source;
+        }
+        break;
+    case ProgramRegion::Source:
+        if (key == Key::Left) {
+            programRegion_ = ProgramRegion::List;
+        } else if (key == Key::Up) {
+            programRegion_ = ProgramRegion::Information;
+        }
+        break;
+    }
+}
+
 void TuiController::HandleDebug(const KeyEvent& event)
 {
     if (event.key == Key::Escape) {
-        SwitchPage(Page::Programs);
-        return;
-    }
-    if (event.key == Key::Left) {
-        SwitchPage(Page::Programs);
-        return;
-    }
-    if (event.key == Key::Tab) {
-        debugFocus_ = debugFocus_ == DebugFocus::Events
-            ? DebugFocus::Pressed
-            : debugFocus_ == DebugFocus::Pressed
-                ? DebugFocus::Executions
-                : DebugFocus::Events;
+        if (debugInteraction_ == RegionInteraction::Active) {
+            debugInteraction_ = RegionInteraction::Selecting;
+        } else {
+            SwitchPage(Page::Program);
+        }
         return;
     }
     if (IsCharacter(event, U'c')) {
@@ -858,12 +888,45 @@ void TuiController::HandleDebug(const KeyEvent& event)
         pendingDebugRun_.reset();
         return;
     }
-    if (debugFocus_ == DebugFocus::Events) {
+    if (debugInteraction_ == RegionInteraction::Selecting) {
+        if (event.key == Key::Enter) {
+            debugInteraction_ = RegionInteraction::Active;
+        } else {
+            SelectDebugRegion(event.key);
+        }
+        return;
+    }
+    if (debugRegion_ == DebugRegion::Events) {
         HandleViewport(eventsViewport_, event);
-    } else if (debugFocus_ == DebugFocus::Pressed) {
-        HandleViewport(pressedViewport_, event);
+    } else if (debugRegion_ == DebugRegion::State) {
+        HandleViewport(stateViewport_, event);
     } else {
         HandleViewport(executionsViewport_, event);
+    }
+}
+
+void TuiController::SelectDebugRegion(Key key) noexcept
+{
+    switch (debugRegion_) {
+    case DebugRegion::Events:
+        if (key == Key::Right) {
+            debugRegion_ = DebugRegion::State;
+        } else if (key == Key::Down) {
+            debugRegion_ = DebugRegion::Executions;
+        }
+        break;
+    case DebugRegion::State:
+        if (key == Key::Left) {
+            debugRegion_ = DebugRegion::Events;
+        } else if (key == Key::Down) {
+            debugRegion_ = DebugRegion::Executions;
+        }
+        break;
+    case DebugRegion::Executions:
+        if (key == Key::Up) {
+            debugRegion_ = DebugRegion::Events;
+        }
+        break;
     }
 }
 
@@ -907,7 +970,7 @@ void TuiController::FinishProgramAddition()
     CloseMode();
     RefreshSnapshot();
     SelectIndex(snapshot_.programs.size() - 1U);
-    programsState_ = ProgramsState::Source;
+    ActivateSourceInSplitView();
 }
 
 void TuiController::SubmitLineEdit()

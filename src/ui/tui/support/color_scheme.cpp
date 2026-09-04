@@ -178,12 +178,12 @@ private:
     INPUTWEAVER_COLOR_FIELD(1U, "muted_text", mutedText)
     INPUTWEAVER_COLOR_FIELD(2U, "unfocused_border", unfocusedBorder)
     INPUTWEAVER_COLOR_FIELD(3U, "focus_console", focusConsole)
-    INPUTWEAVER_COLOR_FIELD(4U, "focus_programs", focusPrograms)
+    INPUTWEAVER_COLOR_FIELD(4U, "focus_program", focusProgram)
     INPUTWEAVER_COLOR_FIELD(
         5U, "focus_program_information", focusProgramInformation)
-    INPUTWEAVER_COLOR_FIELD(6U, "focus_source_editor", focusSourceEditor)
+    INPUTWEAVER_COLOR_FIELD(6U, "focus_source", focusSource)
     INPUTWEAVER_COLOR_FIELD(7U, "focus_events", focusEvents)
-    INPUTWEAVER_COLOR_FIELD(8U, "focus_pressed", focusPressed)
+    INPUTWEAVER_COLOR_FIELD(8U, "focus_state", focusState)
     INPUTWEAVER_COLOR_FIELD(
         9U, "focus_action_executions", focusActionExecutions)
     INPUTWEAVER_COLOR_FIELD(
