@@ -18,7 +18,7 @@ namespace {
         || (source == EventTransition::HorizontalWheel && input == Transition::HorizontalWheel);
 }
 
-void ClearCurrent(MouseSourceState& source) noexcept
+void ClearCurrent(MouseMeterState& source) noexcept
 {
     source.current = {};
     source.current.period.type = source.config.periodType;
@@ -29,14 +29,14 @@ void ClearCurrent(MouseSourceState& source) noexcept
 
 } // namespace
 
-RuntimeMouseState::RuntimeMouseState(std::span<const MouseSourceConfig> sources,
+RuntimeMouseState::RuntimeMouseState(std::span<const MouseMeterConfig> sources,
     DurationValue idleTimeout, std::size_t maximumOccurrences)
-    : sources_(sources.size()), idleTimeout_(idleTimeout)
+    : meters_(sources.size()), idleTimeout_(idleTimeout)
 {
     if (!sources.empty()) occurrences_.reserve(maximumOccurrences);
     for (std::size_t index = 0; index < sources.size(); ++index) {
-        sources_[index].config = sources[index];
-        ClearCurrent(sources_[index]);
+        meters_[index].config = sources[index];
+        ClearCurrent(meters_[index]);
     }
 }
 
@@ -47,7 +47,7 @@ void RuntimeMouseState::Initialize(MousePoint position, std::int64_t now) noexce
     lastPhysicalMove_ = now;
     hasPhysicalMove_ = false;
     nextSequence_ = 1;
-    ResetSources();
+    ResetMeters();
 }
 
 void RuntimeMouseState::Refresh(MousePoint position, std::int64_t now) noexcept
@@ -55,7 +55,7 @@ void RuntimeMouseState::Refresh(MousePoint position, std::int64_t now) noexcept
     observation_.position = position;
     observation_.idleTime.nanoseconds = (std::max)(std::int64_t{0}, now - lastPhysicalMove_);
     observation_.moving = hasPhysicalMove_ && observation_.idleTime.nanoseconds < idleTimeout_.nanoseconds;
-    for (auto& source : sources_) {
+    for (auto& source : meters_) {
         if (source.moving && now - source.lastMoveNanoseconds >= idleTimeout_.nanoseconds) {
             source.moving = false;
             if (source.config.periodType == ExpressionType::Duration) ClearCurrent(source);
@@ -83,33 +83,33 @@ void RuntimeMouseState::Observe(const RuntimeInputEvent& event, std::int64_t now
     }
 }
 
-void RuntimeMouseState::Restart(EventSourceId id) noexcept
+void RuntimeMouseState::Restart(MeterId id) noexcept
 {
-    if (id.value >= sources_.size()) return;
-    auto& source = sources_[id.value];
+    if (id.value >= meters_.size()) return;
+    auto& source = meters_[id.value];
     ClearCurrent(source);
     source.completed = {};
     source.periodResult = {};
 }
 
-void RuntimeMouseState::ResetSources() noexcept
+void RuntimeMouseState::ResetMeters() noexcept
 {
-    for (std::size_t index = 0; index < sources_.size(); ++index) {
-        Restart(EventSourceId{static_cast<std::uint32_t>(index)});
+    for (std::size_t index = 0; index < meters_.size(); ++index) {
+        Restart(MeterId{static_cast<std::uint32_t>(index)});
     }
     occurrences_.clear();
 }
 
-bool RuntimeMouseState::Open(EventSourceId id, MousePeriodEvaluator evaluator) noexcept
+bool RuntimeMouseState::Open(MeterId id, MousePeriodEvaluator evaluator) noexcept
 {
-    auto& source = sources_[id.value];
+    auto& source = meters_[id.value];
     if (source.opened) return true;
     source.periodResult = evaluator.Invoke(id);
     const auto& period = source.periodResult.value;
     if (!source.periodResult.Succeeded() || period.type != source.config.periodType
         || (period.type == ExpressionType::Duration ? period.durationValue.nanoseconds <= 0
             : !std::isfinite(period.numberValue) || period.numberValue <= 0)) {
-        if (source.periodResult.Succeeded()) source.periodResult.fault = RuntimeEvaluationFault::InvalidEventPeriod;
+        if (source.periodResult.Succeeded()) source.periodResult.fault = RuntimeEvaluationFault::InvalidMeterPeriod;
         ClearCurrent(source);
         return false;
     }
@@ -118,9 +118,9 @@ bool RuntimeMouseState::Open(EventSourceId id, MousePeriodEvaluator evaluator) n
     return true;
 }
 
-bool RuntimeMouseState::Complete(EventSourceId id, MousePeriodEvaluator evaluator) noexcept
+bool RuntimeMouseState::Complete(MeterId id, MousePeriodEvaluator evaluator) noexcept
 {
-    auto& source = sources_[id.value];
+    auto& source = meters_[id.value];
     source.current.sequence = nextSequence_++;
     source.completed = source.current;
     const bool available = occurrences_.size() < occurrences_.capacity();
@@ -133,11 +133,11 @@ bool RuntimeMouseState::Complete(EventSourceId id, MousePeriodEvaluator evaluato
     return Open(id, evaluator) && available;
 }
 
-bool RuntimeMouseState::Move(EventSourceId id, const RuntimeInputEvent& event,
+bool RuntimeMouseState::Move(MeterId id, const RuntimeInputEvent& event,
     std::int64_t now, MousePeriodEvaluator evaluator) noexcept
 {
     if (!EffectiveMove(event)) return true;
-    auto& source = sources_[id.value];
+    auto& source = meters_[id.value];
     const bool timed = source.config.periodType == ExpressionType::Duration;
     const bool continuous = source.moving && now - source.lastMoveNanoseconds < idleTimeout_.nanoseconds;
     if (timed && !continuous) ClearCurrent(source);
@@ -180,10 +180,10 @@ bool RuntimeMouseState::Move(EventSourceId id, const RuntimeInputEvent& event,
     return true;
 }
 
-bool RuntimeMouseState::Wheel(EventSourceId id, const RuntimeInputEvent& event,
+bool RuntimeMouseState::Wheel(MeterId id, const RuntimeInputEvent& event,
     MousePeriodEvaluator evaluator) noexcept
 {
-    auto& source = sources_[id.value];
+    auto& source = meters_[id.value];
     double amount = source.config.transition == EventTransition::Wheel ? event.delta.wheelY : event.delta.wheelX;
     if (amount == 0 || !Open(id, evaluator)) return amount == 0;
     source.current.point = {static_cast<double>(event.position.x), static_cast<double>(event.position.y)};
@@ -209,10 +209,10 @@ bool RuntimeMouseState::Accumulate(const RuntimeInputEvent& event, std::int64_t 
     occurrences_.clear();
     if (event.origin != InputOrigin::PhysicalCandidate || event.device != DeviceKind::Mouse) return true;
     bool success = true;
-    for (std::size_t index = 0; index < sources_.size(); ++index) {
-        auto& source = sources_[index];
+    for (std::size_t index = 0; index < meters_.size(); ++index) {
+        auto& source = meters_[index];
         if (!Matches(source.config.transition, event.transition)) continue;
-        const EventSourceId id{static_cast<std::uint32_t>(index)};
+        const MeterId id{static_cast<std::uint32_t>(index)};
         const bool advanced = source.config.transition == EventTransition::Move
             ? Move(id, event, now, evaluator) : Wheel(id, event, evaluator);
         success = advanced && success;
@@ -223,8 +223,8 @@ bool RuntimeMouseState::Accumulate(const RuntimeInputEvent& event, std::int64_t 
 void RuntimeMouseState::SelectCompleted(std::span<MouseCycle> destination,
     const MouseOccurrence* trigger) const noexcept
 {
-    for (std::size_t index = 0; index < (std::min)(destination.size(), sources_.size()); ++index) {
-        destination[index] = trigger && trigger->source.value == index ? trigger->cycle : sources_[index].completed;
+    for (std::size_t index = 0; index < (std::min)(destination.size(), meters_.size()); ++index) {
+        destination[index] = trigger && trigger->source.value == index ? trigger->cycle : meters_[index].completed;
     }
 }
 

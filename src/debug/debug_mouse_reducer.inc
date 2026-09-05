@@ -6,7 +6,7 @@
         cycle.transition = raw.transition;
         cycle.position = cycle.occurrence.cycle.point;
         if (!MaterializeForInput(cycle)) return false;
-        AppendRecent(state.recentInputEvents, std::move(cycle), capacities.maximumInputEvents);
+        AppendRecent(mouseInputs, std::move(cycle), capacities.maximumInputEvents);
         return true;
     }
 
@@ -26,7 +26,7 @@
     DebugReductionAction AcceptMouseCycle(const Message& message)
     {
         const auto& payload = message.mouseCycleCompleted;
-        if (payload.triggerInputSequence == 0 || payload.occurrence.source.value >= state.eventSources.size()
+        if (payload.triggerInputSequence == 0 || payload.occurrence.source.value >= state.meters.size()
             || payload.occurrence.cycle.sequence == 0) return Recover(DebugClientFault::InconsistentState);
         if (capacities.maximumInputEvents == 0) return Recover(DebugClientFault::CapacityExceeded);
         DebugInputEvent cycle{};
@@ -49,24 +49,24 @@
         return DebugReductionAction::None;
     }
 
-    DebugReductionAction AcceptSourceSelection(const Message& message)
+    DebugReductionAction AcceptMeterSelection(const Message& message)
     {
-        const auto& selected = message.executionSourceSelected;
+        const auto& selected = message.executionMeterSelected;
         DebugRuleExecution* execution = FindExecution(selected.executionMarker);
         if (!execution) execution = FindPending(selected.executionMarker);
         if (!execution) return Recover(DebugClientFault::UnknownExecutionMarker);
-        if (selected.occurrence.source.value != execution->completedSources.size()
-            || execution->completedSources.size() >= execution->selectionCount) {
+        if (selected.occurrence.source.value != execution->completedMeters.size()
+            || execution->completedMeters.size() >= execution->selectionCount) {
             return Recover(DebugClientFault::InconsistentState);
         }
-        execution->completedSources.push_back(selected.occurrence.cycle);
+        execution->completedMeters.push_back(selected.occurrence.cycle);
         Publish();
         return DebugReductionAction::None;
     }
 
     DebugReductionAction AcceptMouseState(const Message& message)
     {
-        if (message.mouseState.sources.size() != state.eventSources.size()) {
+        if (message.mouseState.meters.size() != state.meters.size()) {
             return Recover(DebugClientFault::InconsistentState);
         }
         state.mouse = message.mouseState;

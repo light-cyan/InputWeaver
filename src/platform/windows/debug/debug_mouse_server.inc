@@ -1,11 +1,11 @@
     bool PopulateMouseCapture(debug::CaptureStartedPayload& capture) const
     {
-        for (const auto& source : program->EventSources()) {
-            capture.sources.push_back({program->Strings()[source.name.value], source.transition,
+        for (const auto& source : program->Meters()) {
+            capture.meters.push_back({program->Strings()[source.name.value], source.transition,
                 program->Expressions()[source.period.value].resultType});
         }
         return callbacks.readMouseSnapshot.invoke ? callbacks.readMouseSnapshot.Invoke(capture.mouse)
-            : capture.sources.empty();
+            : capture.meters.empty();
     }
 
     bool SendMouseRecord(HANDLE pipe, const ProducerRecord& record, std::uint64_t& sequence) const
@@ -13,9 +13,9 @@
         const auto& event = record.runtime;
         const bool completion = event.kind == RuntimeDebugEventKind::MouseCycleCompleted;
         auto message = MakeMessage(completion ? debug::MessageKind::MouseCycleCompleted
-            : debug::MessageKind::ExecutionSourceSelected, record.captureEpoch, record.captureTimeNanoseconds, sequence);
+            : debug::MessageKind::ExecutionMeterSelected, record.captureEpoch, record.captureTimeNanoseconds, sequence);
         if (completion) message.mouseCycleCompleted = {event.triggerInputSequence, event.occurrence};
-        else message.executionSourceSelected = {event.executionMarker, event.occurrence};
+        else message.executionMeterSelected = {event.executionMarker, event.occurrence};
         return WriteMessage(pipe, message);
     }
 

@@ -124,8 +124,8 @@ ProgramRequirements ComputeProgramRequirements(
     requirements.numberSlotCount = ToCount(storage.userValues.initialNumbers.size());
     requirements.durationSlotCount = ToCount(storage.userValues.initialDurations.size());
     requirements.arrayCount = ToCount(storage.arrays.size());
-    requirements.eventSourceCount = ToCount(storage.eventSources.size());
-    requirements.requiresMouseObservation = !storage.eventSources.empty()
+    requirements.meterCount = ToCount(storage.meters.size());
+    requirements.requiresMouseObservation = !storage.meters.empty()
         || std::any_of(storage.expressionCode.begin(), storage.expressionCode.end(),
             [](const auto& instruction) { return instruction.opcode == ExpressionOpcode::LoadField; })
         || std::any_of(storage.eventBuckets.begin(), storage.eventBuckets.end(),

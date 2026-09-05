@@ -129,7 +129,7 @@ struct WorkItem final {
     std::uint64_t debugCaptureEpoch{};
     std::uint64_t debugInputSequence{};
     std::uint32_t debugRuleIndex{kInvalidProgramIndex};
-    EventSourceId debugEventSource{};
+    MeterId debugMeter{};
     std::uint64_t debugCycleSequence{};
 };
 
@@ -310,8 +310,8 @@ struct ProgramRuntime::Impl final {
         [[nodiscard]] static std::unique_ptr<RuntimeMouseState> CreateMouse(const CompiledProgram& program, bool debugging)
         {
             if (!program.Requirements().requiresMouseObservation && !debugging) return nullptr;
-            std::vector<MouseSourceConfig> sources;
-            for (const auto& source : program.EventSources()) {
+            std::vector<MouseMeterConfig> sources;
+            for (const auto& source : program.Meters()) {
                 sources.push_back({source.transition, program.Expressions()[source.period.value].resultType});
             }
             return std::make_unique<RuntimeMouseState>(sources, program.Settings().mouseIdleTimeout);
@@ -438,7 +438,7 @@ struct ProgramRuntime::Impl final {
                   std::make_unique<std::atomic<std::uint32_t>[]>(
                       program.MappingSlots().size())),
               mappingOwners(program.MappingSlots().size()),
-              completed(program.EventSources().size()),
+              completed(program.Meters().size()),
               workQueue(capacities.transactionQueueItemCount),
               transactionScratch((std::max)(
                   std::size_t{1U},
@@ -502,7 +502,7 @@ struct ProgramRuntime::Impl final {
             for (std::size_t index = 0U; index < taskCount; ++index) {
                 tasks[index].repeatFrames.resize(repeatCount);
                 tasks[index].ownership.resize(ownershipCount);
-                tasks[index].completed.resize(program.EventSources().size());
+                tasks[index].completed.resize(program.Meters().size());
             }
         }
 
@@ -736,7 +736,7 @@ struct ProgramRuntime::Impl final {
         RuntimeExpressionScratch& scratch,
         std::span<const MouseCycle> completed = {}) noexcept;
     void RefreshMouse(State& state) noexcept;
-    [[nodiscard]] bool UpdateMouseSources(State& state, const RuntimeInputEvent& event) noexcept;
+    [[nodiscard]] bool UpdateMouseMeters(State& state, const RuntimeInputEvent& event) noexcept;
     [[nodiscard]] bool EvaluatePredicate(
         State& state,
         ExpressionId expression,

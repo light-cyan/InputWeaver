@@ -1,7 +1,7 @@
 #pragma once
 
 #include "program_validator.hpp"
-#include "event_fields.hpp"
+#include "mouse_fields.hpp"
 
 #include <cstddef>
 #include <cstdint>

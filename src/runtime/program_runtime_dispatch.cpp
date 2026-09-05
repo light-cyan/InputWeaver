@@ -127,7 +127,7 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     }
     if (!routePort.CanDispatch(state->targetKind, event)) {
         if (event.device == DeviceKind::Mouse && state->mutableState.mouse) {
-            state->mutableState.mouse->ResetSources();
+            state->mutableState.mouse->ResetMeters();
         }
         if (event.device == DeviceKind::Keyboard
             && state->targetKind != TargetSelectorKind::Global) {
@@ -177,7 +177,7 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     if (hasPauseRules && !state->mutableState.pauseOn) {
         return InputDecision::Forward;
     }
-    (void)UpdateMouseSources(*state, event);
+    (void)UpdateMouseMeters(*state, event);
     if (state->mutableState.mouse) state->mutableState.mouse->SelectCompleted(state->dispatch.completed);
     const auto decision = DispatchOrdinary(
         *state,
@@ -400,7 +400,7 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
     std::size_t reservedCount = 0U;
     for (std::size_t index = 0; index < scratchCount; ++index) {
         auto& item = state.dispatch.transactionScratch[index];
-        item.debugEventSource = key.source;
+        item.debugMeter = key.source;
         item.debugCycleSequence = key.source.IsValid() ? state.dispatch.completed[key.source.value].sequence : 0;
     }
     if (!ReserveTasks(state, scratchCount, reservedCount)) {

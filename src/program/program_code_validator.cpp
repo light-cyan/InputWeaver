@@ -359,14 +359,14 @@ void ValidateExpressionDescriptor(
             stack = stacks.Push(stack, ExpressionType::ControlState);
             break;
         case ExpressionOpcode::LoadField: {
-            const auto reference = EventFieldReference::Decode(instruction.operand0, instruction.operand1);
+            const auto reference = MouseFieldReference::Decode(instruction.operand0, instruction.operand1);
             ExpressionType expected = ExpressionType::None;
             if (!reference.source.IsValid()) {
-                expected = EventFieldType(reference);
-            } else if (ValidId(reference.source, storage.eventSources.size())) {
-                const auto& source = storage.eventSources[reference.source.value];
+                expected = MouseFieldType(reference);
+            } else if (ValidId(reference.source, storage.meters.size())) {
+                const auto& source = storage.meters[reference.source.value];
                 if (ValidId(source.period, storage.expressions.size())) {
-                    expected = EventFieldType(reference, source.transition,
+                    expected = MouseFieldType(reference, source.transition,
                         storage.expressions[source.period.value].resultType);
                 }
             }
@@ -637,10 +637,10 @@ void ValidateActionDescriptor(
                     "pointer output requires numeric arguments");
             }
             break;
-        case ActionOpcode::RestartEvent:
-            if (instruction.operand0 >= storage.eventSources.size() || instruction.operand1 != 0U) {
+        case ActionOpcode::RestartMeter:
+            if (instruction.operand0 >= storage.meters.size() || instruction.operand1 != 0U) {
                 context.Add(ProgramValidationErrorCode::Action, location,
-                    "restart requires a declared event source");
+                    "restart requires a declared meter");
             }
             break;
         case ActionOpcode::Wait:

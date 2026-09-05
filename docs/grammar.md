@@ -80,12 +80,14 @@ top-level-item =
       target-setting
     | tap-duration-setting
     | action-gap-setting
+    | mouse-idle-timeout-setting
     | rand-seed-setting
     | state-declaration
     | number-declaration
     | duration-declaration
     | state-array-declaration
     | number-array-declaration
+    | meter-declaration
     | mapping
     | exit-rule
     | pause-rule
@@ -97,6 +99,7 @@ target-selector      = string-literal | "GLOBAL" ;
 tap-duration-setting = "TAP_DURATION", "=", duration-literal, ";" ;
 action-gap-setting   = "ACTION_GAP", "=", duration-literal, ";" ;
 rand-seed-setting    = "RAND_SEED", "=", decimal-integer, ";" ;
+mouse-idle-timeout-setting = "MOUSE_IDLE_TIMEOUT", "=", duration-literal, ";" ;
 
 state-declaration    = "state", identifier, "=", state-literal, ";" ;
 number-declaration   = "number", identifier, "=", signed-number-literal, ";" ;
@@ -105,18 +108,23 @@ state-array-declaration  = "state", "[", "]", identifier, "=", state-array-liter
 number-array-declaration = "number", "[", "]", identifier, "=", number-array-literal, ";" ;
 state-array-literal      = "[", [ state-literal, { ",", state-literal } ], "]" ;
 number-array-literal     = "[", [ signed-number-literal, { ",", signed-number-literal } ], "]" ;
+meter-declaration        = "meter", identifier, "=", mouse-event, "every", expression, ";" ;
 
 mapping = control-reference, "->", control-reference, [ condition ], ";" ;
 
-exit-rule = "exit", event, [ condition ], ";" ;
+exit-rule = "exit", control-event, [ condition ], ";" ;
 
-pause-rule   = "pause", event, [ condition ], pause-arrow, pause-effect, ";" ;
+pause-rule   = "pause", control-event, [ condition ], pause-arrow, pause-effect, ";" ;
 pause-arrow  = "=>" | "~>" ;
 pause-effect = "on" | "off" | "toggle" ;
 
 event-rule       = event, [ condition ], rule-arrow, action-flow, ";" ;
-event            = control-reference, ":", event-transition ;
+event            = control-event | mouse-event | meter-event ;
+control-event    = control-reference, ":", event-transition ;
 event-transition = "down" | "again" | "up" ;
+mouse-event      = "Mouse", ":", mouse-transition ;
+mouse-transition = "move" | "wheel" | "horizontalwheel" ;
+meter-event      = identifier, ":", "tick" ;
 condition        = "when", expression ;
 rule-arrow       = "=>" | "=>>" | "~>" | "~>>" ;
 
@@ -124,6 +132,8 @@ action-flow = { action-item } ;
 
 action-item =
       input-action
+    | pointer-action
+    | restart-action
     | wait-action
     | gap-action
     | set-action
@@ -139,6 +149,9 @@ action-item =
 
 input-action      = input-action-name, "(", control-reference, ")" ;
 input-action-name = "press" | "release" | "tap" ;
+pointer-action    = ( "move_by" | "move_to" ), "(", expression, ",", expression, ")"
+                  | ( "scroll" | "scroll_horizontal" ), "(", expression, ")" ;
+restart-action    = "restart", "(", identifier, ")" ;
 wait-action       = "wait", "(", expression, ")" ;
 gap-action        = "gap", "(", ")" | "|" ;
 set-action        = "set", "(", writable-target, ",", expression, ")" ;
@@ -180,6 +193,8 @@ primary-expression =
     | control-reference
     | array-element
     | array-length
+    | mouse-field-reference
+    | meter-field-reference
     | "(", expression, ")"
     ;
 
@@ -188,7 +203,9 @@ writable-state-target     = writable-state-reference | state-array-element ;
 writable-scalar-reference = identifier ;
 writable-state-reference  = identifier ;
 scalar-value-reference    = identifier | builtin-value ;
-builtin-value             = "TAP_DURATION" | "ACTION_GAP" | "RAND01" | "PAUSE" ;
+builtin-value             = "TAP_DURATION" | "ACTION_GAP" | "MOUSE_IDLE_TIMEOUT" | "RAND01" | "PAUSE" ;
+mouse-field-reference     = "Mouse", ".", identifier ;
+meter-field-reference     = [ "@" ], identifier, ".", identifier ;
 array-reference           = identifier ;
 array-element             = identifier, "[", expression, "]" ;
 state-array-element       = identifier, "[", expression, "]" ;
@@ -429,15 +446,17 @@ exit F12:down when (LCtrl == held or RCtrl == held) and (LShift == held or RShif
 
 ## Mouse compilation contract
 
+The mouse vocabulary reserves `meter`, `every`, `Mouse`, `MOUSE_IDLE_TIMEOUT`, `move`, `wheel`, `horizontalwheel`, `tick`, `move_by`, `move_to`, `scroll`, `scroll_horizontal`, and `restart`. `meter` is a declaration type in the shared compiler/highlighter word catalog.
+
 The compiler also accepts the following mouse constructs and encodes them in the version 5 `.weavec` contract. These programs carry explicit mouse-observation and pointer-output requirements, checked by the executor during activation.
 
 ```weave
 MOUSE_IDLE_TIMEOUT = 80ms;
 number stride = 24;
-event path = Mouse:move every stride;
-event pulse = Mouse:move every 100ms;
-event vertical = Mouse:wheel every 1;
-event horizontal = Mouse:horizontalwheel every 0.25;
+meter path = Mouse:move every stride;
+meter pulse = Mouse:move every 100ms;
+meter vertical = Mouse:wheel every 1;
+meter horizontal = Mouse:horizontalwheel every 0.25;
 
 Mouse:move when Mouse.dx > 0 ~> move_by(1, 0);
 path:tick ~> wait(10ms) move_by(@path.dx, @path.dy);
@@ -445,41 +464,41 @@ F1:down when @path.valid == on ~> move_to(@path.start_x, @path.start_y);
 F2:down => restart(path) scroll(0.25) scroll_horizontal(-1);
 ```
 
-Each `event` declaration has a distinct program-level identity in the scalar/array declaration namespace. Declare the source and its expression dependencies before use. Moving sources accept a `number` distance or `duration` period; wheel sources accept a `number` period in standard detents. Period expressions use literals, scalar values, array reads, and arithmetic. Constant periods must be positive; dynamic periods carry their expression for runtime evaluation.
+Each `meter` declaration has a distinct program-level identity in the scalar/array declaration namespace. Declare the meter and its expression dependencies before use. Moving meters accept a `number` distance or `duration` period; wheel meters accept a `number` period in standard detents. Period expressions use literals, scalar values, array reads, and arithmetic. Constant periods must be positive; dynamic periods carry their expression for runtime evaluation.
 
-`Mouse:move`, `Mouse:wheel`, and `Mouse:horizontalwheel` accept the four ordinary rule arrows. Named `source:tick` subscriptions accept `~>` and `~>>`. `MOUSE_IDLE_TIMEOUT` is a read-only builtin duration with an 80 ms default; its optional top-level assignment accepts a positive duration literal. `move_by` and `move_to` take two numeric expressions, `scroll` and `scroll_horizontal` take one, and `restart` takes a declared event source name.
+`Mouse:move`, `Mouse:wheel`, and `Mouse:horizontalwheel` accept the four ordinary rule arrows. Named `name:tick` subscriptions accept `~>` and `~>>`. `MOUSE_IDLE_TIMEOUT` is a read-only builtin duration with an 80 ms default; its optional top-level assignment accepts a positive duration literal. `move_by` and `move_to` take two numeric expressions, `scroll` and `scroll_horizontal` take one, and `restart` takes a declared meter name.
 
-Field references are read-only primary expressions. `source.field` selects the current view; `@source.field` selects the completed view. Fields belong to rule conditions and action expressions, including mapping, pause, and exit conditions. Their static types are as follows:
+Field references are read-only primary expressions. `name.field` selects the current view; `@name.field` selects the completed view. Fields belong to rule conditions and action expressions, including mapping, pause, and exit conditions. Their static types are as follows:
 
-| Source view | Number fields | Duration fields | State fields |
+| View | Number fields | Duration fields | State fields |
 | --- | --- | --- | --- |
 | `Mouse` | `x`, `y`, `dx`, `dy`, `wheel_x`, `wheel_y` | `idle_time` | `moving` |
-| Current movement source | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `moving` |
-| Completed movement source | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `valid` |
-| Current wheel source | `x`, `y`, `wheel_x`, `wheel_y` | | |
-| Completed wheel source | `x`, `y`, `wheel_x`, `wheel_y` | | `valid` |
+| Current movement meter | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `moving` |
+| Completed movement meter | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `valid` |
+| Current wheel meter | `x`, `y`, `wheel_x`, `wheel_y` | | |
+| Completed wheel meter | `x`, `y`, `wheel_x`, `wheel_y` | | `valid` |
 
-All current sources also expose `period`, `progress`, and `remaining`, with the period expression's type. Completed sources expose `period` with the same type. Field names are contextual and leave names such as `x` and `y` available for user declarations.
+All current meters also expose `period`, `progress`, and `remaining`, with the period expression's type. Completed meters expose `period` with the same type. Field names are contextual and leave names such as `x` and `y` available for user declarations.
 
 ### Mouse runtime semantics
 
 The platform-independent runtime observes physical position deltas in pixels and wheel deltas in standard detents. A move, vertical-wheel, or horizontal-wheel report replaces the complete `Mouse.dx/dy/wheel_x/wheel_y` tuple, setting unrelated components to zero. Keys and buttons preserve the tuple. Pointer polling updates `Mouse.x/y`; physical movement alone updates `Mouse.moving` and `Mouse.idle_time`. Idle time starts at activation and keeps growing after the timeout turns `moving` off.
 
-Each qualified input updates all named sources before ordinary matching. Raw rules run first, followed by sources in declaration order and their completed cycles in order. All matching and period openings for that input share the same variable state. A stopping rule stops only its event's subscription scan; consuming a raw report still permits its cycle statistics to advance.
+Each qualified input updates all named meters before ordinary matching. Raw rules run first, followed by meters in declaration order and their completed cycles in order. All matching and period openings for that input share the same variable state. A stopping rule stops only its event's subscription scan; consuming a raw report still permits its cycle statistics to advance.
 
 Distance progress sums segment lengths and keeps its remainder across ordinary idle. Wheel progress is signed, with opposite scrolling canceling the current remainder. A report crossing several boundaries creates a separate completion for each, with movement split proportionally between their start and end coordinates. Each completion immediately latches the next period expression, including an opening with zero remainder.
 
 Movement `dx/dy` sum the physical report displacements included in the cycle. Its start and end fields retain the corresponding report coordinates. Consumed movement can leave the actual pointer stationary, and pointer output can relocate it between physical reports; neither changes the reported displacement sum or adds output movement to path length. Under uninterrupted forwarded physical motion, displacement equals endpoint minus origin.
 
-A duration source starts at the first effective move, assigning that first displacement at elapsed time zero. Effective reports less than `MOUSE_IDLE_TIMEOUT` apart extend the same span. Later displacement is apportioned over the elapsed interval and any crossed logical boundaries. Late reports preserve phase; stationary time creates no ticks. At the idle threshold the incomplete duration cycle clears, and a move exactly at that threshold begins a new span.
+A duration meter starts at the first effective move, assigning that first displacement at elapsed time zero. Effective reports less than `MOUSE_IDLE_TIMEOUT` apart extend the same span. Later displacement is apportioned over the elapsed interval and any crossed logical boundaries. Late reports preserve phase; stationary time creates no ticks. At the idle threshold the incomplete duration cycle clears, and a move exactly at that threshold begins a new span.
 
-Before a source opens, its period and progress fields are typed zero, and its coordinate fields use the observed pointer. The first included movement establishes a fixed cycle origin. A failed dynamic period evaluation reports a source diagnostic, clears the incomplete cycle, and retries on the next qualified input while retaining the latest completed cycle.
+Before a meter opens, its period and progress fields are typed zero, and its coordinate fields use the observed pointer. The first included movement establishes a fixed cycle origin. A failed dynamic period evaluation reports a meter diagnostic, clears the incomplete cycle, and retries on the next qualified input while retaining the latest completed cycle.
 
-`@source` is selected when the triggering event matches. A tick selects its own exact completed cycle; other sources select their latest completion after all sources have processed that same input. Task reservation copies this selection, including an empty completion, for every source. Conditions, nested action flows, waits, and the first access after a wait share that selection. `source.field` and `Mouse.field` instead read a coherent current observation for each action evaluation.
+`@name` is selected when the triggering event matches. A tick selects its own exact completed cycle; other meters select their latest completion after all meters have processed that same input. Task reservation copies this selection, including an empty completion, for every meter. Conditions, nested action flows, waits, and the first access after a wait share that selection. `name.field` and `Mouse.field` instead read a coherent current observation for each action evaluation.
 
-An empty completion has `valid=off`. Accessing another field on that view faults the expression: a condition does not match and reports a diagnostic, while an action ends only its task. Short-circuit guards such as `@source.valid == on and @source.dx > 0` avoid the data-field access.
+An empty completion has `valid=off`. Accessing another field on that view faults the expression: a condition does not match and reports a diagnostic, while an action ends only its task. Short-circuit guards such as `@name.valid == on and @name.dx > 0` avoid the data-field access.
 
-`restart(source)` clears that source's current and latest completed records at action execution, while existing task selections stay fixed. Program activation, cancellation-generation changes, and source qualification loss clear source statistics; global physical observation continues across pause and target changes. Pointer actions publish through the shared output sequence and use the existing cancellation, routing, and output budgets, independently of held-control ownership.
+`restart(name)` clears that meter's current and latest completed records at action execution, while existing task selections stay fixed. Program activation, cancellation-generation changes, and meter qualification loss clear meter statistics; global physical observation continues across pause and target changes. Pointer actions publish through the shared output sequence and use the existing cancellation, routing, and output budgets, independently of held-control ownership.
 
 ### Windows pointer execution
 
@@ -491,4 +510,4 @@ Executable-target movement checks its execution-time origin and normalized desti
 
 ### Mouse Debug views
 
-STATE exposes the same coherent `Mouse` observation and named current/latest cycle values as language field reads. EVENTS relates every named completion to its originating raw input using a semantic cycle number. ACTION EXECUTIONS retains each task's trigger-time source selections, including older and empty completions, independently of subsequent STATE refreshes. Capture start, stop, and recovery leave source phase, completion identities, and physical movement history unchanged.
+STATE summarizes Mouse observation and named current/latest cycles using grouped coordinates and progress/period pairs. EVENTS retains keyboard and mouse-button history; mouse reports and meter ticks remain available internally for exact task correlation. ACTION EXECUTIONS shows a short trigger label, condition, and action. Task snapshot semantics remain independent of presentation. Capture start, stop, and recovery preserve meter phase, completion identities, and physical movement history.

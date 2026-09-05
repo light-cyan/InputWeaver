@@ -3,7 +3,7 @@ void TestMouseDebugTransport()
     using namespace inputweaver;
     const auto capture = test::MouseDebugCapture();
     auto storage = MakeReadableTapStorage();
-    for (const auto& source : capture.sources) {
+    for (const auto& source : capture.meters) {
         const StringId name{static_cast<std::uint32_t>(storage.strings.size())};
         storage.strings.push_back(source.name);
         const ExpressionId expression{static_cast<std::uint32_t>(storage.expressions.size())};
@@ -20,7 +20,7 @@ void TestMouseDebugTransport()
             ? ExpressionOpcode::PushDuration : ExpressionOpcode::PushNumber, source.periodType, constant, 0});
         storage.expressionCode.push_back({ExpressionOpcode::Return, source.periodType, 0, 0});
         storage.expressions.push_back({{begin, 2}, source.periodType, 1, {}});
-        storage.eventSources.push_back({name, source.transition, expression, {}});
+        storage.meters.push_back({name, source.transition, expression, {}});
     }
     storage.debugInfo.expressionInstructionSpans.resize(storage.expressionCode.size());
     storage.requirements = ComputeProgramRequirements(storage);
@@ -40,7 +40,7 @@ void TestMouseDebugTransport()
             auto& observed = *static_cast<Observation*>(context);
             try { snapshot = observed.snapshot; } catch (...) { return false; }
             snapshot.mouse.idleTime.nanoseconds = static_cast<std::int64_t>(++observed.samples) * 1'000'000;
-            snapshot.sources[0].completed.sequence = observed.latest.load();
+            snapshot.meters[0].completed.sequence = observed.latest.load();
             return true;
         }}}, error), "mouse Debug server starts with a snapshot callback");
     win32::WindowsDebugClient client;
@@ -50,23 +50,23 @@ void TestMouseDebugTransport()
         "mouse capture boundary is published");
     Check(WaitUntil([&] {
         const auto state = client.ReadState();
-        return state->capturing && state->eventSources.size() == 3 && state->mouse.mouse.idleTime.nanoseconds >= 2'000'000;
+        return state->capturing && state->meters.size() == 3 && state->mouse.mouse.idleTime.nanoseconds >= 2'000'000;
     }), "writer sampling updates idle STATE without input records");
     const auto correlation = server.BeginInput();
     RuntimeDebugEvent event{};
     event.kind = RuntimeDebugEventKind::MouseCycleCompleted;
     event.captureEpoch = correlation.captureEpoch;
     event.triggerInputSequence = correlation.inputSequence;
-    event.occurrence = {EventSourceId{0}, capture.mouse.sources[0].completed};
+    event.occurrence = {MeterId{0}, capture.mouse.meters[0].completed};
     Check(server.Publish(event), "completed cycle enters the shared bounded producer queue");
     event.kind = RuntimeDebugEventKind::RuleMatched;
     event.executionMarker = 7;
     event.ruleIndex = 0;
     event.selectionCount = 3;
     Check(server.Publish(event), "tick execution publishes its semantic trigger identity");
-    event.kind = RuntimeDebugEventKind::ExecutionSourceSelected;
+    event.kind = RuntimeDebugEventKind::ExecutionMeterSelected;
     for (std::uint32_t index = 0; index < 3; ++index) {
-        event.occurrence = {EventSourceId{index}, capture.mouse.sources[index].completed};
+        event.occurrence = {MeterId{index}, capture.mouse.meters[index].completed};
         Check(server.Publish(event), "source selection is copied into its own bounded record");
     }
     event.kind = RuntimeDebugEventKind::ExecutionEnded;
@@ -80,21 +80,21 @@ void TestMouseDebugTransport()
     Check(server.PublishInput(correlation, raw), "parent raw input follows its runtime records");
     Check(WaitUntil([&] {
         const auto state = client.ReadState();
-        return state->captureTrusted && state->recentInputEvents.size() == 2 && state->ruleExecutions.size() == 1
-            && state->ruleExecutions[0].completedSources.size() == 3 && state->ruleExecutions[0].result.has_value();
+        return state->captureTrusted && state->recentInputEvents.empty() && state->ruleExecutions.size() == 1
+            && state->ruleExecutions[0].completedMeters.size() == 3 && state->ruleExecutions[0].result.has_value();
     }), "native pipe transport correlates raw input, tick, and all fixed selections");
     observation.latest.store(19);
     Check(WaitUntil([&] {
         const auto state = client.ReadState();
-        return state->mouse.sources.size() == 3 && state->mouse.sources[0].completed.sequence == 19
-            && state->ruleExecutions.size() == 1 && state->ruleExecutions[0].completedSources[0].sequence == 12;
+        return state->mouse.meters.size() == 3 && state->mouse.meters[0].completed.sequence == 19
+            && state->ruleExecutions.size() == 1 && state->ruleExecutions[0].completedMeters[0].sequence == 12;
     }), "periodic state replacement preserves an older task selection");
     Check(client.StartCapture().Succeeded() && WaitForRequest(server) == win32::DebugCaptureRequest::Start
         && server.BeginCapture({}), "capture can restart during ongoing source statistics");
     Check(WaitUntil([&] {
         const auto state = client.ReadState();
-        return state->captureEpoch > correlation.captureEpoch && state->mouse.sources.size() == 3
-            && state->mouse.sources[0].current.progress == 3 && state->mouse.sources[0].completed.sequence == 19;
+        return state->captureEpoch > correlation.captureEpoch && state->mouse.meters.size() == 3
+            && state->mouse.meters[0].current.progress == 3 && state->mouse.meters[0].completed.sequence == 19;
     }), "new capture preserves runtime phase and semantic completion identity");
     server.Stop();
     Check(client.ReadState()->streamComplete, "sampled mouse capture retains the final stream acknowledgment");

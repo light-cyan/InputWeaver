@@ -95,9 +95,9 @@ private:
                 array.array,
                 array.declaration});
         }
-        for (const auto& source : program_.eventSources) {
+        for (const auto& source : program_.meters) {
             const auto period = LowerExpression(*source.period);
-            storage.eventSources.push_back({InternString(source.name), source.transition, period, source.declaration});
+            storage.meters.push_back({InternString(source.name), source.transition, period, source.declaration});
         }
     }
 
@@ -357,8 +357,8 @@ private:
                     first.value, second, action.span);
                 break;
             }
-            case BoundAction::Kind::RestartEvent:
-                EmitAction(code, ActionOpcode::RestartEvent, action.eventSource.value, 0U, action.span);
+            case BoundAction::Kind::RestartMeter:
+                EmitAction(code, ActionOpcode::RestartMeter, action.meter.value, 0U, action.span);
                 break;
             case BoundAction::Kind::Press:
             case BoundAction::Kind::Release:
@@ -587,7 +587,7 @@ private:
                 condition = LowerExpression(*rule.condition);
             }
             const ControlRefId source = rule.transition <= EventTransition::Up ? InternControl(rule.source) : ControlRefId{};
-            const EventKey key{source, rule.transition, rule.eventSource};
+            const EventKey key{source, rule.transition, rule.meter};
             if (rule.kind == BoundRule::Kind::Exit) {
                 exitRules_[key].push_back({
                     condition,

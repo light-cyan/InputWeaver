@@ -30,7 +30,7 @@ struct Symbol final {
     ArrayId array{};
     ArrayElementType arrayType{ArrayElementType::State};
     SourceSpan declaration{};
-    EventSourceId eventSource{};
+    MeterId meter{};
 };
 
 [[nodiscard]] bool IsWritable(ValueRef value) noexcept
@@ -186,8 +186,8 @@ public:
             case TopLevelSyntax::Kind::MouseIdleTimeoutSetting:
                 BindDurationSetting(item);
                 break;
-            case TopLevelSyntax::Kind::EventDeclaration:
-                BindEventDeclaration(item);
+            case TopLevelSyntax::Kind::MeterDeclaration:
+                BindMeterDeclaration(item);
                 break;
             case TopLevelSyntax::Kind::RandomSeedSetting:
                 BindRandomSeedSetting(item);
@@ -1120,9 +1120,9 @@ private:
             case ActionSyntax::Kind::Pointer:
                 BindPointerAction(item, action);
                 break;
-            case ActionSyntax::Kind::RestartEvent:
-                action.kind = BoundAction::Kind::RestartEvent;
-                action.eventSource = ResolveEventSource(item.secondaryName, item.span);
+            case ActionSyntax::Kind::RestartMeter:
+                action.kind = BoundAction::Kind::RestartMeter;
+                action.meter = ResolveMeter(item.secondaryName, item.span);
                 break;
             case ActionSyntax::Kind::Input: {
                 const auto control = BindControl(item.control);

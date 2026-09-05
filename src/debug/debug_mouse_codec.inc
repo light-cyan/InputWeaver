@@ -72,8 +72,8 @@ void WriteMouseSnapshot(ByteWriter& writer, const RuntimeMouseSnapshot& snapshot
     WriteMouseDelta(writer, snapshot.mouse.delta);
     writer.I64(snapshot.mouse.idleTime.nanoseconds);
     writer.Boolean(snapshot.mouse.moving);
-    writer.U32(static_cast<std::uint32_t>(snapshot.sources.size()));
-    for (const auto& source : snapshot.sources) {
+    writer.U32(static_cast<std::uint32_t>(snapshot.meters.size()));
+    for (const auto& source : snapshot.meters) {
         WriteMouseCycle(writer, source.current);
         WriteMouseCycle(writer, source.completed);
         writer.Boolean(source.moving);
@@ -87,8 +87,8 @@ bool ReadMouseSnapshot(ByteReader& reader, RuntimeMouseSnapshot& snapshot)
         || !reader.I64(snapshot.mouse.idleTime.nanoseconds) || snapshot.mouse.idleTime.nanoseconds < 0
         || !reader.Boolean(snapshot.mouse.moving) || !reader.U32(count)
         || count > reader.Remaining() / 179U) return false;
-    snapshot.sources.resize(count);
-    for (auto& source : snapshot.sources) {
+    snapshot.meters.resize(count);
+    for (auto& source : snapshot.meters) {
         if (!ReadMouseCycle(reader, source.current) || !ReadMouseCycle(reader, source.completed)
             || !reader.Boolean(source.moving)) return false;
     }
@@ -97,9 +97,9 @@ bool ReadMouseSnapshot(ByteReader& reader, RuntimeMouseSnapshot& snapshot)
 
 bool WriteMouseCapture(ByteWriter& writer, const CaptureStartedPayload& capture)
 {
-    if (capture.sources.size() != capture.mouse.sources.size()) return false;
-    writer.U32(static_cast<std::uint32_t>(capture.sources.size()));
-    for (const auto& source : capture.sources) {
+    if (capture.meters.size() != capture.mouse.meters.size()) return false;
+    writer.U32(static_cast<std::uint32_t>(capture.meters.size()));
+    for (const auto& source : capture.meters) {
         if (source.name.size() > kMaximumDebugTextBytes) return false;
         writer.String(source.name);
         WriteEnum(writer, source.transition);
@@ -113,13 +113,13 @@ bool ReadMouseCapture(ByteReader& reader, CaptureStartedPayload& capture)
 {
     std::uint32_t count{};
     if (!reader.U32(count) || count > reader.Remaining() / 6U) return false;
-    capture.sources.resize(count);
-    for (auto& source : capture.sources) {
+    capture.meters.resize(count);
+    for (auto& source : capture.meters) {
         if (!reader.String(source.name) || source.name.empty()
             || !ReadEnum(reader, source.transition, static_cast<std::uint16_t>(EventTransition::HorizontalWheel))
             || source.transition < EventTransition::Move
             || !ReadEnum(reader, source.periodType, static_cast<std::uint16_t>(ExpressionType::Duration))
             || (source.periodType != ExpressionType::Number && source.periodType != ExpressionType::Duration)) return false;
     }
-    return ReadMouseSnapshot(reader, capture.mouse) && capture.mouse.sources.size() == capture.sources.size();
+    return ReadMouseSnapshot(reader, capture.mouse) && capture.mouse.meters.size() == capture.meters.size();
 }

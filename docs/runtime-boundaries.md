@@ -37,7 +37,7 @@ Target 未绑定时，低级钩子继续监听，Debug 继续捕获，物理退�
 | 事件事务队列项数 | 1024 |
 | 运行时内部诊断记录数 | 256 |
 
-The mouse accumulator stores at most 1024 completed cycles for one normalized input report. Each active source and task owns its cycle state and completion selections. Exceeding the per-report cycle capacity raises `TransactionCapacity` and requests fatal cancellation before that report can commit rule work; the physical report is forwarded. Mouse observation and pointer output are checked against the runtime ports during activation.
+The mouse accumulator stores at most 1024 completed cycles for one normalized input report. Each active meter and task owns its cycle state and completion selections. Exceeding the per-report cycle capacity raises `TransactionCapacity` and requests fatal cancellation before that report can commit rule work; the physical report is forwarded. Mouse observation and pointer output are checked against the runtime ports during activation.
 
 编译产物保存由程序结构精确推导出的需求。激活错误输出中的 `code`、`subject`、`required` 和 `available` 分别表示失败类别、具体限制维度、该维度的需求和该维度的执行器容量；无效的调度器配置与无效的输出速率配置使用独立错误类别。激活失败不会安装输入钩子，也不会开始规则分派。
 
@@ -126,9 +126,9 @@ Debug 是运行时旁路观测通道，不改变规则分派和动作执行的�
 
 ### Mouse Debug transport
 
-The local Debug protocol is version 6. CaptureStarted includes declared source names and types plus a complete mouse/source snapshot. Live mouse snapshots replace that state atomically at a 50 ms sampling cadence on the pipe writer thread. Snapshot reads share the runtime variable transaction lock; the hook publishes raw inputs and completed-cycle records through the bounded producer queue.
+The local Debug protocol is version 6. CaptureStarted includes declared meter names and types plus a complete mouse/meter snapshot. Live mouse snapshots replace that state atomically at a 50 ms sampling cadence on the pipe writer thread. Snapshot reads share the runtime variable transaction lock; the hook publishes raw inputs and completed-cycle records through the bounded producer queue.
 
-Raw inputs and named ticks share the 512-entry recent-event capacity. Up to 512 completed-cycle records can await their parent raw input. Each task publishes one fixed selection record per source, with an explicit expected count on its execution record. The client presents the selection after receiving that count. Semantic cycle numbers remain independent of capture epochs, and capture recovery queries the existing runtime state.
+Keyboard and mouse-button reports occupy the 512-entry visible event history. Numeric mouse reports and named ticks share a separate 512-entry internal correlation history. Up to 512 completed-cycle records can await their parent raw input. Each task publishes one fixed selection record per meter, with an explicit expected count on its execution record; these records support internal task state. Semantic cycle numbers remain independent of capture epochs, and capture recovery queries the existing runtime state.
 
 Mouse hook JSONL records include `x`, `y`, `dx`, `dy`, `wheel_x`, and `wheel_y`. Pointer injection records include `operation`, `argument_x`, `argument_y`, and `prepared`. Successful preparation adds `origin_x/y` and either `destination_x/y` or `wheel_amount` in detents. These values use the existing bounded logging and privacy policy.
 

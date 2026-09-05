@@ -67,7 +67,7 @@ std::string_view InputOriginLabel(InputOrigin origin) noexcept
 struct DebugStateReducer::Impl final {
     struct PendingExecution final : DebugRuleExecution {
         std::uint64_t triggerInputSequence{};
-        EventSourceId triggerEventSource{};
+        MeterId triggerMeter{};
         std::uint64_t triggerCycleSequence{};
     };
 
@@ -92,8 +92,9 @@ struct DebugStateReducer::Impl final {
         state.arrays.clear();
         state.ruleExecutions.clear();
         state.runtimeIssues.clear();
-        state.eventSources.clear();
+        state.meters.clear();
         state.mouse = {};
+        mouseInputs.clear();
         pendingCycles.clear();
         pendingExecutions.clear();
         lastInputSequence = 0U;
@@ -178,16 +179,17 @@ struct DebugStateReducer::Impl final {
     }
 
     [[nodiscard]] DebugInputEvent* FindInput(std::uint64_t sequence,
-        EventSourceId source = {}, std::uint64_t cycle = 0)
+        MeterId source = {}, std::uint64_t cycle = 0)
     {
-        const auto found = std::find_if(
-            state.recentInputEvents.begin(),
-            state.recentInputEvents.end(),
-            [=](const DebugInputEvent& input) {
-                return input.inputSequence == sequence && input.occurrence.source == source
-                    && input.occurrence.cycle.sequence == cycle;
-            });
-        return found == state.recentInputEvents.end() ? nullptr : &*found;
+        for (auto* history : {&state.recentInputEvents, &mouseInputs}) {
+            const auto found = std::find_if(history->begin(), history->end(),
+                [=](const DebugInputEvent& input) {
+                    return input.inputSequence == sequence && input.occurrence.source == source
+                        && input.occurrence.cycle.sequence == cycle;
+                });
+            if (found != history->end()) return &*found;
+        }
+        return nullptr;
     }
 
     [[nodiscard]] DebugRuleExecution* FindExecution(std::uint64_t marker)
@@ -264,7 +266,7 @@ struct DebugStateReducer::Impl final {
         for (std::size_t index = 0U; index < pendingExecutions.size();) {
             if (pendingExecutions[index].triggerInputSequence
                 != trigger.inputSequence
-                || pendingExecutions[index].triggerEventSource != trigger.occurrence.source
+                || pendingExecutions[index].triggerMeter != trigger.occurrence.source
                 || pendingExecutions[index].triggerCycleSequence != trigger.occurrence.cycle.sequence) {
                 ++index;
                 continue;
@@ -291,7 +293,7 @@ struct DebugStateReducer::Impl final {
             || message.captureStarted.captureUnixTimeMilliseconds <= 0
             || message.captureStarted.values.size() > capacities.maximumValues
             || message.captureStarted.arrays.size() > capacities.maximumArrays
-            || message.captureStarted.sources.size() != message.captureStarted.mouse.sources.size()) {
+            || message.captureStarted.meters.size() != message.captureStarted.mouse.meters.size()) {
             return Recover(DebugClientFault::InconsistentState);
         }
         ClearCapture();
@@ -299,7 +301,7 @@ struct DebugStateReducer::Impl final {
         captureStartUnixTimeMilliseconds =
             message.captureStarted.captureUnixTimeMilliseconds;
         state.captureEpoch = message.header.captureEpoch;
-        state.eventSources = message.captureStarted.sources;
+        state.meters = message.captureStarted.meters;
         state.mouse = message.captureStarted.mouse;
         state.values.reserve(message.captureStarted.values.size());
         for (const DebugNamedValue& value : message.captureStarted.values) {
@@ -386,8 +388,10 @@ struct DebugStateReducer::Impl final {
             input.unmatchedUp = !removedInitial && !removedOrigin;
         }
         lastInputSequence = payload.inputSequence;
+        const bool numericMouse = input.control.device == DeviceKind::Mouse
+            && input.transition != Transition::Down && input.transition != Transition::Up;
         AppendRecent(
-            state.recentInputEvents,
+            numericMouse ? mouseInputs : state.recentInputEvents,
             input,
             capacities.maximumInputEvents);
         if (!MaterializeForInput(input) || !MaterializeCycles(input)) {
@@ -403,8 +407,8 @@ struct DebugStateReducer::Impl final {
         const RuleMatchedPayload& matched = message.ruleMatched;
         if (matched.executionMarker == 0U
             || matched.triggerInputSequence == 0U
-            || (matched.selectionCount != 0 && matched.selectionCount != state.eventSources.size())
-            || (matched.triggerEventSource.IsValid() && matched.triggerEventSource.value >= state.eventSources.size())
+            || (matched.selectionCount != 0 && matched.selectionCount != state.meters.size())
+            || (matched.triggerMeter.IsValid() && matched.triggerMeter.value >= state.meters.size())
             || MarkerExists(matched.executionMarker)) {
             return Recover(DebugClientFault::InconsistentState);
         }
@@ -416,7 +420,7 @@ struct DebugStateReducer::Impl final {
         }
         if (matched.triggerInputSequence <= lastInputSequence
             && FindInput(matched.triggerInputSequence) == nullptr
-            && FindInput(matched.triggerInputSequence, matched.triggerEventSource, matched.triggerCycleSequence) == nullptr) {
+            && FindInput(matched.triggerInputSequence, matched.triggerMeter, matched.triggerCycleSequence) == nullptr) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
         if (pendingExecutions.size()
@@ -426,7 +430,7 @@ struct DebugStateReducer::Impl final {
         PendingExecution pending{};
         pending.executionMarker = matched.executionMarker;
         pending.triggerInputSequence = matched.triggerInputSequence;
-        pending.triggerEventSource = matched.triggerEventSource;
+        pending.triggerMeter = matched.triggerMeter;
         pending.triggerCycleSequence = matched.triggerCycleSequence;
         pending.selectionCount = matched.selectionCount;
         pending.conditionText = matched.conditionText;
@@ -434,7 +438,7 @@ struct DebugStateReducer::Impl final {
         pending.matchedUnixTimeMilliseconds = matchedUnixTimeMilliseconds;
         pendingExecutions.push_back(std::move(pending));
         DebugInputEvent* trigger = FindInput(matched.triggerInputSequence,
-            matched.triggerEventSource, matched.triggerCycleSequence);
+            matched.triggerMeter, matched.triggerCycleSequence);
         if (trigger != nullptr
             && !Materialize(pendingExecutions.size() - 1U, *trigger)) {
             return Recover(DebugClientFault::CapacityExceeded);
@@ -606,8 +610,8 @@ struct DebugStateReducer::Impl final {
             return AcceptMouseState(message);
         case MessageKind::MouseCycleCompleted:
             return AcceptMouseCycle(message);
-        case MessageKind::ExecutionSourceSelected:
-            return AcceptSourceSelection(message);
+        case MessageKind::ExecutionMeterSelected:
+            return AcceptMeterSelection(message);
         case MessageKind::Hello:
         case MessageKind::HelloAccepted:
         case MessageKind::StartCapture:
@@ -626,6 +630,7 @@ struct DebugStateReducer::Impl final {
     DebugClientState state;
     std::shared_ptr<const DebugClientState> published;
     std::vector<PendingExecution> pendingExecutions;
+    std::vector<DebugInputEvent> mouseInputs;
     std::vector<DebugInputEvent> pendingCycles;
     std::uint64_t nextProtocolSequence{1U};
     std::uint64_t lastInputSequence{};
@@ -648,6 +653,7 @@ void DebugStateReducer::Connected(std::uint64_t targetSessionId)
     impl_->state = {};
     impl_->pendingExecutions.clear();
     impl_->pendingCycles.clear();
+    impl_->mouseInputs.clear();
     impl_->lastInputSequence = 0U;
     impl_->captureStartTimeNanoseconds = 0;
     impl_->captureStartUnixTimeMilliseconds = 0;

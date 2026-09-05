@@ -375,7 +375,7 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
             result,
             true);
         matched = false;
-        return result.fault == RuntimeEvaluationFault::MissingCompletedEvent;
+        return result.fault == RuntimeEvaluationFault::MissingCompletedMeter;
     }
     matched = result.value.booleanValue;
     return true;

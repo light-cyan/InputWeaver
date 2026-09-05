@@ -761,7 +761,7 @@ struct WindowsDebugServer::Impl final {
         }
         payload.executionMarker = event.executionMarker;
         payload.triggerInputSequence = event.triggerInputSequence;
-        payload.triggerEventSource = event.occurrence.source;
+        payload.triggerMeter = event.occurrence.source;
         payload.triggerCycleSequence = event.occurrence.cycle.sequence;
         payload.selectionCount = event.selectionCount;
         const CompiledRule& rule = program->Rules()[event.ruleIndex];
@@ -801,7 +801,7 @@ struct WindowsDebugServer::Impl final {
     {
         const RuntimeDebugEvent& event = record.runtime;
         if (event.kind == RuntimeDebugEventKind::MouseCycleCompleted
-            || event.kind == RuntimeDebugEventKind::ExecutionSourceSelected) {
+            || event.kind == RuntimeDebugEventKind::ExecutionMeterSelected) {
             return SendMouseRecord(pipe, record, protocolSequence);
         }
         if (event.kind == RuntimeDebugEventKind::RuleMatched) {

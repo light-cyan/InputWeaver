@@ -21,28 +21,28 @@ std::shared_ptr<const inputweaver::CompiledProgram> MakeMouseTaskProgram(bool ex
             {instruction, {ExpressionOpcode::Return, instruction.type, 0, 0}});
         return id.value;
     };
-    const auto field = [&](std::uint32_t source, EventField name, bool completed) {
-        const EventFieldReference ref{EventSourceId{source}, name, completed};
-        return expression({ExpressionOpcode::LoadField, EventFieldType(ref), source, ref.Selector()});
+    const auto field = [&](std::uint32_t source, MouseField name, bool completed) {
+        const MouseFieldReference ref{MeterId{source}, name, completed};
+        return expression({ExpressionOpcode::LoadField, MouseFieldType(ref), source, ref.Selector()});
     };
     const auto finePeriod = expression({ExpressionOpcode::PushNumber, ExpressionType::Number, 0, 0});
     const auto coarsePeriod = expression({ExpressionOpcode::PushNumber, ExpressionType::Number, 1, 0});
-    storage.eventSources = {
+    storage.meters = {
         {string("fine"), EventTransition::Move, ExpressionId{finePeriod}, {}},
         {string("coarse"), EventTransition::Move, ExpressionId{coarsePeriod}, {}},
     };
     const auto delay = expression({ExpressionOpcode::PushDuration, ExpressionType::Duration, 0, 0});
-    const auto fineStart = field(0, EventField::StartX, true);
-    const auto fineEnd = field(0, EventField::X, true);
-    const auto coarseEnd = field(1, EventField::X, true);
-    const auto liveDelta = field(kInvalidProgramIndex, EventField::Dx, false);
-    const auto progress = field(0, EventField::Progress, false);
-    const auto mouseX = field(kInvalidProgramIndex, EventField::X, false);
-    const auto mouseY = field(kInvalidProgramIndex, EventField::Y, false);
-    const auto fineDx = field(0, EventField::Dx, true);
+    const auto fineStart = field(0, MouseField::StartX, true);
+    const auto fineEnd = field(0, MouseField::X, true);
+    const auto coarseEnd = field(1, MouseField::X, true);
+    const auto liveDelta = field(kInvalidProgramIndex, MouseField::Dx, false);
+    const auto progress = field(0, MouseField::Progress, false);
+    const auto mouseX = field(kInvalidProgramIndex, MouseField::X, false);
+    const auto mouseY = field(kInvalidProgramIndex, MouseField::Y, false);
+    const auto fineDx = field(0, MouseField::Dx, true);
     const auto quarter = expression({ExpressionOpcode::PushNumber, ExpressionType::Number, 2, 0});
     const auto halfBack = expression({ExpressionOpcode::PushNumber, ExpressionType::Number, 3, 0});
-    (void)field(0, EventField::Valid, true);
+    (void)field(0, MouseField::Valid, true);
     for (std::uint32_t index = 0; index < 8; ++index) {
         storage.arrays.push_back({ArrayElementType::Number, {}});
         storage.debugInfo.arrays.push_back({string("samples" + std::to_string(index)), ArrayId{index}, {index + 1, 1}});
@@ -58,7 +58,7 @@ std::shared_ptr<const inputweaver::CompiledProgram> MakeMouseTaskProgram(bool ex
         storage.eventBuckets.push_back({key, {ordinal, 1}});
         storage.debugInfo.rules.push_back({ordinal, {}, {}});
     };
-    rule({{}, EventTransition::Tick, EventSourceId{0}}, Delivery::Observe, {
+    rule({{}, EventTransition::Tick, MeterId{0}}, Delivery::Observe, {
         {ActionOpcode::AppendArrayElement, 0, fineStart},
         {ActionOpcode::Wait, delay, 0},
         {ActionOpcode::AppendArrayElement, 1, fineStart},
@@ -67,18 +67,18 @@ std::shared_ptr<const inputweaver::CompiledProgram> MakeMouseTaskProgram(bool ex
         {ActionOpcode::AppendArrayElement, 4, progress},
     });
     storage.rules.back().flow = MatchFlow::Continue;
-    rule({{}, EventTransition::Tick, EventSourceId{0}}, Delivery::Observe,
+    rule({{}, EventTransition::Tick, MeterId{0}}, Delivery::Observe,
         {{ActionOpcode::AppendArrayElement, 0, fineStart}});
     storage.eventBuckets.pop_back();
     storage.eventBuckets.back().rules.count = 2;
-    rule({{}, EventTransition::Tick, EventSourceId{1}}, Delivery::Observe,
+    rule({{}, EventTransition::Tick, MeterId{1}}, Delivery::Observe,
         {{ActionOpcode::AppendArrayElement, 5, fineEnd}});
     rule({{}, EventTransition::Move}, Delivery::Consume,
         {{ActionOpcode::AppendArrayElement, 6, liveDelta}});
     rule({ControlRefId{1}, EventTransition::Down}, Delivery::Observe,
         {{ActionOpcode::Wait, delay, 0}, {ActionOpcode::AppendArrayElement, 7, fineEnd}});
     rule({ControlRefId{0}, EventTransition::Down}, Delivery::Observe,
-        {{ActionOpcode::RestartEvent, 0, 0},
+        {{ActionOpcode::RestartMeter, 0, 0},
          {ActionOpcode::Pointer, static_cast<std::uint32_t>(PointerOperation::MoveTo), mouseX, mouseY},
          {ActionOpcode::Pointer, static_cast<std::uint32_t>(PointerOperation::MoveBy), fineDx, liveDelta},
          {ActionOpcode::Pointer, static_cast<std::uint32_t>(PointerOperation::Scroll), quarter, 0},
@@ -169,10 +169,10 @@ void TestMouseDebugSnapshots()
     harness.route.pointer = {100, -200};
     Check(harness.runtime.Activate(program).activated, "mouse Debug program activates");
     RuntimeMouseSnapshot snapshot;
-    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.sources.size() == 2
-        && snapshot.sources[0].current.start == MousePoint{100, -200}
-        && snapshot.sources[0].current.period.type == ExpressionType::Number
-        && snapshot.sources[0].current.period.numberValue == 0,
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.meters.size() == 2
+        && snapshot.meters[0].current.start == MousePoint{100, -200}
+        && snapshot.meters[0].current.period.type == ExpressionType::Number
+        && snapshot.meters[0].current.period.numberValue == 0,
         "unopened Debug sources expose observed origins and typed zero periods");
     RuntimeInputEvent input{};
     input.device = DeviceKind::Mouse;
@@ -184,10 +184,10 @@ void TestMouseDebugSnapshots()
     harness.route.pointer = input.position;
     (void)harness.runtime.HandleInput(input);
     Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.mouse.delta.dx == 27
-        && snapshot.sources[0].current.start.x == 124 && snapshot.sources[0].current.progress == 3
-        && snapshot.sources[1].completed.start.x == 100 && snapshot.sources[1].completed.point.x == 124,
+        && snapshot.meters[0].current.start.x == 124 && snapshot.meters[0].current.progress == 3
+        && snapshot.meters[1].completed.start.x == 100 && snapshot.meters[1].completed.point.x == 124,
         "Debug snapshots reuse interpolated boundaries, remainder, and latest observation");
-    const auto firstCompletion = snapshot.sources[0].completed.sequence;
+    const auto firstCompletion = snapshot.meters[0].completed.sequence;
     std::vector<MouseOccurrence> occurrences;
     for (const auto& event : harness.debug.events) {
         if (event.kind != RuntimeDebugEventKind::MouseCycleCompleted) continue;
@@ -204,7 +204,7 @@ void TestMouseDebugSnapshots()
         if (event.kind != RuntimeDebugEventKind::RuleMatched) continue;
         Check(event.selectionCount == 2, "each task publishes its full fixed source selection");
         for (const auto& selected : harness.debug.events) {
-            if (selected.kind != RuntimeDebugEventKind::ExecutionSourceSelected
+            if (selected.kind != RuntimeDebugEventKind::ExecutionMeterSelected
                 || selected.executionMarker != event.executionMarker) continue;
             Check(selected.occurrence.cycle.sequence != 0,
                 "same-input selections include all completed sources");
@@ -219,8 +219,8 @@ void TestMouseDebugSnapshots()
     harness.clock.Advance(100'000'000);
     Check(harness.runtime.ReadMouseSnapshot(snapshot) && !snapshot.mouse.moving
         && snapshot.mouse.idleTime.nanoseconds == 100'000'000 && snapshot.mouse.delta.dx == 27
-        && snapshot.sources[0].completed.sequence == firstCompletion
-        && snapshot.sources[0].current.progress == 3,
+        && snapshot.meters[0].completed.sequence == firstCompletion
+        && snapshot.meters[0].current.progress == 3,
         "STATE polling updates idle state without clearing deltas, distance, or completion identity");
     input.debugCaptureEpoch = 2;
     input.debugInputSequence = 1;
@@ -229,8 +229,8 @@ void TestMouseDebugSnapshots()
     harness.route.pointer = input.position;
     (void)harness.runtime.HandleInput(input);
     Check(harness.runtime.ReadMouseSnapshot(snapshot)
-        && snapshot.sources[0].completed.sequence > firstCompletion
-        && snapshot.sources[0].completed.start.x == 124 && snapshot.sources[0].completed.point.x == 132,
+        && snapshot.meters[0].completed.sequence > firstCompletion
+        && snapshot.meters[0].completed.start.x == 124 && snapshot.meters[0].completed.point.x == 132,
         "a new capture epoch preserves the ongoing cycle and semantic identity sequence");
 }
 
@@ -243,7 +243,7 @@ void TestKeyProgramMouseDebugObservation()
     Check(harness.runtime.Activate(Finalize(test::MakeTapFixtureStorage())).activated,
         "key-only program activates with a Debug observation port");
     RuntimeMouseSnapshot snapshot;
-    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.sources.empty()
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.meters.empty()
         && snapshot.mouse.position == MousePoint{-80, 20}, "Debug observes Mouse for key-only programs");
     RuntimeInputEvent input{};
     input.device = DeviceKind::Mouse;
@@ -264,8 +264,8 @@ void TestMouseQualificationLifecycle()
     harness.route.pointerAvailable = true;
     harness.output.pointerSupported = true;
     Check(harness.runtime.Activate(program).activated, "qualified mouse program activates");
-    const auto read = [&](EventField field, std::uint32_t source, bool completed) {
-        const auto selector = EventFieldReference{EventSourceId{source}, field, completed}.Selector();
+    const auto read = [&](MouseField field, std::uint32_t source, bool completed) {
+        const auto selector = MouseFieldReference{MeterId{source}, field, completed}.Selector();
         for (std::size_t index = 0; index < program->Expressions().size(); ++index) {
             const auto& code = program->ExpressionCode()[program->Expressions()[index].code.begin];
             if (code.opcode == ExpressionOpcode::LoadField && code.operand0 == source && code.operand1 == selector) {
@@ -286,30 +286,30 @@ void TestMouseQualificationLifecycle()
     };
     move(27, 27);
     (void)harness.runtime.Pump();
-    Check(read(EventField::Valid, 0, true).stateValue == 1, "qualified movement produces a completion");
+    Check(read(MouseField::Valid, 0, true).stateValue == 1, "qualified movement produces a completion");
     harness.runtime.SetTargetEligible(false);
     move(35, 8);
     (void)harness.runtime.Pump();
-    Check(read(EventField::Valid, 0, true).stateValue == 0 && read(EventField::Progress, 0, false).numberValue == 0
-        && read(EventField::Dx, kInvalidProgramIndex, false).numberValue == 8,
+    Check(read(MouseField::Valid, 0, true).stateValue == 0 && read(MouseField::Progress, 0, false).numberValue == 0
+        && read(MouseField::Dx, kInvalidProgramIndex, false).numberValue == 8,
         "target loss resets sources while global physical observation continues");
     harness.runtime.SetTargetEligible(true);
     move(38, 3);
-    Check(read(EventField::Progress, 0, false).numberValue == 3, "restored target starts a fresh source cycle");
+    Check(read(MouseField::Progress, 0, false).numberValue == 3, "restored target starts a fresh source cycle");
     const auto pause = FindKeyboardControl(*program, 0x41);
     (void)harness.runtime.HandleInput(KeyboardEvent(pause.value, Transition::Down));
     move(43, 5);
-    Check(!harness.runtime.PauseOn() && read(EventField::Progress, 0, false).numberValue == 0
-        && read(EventField::Dx, kInvalidProgramIndex, false).numberValue == 5,
+    Check(!harness.runtime.PauseOn() && read(MouseField::Progress, 0, false).numberValue == 0
+        && read(MouseField::Dx, kInvalidProgramIndex, false).numberValue == 5,
         "pause resets accumulation without freezing global deltas");
     (void)harness.runtime.HandleInput(KeyboardEvent(pause.value, Transition::Up));
     (void)harness.runtime.HandleInput(KeyboardEvent(pause.value, Transition::Down));
     move(51, 8);
-    Check(harness.runtime.PauseOn() && read(EventField::Valid, 0, true).stateValue == 1,
+    Check(harness.runtime.PauseOn() && read(MouseField::Valid, 0, true).stateValue == 1,
         "resuming pause permits a newly completed cycle");
     harness.runtime.Deactivate();
     Check(harness.runtime.Activate(program).activated
-        && read(EventField::Valid, 0, true).stateValue == 0
-        && read(EventField::Dx, kInvalidProgramIndex, false).numberValue == 0,
+        && read(MouseField::Valid, 0, true).stateValue == 0
+        && read(MouseField::Dx, kInvalidProgramIndex, false).numberValue == 0,
         "program activation starts fresh completion and physical observation state");
 }

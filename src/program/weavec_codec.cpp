@@ -296,7 +296,7 @@ void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requiremen
     writer.U8(requirements.requiresProcessLaunch ? 1U : 0U);
     writer.U8(requirements.requiresMouseObservation ? 1U : 0U);
     writer.U8(requirements.requiresPointerOutput ? 1U : 0U);
-    writer.U32(requirements.eventSourceCount);
+    writer.U32(requirements.meterCount);
 }
 
 template <typename Id>
@@ -440,7 +440,7 @@ template <typename Value, typename ReadElement>
         || !reader.U8(requiresProcessLaunch)
         || !reader.U8(requiresMouseObservation)
         || !reader.U8(requiresPointerOutput)
-        || !reader.U32(requirements.eventSourceCount)) {
+        || !reader.U32(requirements.meterCount)) {
         return false;
     }
     if (requiresProcessLaunch > 1U || requiresMouseObservation > 1U || requiresPointerOutput > 1U) {
@@ -667,7 +667,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             WriteId(output, value.conditionText);
             WriteId(output, value.actionText);
         });
-    WriteVector(writer, program.EventSources(), [](ByteWriter& output, const EventSourceDescriptor& value) {
+    WriteVector(writer, program.Meters(), [](ByteWriter& output, const MeterDescriptor& value) {
         WriteId(output, value.name);
         WriteEnum(output, value.transition);
         WriteId(output, value.period);
@@ -865,7 +865,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             limits,
             13U,
             [](ByteReader& input, ActionInstruction& value) {
-                if (!ReadEnum(input, value.opcode, ActionOpcode::RestartEvent)
+                if (!ReadEnum(input, value.opcode, ActionOpcode::RestartMeter)
                     || !input.U32(value.operand0)
                     || !input.U32(value.operand1)) {
                     return false;
@@ -1011,8 +1011,8 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             return input.U32(value.sourceOrdinal)
                 && ReadId(input, value.conditionText)
                 && ReadId(input, value.actionText);
-        }) && ReadVector(reader, storage.eventSources, limits, 17U,
-            [](ByteReader& input, EventSourceDescriptor& value) {
+        }) && ReadVector(reader, storage.meters, limits, 17U,
+            [](ByteReader& input, MeterDescriptor& value) {
                 return ReadId(input, value.name)
                     && ReadEnum(input, value.transition, EventTransition::HorizontalWheel)
                     && ReadId(input, value.period)

@@ -389,10 +389,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        14266916754674283268ULL,
-        9073278042415446105ULL,
-        10692574025948081081ULL,
-        6974028566661281057ULL,
+        6635848492368229754ULL,
+        4929706360395712375ULL,
+        14688529203334995079ULL,
+        556140693310858667ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),

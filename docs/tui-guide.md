@@ -166,6 +166,8 @@ Console 汇总应用、编译器和执行器输出。连续的同程序、同来
 
 Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。页面首先处于区域选择状态：EVENTS 的 `[Right]` 进入 STATE、`[Down]` 进入 ACTION EXECUTIONS，STATE 的 `[Left]` 返回 EVENTS、`[Down]` 进入 ACTION EXECUTIONS，ACTION EXECUTIONS 的 `[Up]` 返回 EVENTS。按 `[Enter]` 进入所选区域后，方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动该区域；按 `[Esc]` 返回区域选择。
 
+The EVENTS/STATE row occupies approximately 60% of the body between the header and HEALTH; ACTION EXECUTIONS occupies the remaining 40%. EVENTS uses at most 60 columns, with STATE taking the remaining width. At the minimum 80-column window, EVENTS uses 53 columns and STATE uses 27 columns. HEALTH retains four rows.
+
 活动 Debug 会话中，`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器；`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。执行器结束后，这两个操作不再显示，最终捕获快照保留到下一次 Debug 会话开始。`[` 返回 Program；区域选择状态下也可以使用 `[Esc]` 返回 Program。
 
 ### EVENTS
@@ -216,13 +218,13 @@ HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient �
 
 ## Mouse observation
 
-Debug observes mouse position and numeric input even when the running program only declares key rules. STATE adds `Mouse.x/y`, the latest complete `dx/dy/wheel_x/wheel_y` tuple, `moving`, and `idle_time`. The writer samples live mouse state every 50 ms while capturing; stationary time updates idle state while preserving the most recent input deltas.
+Debug observes mouse position and numeric input even when the running program only declares key rules. STATE groups the observation as `Mouse pos(x,y) d(dx,dy) wheel(x,y) moving idle(time)`. Wheel pairs list horizontal then vertical amount; the status becomes `idle` when movement stops. Idle time always uses seconds, such as `idle(0.012s)` or `idle(60s)`. The writer samples live mouse state every 50 ms while capturing. Mouse numbers use six significant digits for display; language evaluation and captured data retain their original precision.
 
-Each declared event source appears under its own name. Its current row shows the latched period, progress, remaining amount, coordinates, and movement or wheel statistics. Its `@` row shows the latest completed cycle with `valid=on` and a semantic cycle number, or `valid=off`. Distance and duration periods retain their respective numeric and time formatting. Long mouse rows wrap within the existing scrollable regions.
+Each meter uses a compact current row such as `[path 3/24 start(100,200) pos(103,200) d(3,0)]`: the fraction is progress/period, coordinate pairs are x/y, and `d` is net dx/dy. Duration meters also show `dist(length)`; wheel meters show signed progress/period and position. The `@` row summarizes the latest completed cycle, or reads `empty`. Groups wrap within the existing scrollable regions.
 
-EVENTS shows `Mouse:move`, `Mouse:wheel`, and `Mouse:horizontalwheel` with coordinates, normalized deltas, and `input=#N`. A named `source:tick` also shows `cycle=#N`, its parent input number, and its boundary data. Numeric mouse events leave the pressed-control set unchanged.
+EVENTS contains keyboard and mouse-button transitions. Numeric mouse reports and meter ticks use a separate internal correlation history, preserving the visible key history during continuous mouse input.
 
-ACTION EXECUTIONS identifies the actual raw or tick trigger. Each task's source selection is shown with an `@` prefix after all its source records arrive. These records retain the exact trigger-time completions, including older and empty selections, while STATE continues updating. A new capture rebuilds the displayed state from the runtime without restarting source statistics, changing phase, or resetting semantic cycle numbers.
+ACTION EXECUTIONS shows the trigger, condition, and action. Mouse trigger labels are `Mouse (move)`, `Mouse (wheel)`, `Mouse (horizontalwheel)`, or `name (tick)`; grouped mouse values belong to STATE. Task snapshots and correlation identities remain internal. A new capture rebuilds the displayed state from the runtime while preserving meter phase and completion identities.
 
 ## 配色
 

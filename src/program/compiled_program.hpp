@@ -36,7 +36,7 @@ struct ExpressionIdTag;
 struct ActionProgramIdTag;
 struct MappingIdTag;
 struct MappingSlotIdTag;
-struct EventSourceIdTag;
+struct MeterIdTag;
 
 using StringId = ProgramId<StringIdTag>;
 using ControlRefId = ProgramId<ControlRefIdTag>;
@@ -46,7 +46,7 @@ using ExpressionId = ProgramId<ExpressionIdTag>;
 using ActionProgramId = ProgramId<ActionProgramIdTag>;
 using MappingId = ProgramId<MappingIdTag>;
 using MappingSlotId = ProgramId<MappingSlotIdTag>;
-using EventSourceId = ProgramId<EventSourceIdTag>;
+using MeterId = ProgramId<MeterIdTag>;
 
 struct TableRange final {
     std::uint32_t begin{};
@@ -108,7 +108,7 @@ enum class EventTransition : std::uint8_t {
 struct EventKey final {
     ControlRefId control{};
     EventTransition transition{};
-    EventSourceId source{};
+    MeterId source{};
 
     auto operator<=>(const EventKey&) const = default;
 };
@@ -278,7 +278,7 @@ struct ExpressionDescriptor final {
     SourceSpan source{};
 };
 
-struct EventSourceDescriptor final {
+struct MeterDescriptor final {
     StringId name{};
     EventTransition transition{EventTransition::Move};
     ExpressionId period{};
@@ -332,7 +332,7 @@ enum class ActionOpcode : std::uint8_t {
     PopArrayElement,
     ClearArray,
     Pointer,
-    RestartEvent,
+    RestartMeter,
 };
 
 enum class PointerOperation : std::uint8_t {
@@ -463,7 +463,7 @@ struct ProgramRequirements final {
     bool requiresProcessLaunch{};
     bool requiresMouseObservation{};
     bool requiresPointerOutput{};
-    std::uint32_t eventSourceCount{};
+    std::uint32_t meterCount{};
 
     auto operator<=>(const ProgramRequirements&) const = default;
 };
@@ -495,7 +495,7 @@ struct CompiledProgramStorage final {
     std::vector<DurationValue> durationConstants;
     std::vector<ExpressionDescriptor> expressions;
     std::vector<ExpressionInstruction> expressionCode;
-    std::vector<EventSourceDescriptor> eventSources;
+    std::vector<MeterDescriptor> meters;
 
     std::vector<ActionProgramDescriptor> actionPrograms;
     std::vector<ActionInstruction> actionCode;
@@ -552,7 +552,7 @@ public:
     [[nodiscard]] std::span<const DurationValue> DurationConstants() const noexcept;
     [[nodiscard]] std::span<const ExpressionDescriptor> Expressions() const noexcept;
     [[nodiscard]] std::span<const ExpressionInstruction> ExpressionCode() const noexcept;
-    [[nodiscard]] std::span<const EventSourceDescriptor> EventSources() const noexcept;
+    [[nodiscard]] std::span<const MeterDescriptor> Meters() const noexcept;
     [[nodiscard]] std::span<const ActionProgramDescriptor> ActionPrograms() const noexcept;
     [[nodiscard]] std::span<const ActionInstruction> ActionCode() const noexcept;
     [[nodiscard]] std::span<const MappingSlotDescriptor> MappingSlots() const noexcept;

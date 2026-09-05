@@ -643,6 +643,7 @@ int main()
 {
     TestOriginsAndPressedState();
     TestMouseStateAndCorrelation();
+    TestMouseHistoryKeepsControls();
     TestRetainedTickCorrelation();
     TestRuleCorrelationAndInterleaving();
     TestIssuesAndRecovery();

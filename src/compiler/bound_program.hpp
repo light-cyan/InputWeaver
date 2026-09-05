@@ -1,7 +1,7 @@
 #pragma once
 
 #include "program/compiled_program.hpp"
-#include "program/event_fields.hpp"
+#include "program/mouse_fields.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -49,7 +49,7 @@ struct BoundExpression final {
     ValueRef value{};
     ArrayId array{};
     ControlRef control{};
-    EventFieldReference field{};
+    MouseFieldReference field{};
     UnaryOperator unary{};
     BinaryOperator binary{};
     std::unique_ptr<BoundExpression> left;
@@ -75,7 +75,7 @@ struct BoundAction final {
         Repeat,
         While,
         Pointer,
-        RestartEvent,
+        RestartMeter,
     };
 
     Kind kind{};
@@ -85,7 +85,7 @@ struct BoundAction final {
     ArrayId array{};
     std::string command;
     PointerOperation pointerOperation{};
-    EventSourceId eventSource{};
+    MeterId meter{};
     std::unique_ptr<BoundExpression> secondExpression;
     std::unique_ptr<BoundExpression> expression;
     std::unique_ptr<BoundExpression> index;
@@ -116,7 +116,7 @@ struct BoundRule final {
     Kind kind{};
     ControlRef source{};
     EventTransition transition{};
-    EventSourceId eventSource{};
+    MeterId meter{};
     ControlRef target{};
     std::unique_ptr<BoundExpression> condition;
     std::vector<BoundAction> actions;
@@ -128,7 +128,7 @@ struct BoundRule final {
     SourceSpan actionFlowSpan{};
 };
 
-struct BoundEventSource final {
+struct BoundMeter final {
     std::string name;
     EventTransition transition{};
     std::unique_ptr<BoundExpression> period;
@@ -153,7 +153,7 @@ struct BoundProgram final {
     std::vector<BoundVariableDebug> variables;
     std::vector<BoundArrayDebug> arrayDebug;
     std::vector<BoundRule> rules;
-    std::vector<BoundEventSource> eventSources;
+    std::vector<BoundMeter> meters;
 };
 
 } // namespace inputweaver::compiler

@@ -175,7 +175,7 @@ void ValidateCanonicalPools(
     }
 }
 
-#include "program_event_validator.inc"
+#include "program_meter_validator.inc"
 
 void ValidateSourceAndSettings(
     const CompiledProgramStorage& storage,
@@ -508,7 +508,7 @@ void ValidateRuleBuckets(
             : !bucket.key.control.IsValid() && (IsMouseTransition(bucket.key.transition)
                 ? !bucket.key.source.IsValid()
                 : bucket.key.transition == EventTransition::Tick
-                    && ValidId(bucket.key.source, storage.eventSources.size()));
+                    && ValidId(bucket.key.source, storage.meters.size()));
         if (!validKey
             || (havePreviousKey && previousKey >= bucket.key)) {
             context.Add(
@@ -942,7 +942,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"durationConstants", storage.durationConstants.size()},
         {"expressions", storage.expressions.size()},
         {"expressionCode", storage.expressionCode.size()},
-        {"eventSources", storage.eventSources.size()},
+        {"meters", storage.meters.size()},
         {"actionPrograms", storage.actionPrograms.size()},
         {"actionCode", storage.actionCode.size()},
         {"mappingSlots", storage.mappingSlots.size()},
@@ -974,7 +974,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
     ValidateSourceAndSettings(storage, context);
     ValidateUserValuesAndDebug(storage, context);
     ValidateArraysAndDebug(storage, context);
-    ValidateEventSources(storage, context);
+    ValidateMeters(storage, context);
 
     ValidateRangeCoverage(
         storage.expressions,

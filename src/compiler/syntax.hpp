@@ -82,7 +82,7 @@ struct ActionSyntax final {
         Repeat,
         While,
         Pointer,
-        RestartEvent,
+        RestartMeter,
     };
 
     Kind kind{};
@@ -119,7 +119,7 @@ struct TopLevelSyntax final {
         PauseRule,
         EventRule,
         MouseIdleTimeoutSetting,
-        EventDeclaration,
+        MeterDeclaration,
     };
 
     Kind kind{};

@@ -265,8 +265,8 @@ private:
         if (MatchWord("MOUSE_IDLE_TIMEOUT")) {
             return ParseDurationSetting(begin, TopLevelSyntax::Kind::MouseIdleTimeoutSetting);
         }
-        if (MatchWord("event")) {
-            return ParseEventDeclaration(begin);
+        if (MatchWord("meter")) {
+            return ParseMeterDeclaration(begin);
         }
         if (MatchWord("state")) {
             return ParseDeclaration(begin, TopLevelSyntax::Kind::StateDeclaration);
@@ -1028,9 +1028,9 @@ private:
     {
         if (Match(LexemeKind::At)) {
             const auto begin = Previous().span;
-            const auto source = ExpectWordToken("an event source name");
+            const auto source = ExpectWordToken("a meter name");
             Expect(LexemeKind::Dot, "'.'");
-            const auto field = ExpectWordToken("a completed event field");
+            const auto field = ExpectWordToken("a completed meter field");
             auto expression = MakeExpression(ExpressionSyntax::Kind::Reference, MergeSpans(begin, field.span));
             expression->reference.name = std::string(source.text) + '.' + std::string(field.text);
             expression->reference.span = expression->span;

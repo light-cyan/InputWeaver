@@ -1,20 +1,20 @@
 #pragma once
 
 #include "runtime_types.hpp"
-#include "program/event_fields.hpp"
+#include "program/mouse_fields.hpp"
 
 #include <span>
 #include <vector>
 
 namespace inputweaver {
 
-struct MouseSourceConfig final {
+struct MouseMeterConfig final {
     EventTransition transition{EventTransition::Move};
     ExpressionType periodType{ExpressionType::Number};
 };
 
-struct MouseSourceState final {
-    MouseSourceConfig config{};
+struct MouseMeterState final {
+    MouseMeterConfig config{};
     MouseCycle current{};
     MouseCycle completed{};
     RuntimeEvaluationResult periodResult{};
@@ -24,11 +24,11 @@ struct MouseSourceState final {
     bool moving{};
 };
 
-using MousePeriodEvaluator = support::CallbackRef<RuntimeEvaluationResult(EventSourceId) noexcept>;
+using MousePeriodEvaluator = support::CallbackRef<RuntimeEvaluationResult(MeterId) noexcept>;
 
 class RuntimeMouseState final {
 public:
-    RuntimeMouseState(std::span<const MouseSourceConfig> sources, DurationValue idleTimeout,
+    RuntimeMouseState(std::span<const MouseMeterConfig> sources, DurationValue idleTimeout,
         std::size_t maximumOccurrences = 1024);
 
     void Initialize(MousePoint position, std::int64_t now) noexcept;
@@ -36,27 +36,27 @@ public:
     void Observe(const RuntimeInputEvent& event, std::int64_t now) noexcept;
     [[nodiscard]] bool Accumulate(const RuntimeInputEvent& event, std::int64_t now,
         MousePeriodEvaluator evaluatePeriod) noexcept;
-    void Restart(EventSourceId source) noexcept;
-    void ResetSources() noexcept;
+    void Restart(MeterId source) noexcept;
+    void ResetMeters() noexcept;
     void SelectCompleted(std::span<MouseCycle> destination,
         const MouseOccurrence* trigger = nullptr) const noexcept;
-    [[nodiscard]] RuntimeEvaluationResult Read(EventFieldReference reference,
+    [[nodiscard]] RuntimeEvaluationResult Read(MouseFieldReference reference,
         std::span<const MouseCycle> selected = {}) const noexcept;
 
     [[nodiscard]] const MouseObservation& Observation() const noexcept { return observation_; }
-    [[nodiscard]] std::span<const MouseSourceState> Sources() const noexcept { return sources_; }
+    [[nodiscard]] std::span<const MouseMeterState> Meters() const noexcept { return meters_; }
     [[nodiscard]] std::span<const MouseOccurrence> Occurrences() const noexcept { return occurrences_; }
 
 private:
-    [[nodiscard]] bool Open(EventSourceId id, MousePeriodEvaluator evaluator) noexcept;
-    [[nodiscard]] bool Complete(EventSourceId id, MousePeriodEvaluator evaluator) noexcept;
-    [[nodiscard]] bool Move(EventSourceId id, const RuntimeInputEvent& event,
+    [[nodiscard]] bool Open(MeterId id, MousePeriodEvaluator evaluator) noexcept;
+    [[nodiscard]] bool Complete(MeterId id, MousePeriodEvaluator evaluator) noexcept;
+    [[nodiscard]] bool Move(MeterId id, const RuntimeInputEvent& event,
         std::int64_t now, MousePeriodEvaluator evaluator) noexcept;
-    [[nodiscard]] bool Wheel(EventSourceId id, const RuntimeInputEvent& event,
+    [[nodiscard]] bool Wheel(MeterId id, const RuntimeInputEvent& event,
         MousePeriodEvaluator evaluator) noexcept;
 
     MouseObservation observation_{};
-    std::vector<MouseSourceState> sources_;
+    std::vector<MouseMeterState> meters_;
     std::vector<MouseOccurrence> occurrences_;
     DurationValue idleTimeout_{};
     std::int64_t lastPhysicalMove_{};

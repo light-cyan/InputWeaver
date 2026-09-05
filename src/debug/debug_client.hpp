@@ -109,7 +109,7 @@ struct DebugRuleExecution {
     std::int64_t matchedUnixTimeMilliseconds{};
     std::optional<RuntimeExecutionResult> result;
     std::uint32_t selectionCount{};
-    std::vector<MouseCycle> completedSources;
+    std::vector<MouseCycle> completedMeters;
 };
 
 struct DebugRuntimeIssue final {
@@ -134,7 +134,7 @@ struct DebugClientState final {
     std::vector<DebugArrayState> arrays;
     std::vector<DebugRuleExecution> ruleExecutions;
     std::vector<DebugRuntimeIssue> runtimeIssues;
-    std::vector<DebugEventSource> eventSources;
+    std::vector<DebugMeter> meters;
     RuntimeMouseSnapshot mouse;
 };
 

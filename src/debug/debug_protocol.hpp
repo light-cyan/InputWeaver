@@ -37,7 +37,7 @@ enum class MessageKind : std::uint16_t {
     StreamCompleted = 24U,
     MouseState = 25U,
     MouseCycleCompleted = 26U,
-    ExecutionSourceSelected = 27U,
+    ExecutionMeterSelected = 27U,
 };
 
 enum class InputDisposition : std::uint8_t {
@@ -100,7 +100,7 @@ struct DebugNamedArray final {
     DebugArrayValue value{};
 };
 
-struct DebugEventSource final {
+struct DebugMeter final {
     std::string name;
     EventTransition transition{EventTransition::Move};
     ExpressionType periodType{ExpressionType::Number};
@@ -110,7 +110,7 @@ struct CaptureStartedPayload final {
     std::int64_t captureUnixTimeMilliseconds{};
     std::vector<DebugNamedValue> values;
     std::vector<DebugNamedArray> arrays;
-    std::vector<DebugEventSource> sources;
+    std::vector<DebugMeter> meters;
     RuntimeMouseSnapshot mouse;
 };
 
@@ -135,7 +135,7 @@ struct RuleMatchedPayload final {
     std::uint64_t triggerInputSequence{};
     std::string conditionText;
     std::string actionText;
-    EventSourceId triggerEventSource{};
+    MeterId triggerMeter{};
     std::uint64_t triggerCycleSequence{};
     std::uint32_t selectionCount{};
 };
@@ -145,7 +145,7 @@ struct MouseCycleCompletedPayload final {
     MouseOccurrence occurrence{};
 };
 
-struct ExecutionSourceSelectedPayload final {
+struct ExecutionMeterSelectedPayload final {
     std::uint64_t executionMarker{};
     MouseOccurrence occurrence{};
 };
@@ -184,7 +184,7 @@ struct Message final {
     ArrayChangedPayload arrayChanged{};
     RuntimeMouseSnapshot mouseState;
     MouseCycleCompletedPayload mouseCycleCompleted{};
-    ExecutionSourceSelectedPayload executionSourceSelected{};
+    ExecutionMeterSelectedPayload executionMeterSelected{};
 };
 
 enum class DecodeError : std::uint8_t {

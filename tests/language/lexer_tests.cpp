@@ -206,6 +206,8 @@ void TestLimitsAndCatalog()
         && significantOnly.lexemes.front().text == "value",
         "callers can discard trivia without a second scanner");
     Check(LookupWordRole("state") == WordRole::Type && LookupWordRole("held") == WordRole::Constant && LookupWordRole("append") == WordRole::Action && LookupWordRole("length") == WordRole::Property, "the word catalog exposes V4 lexical roles");
+    Check(LookupWordRole("meter") == WordRole::Type && LookupWordRole("every") == WordRole::Keyword,
+        "meter declarations expose shared compiler and highlighter roles");
     Check(LookupWordRole("RAND_SEED") == WordRole::IntrinsicValue
             && LookupWordRole("RAND01") == WordRole::IntrinsicValue
             && IsReservedLanguageWord("RAND_SEED")

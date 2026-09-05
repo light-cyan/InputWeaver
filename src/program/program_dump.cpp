@@ -240,7 +240,7 @@ void WriteControl(std::ostream& output, ControlRef control)
     case ActionOpcode::ClearArray:
         return "clear-array";
     case ActionOpcode::Pointer: return "pointer";
-    case ActionOpcode::RestartEvent: return "restart-event";
+    case ActionOpcode::RestartMeter: return "restart-meter";
     }
     return "unknown";
 }
@@ -326,12 +326,12 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
            << (requirements.requiresProcessLaunch ? "true" : "false")
            << " mouse-observation=" << requirements.requiresMouseObservation
            << " pointer-output=" << requirements.requiresPointerOutput
-           << " event-sources=" << requirements.eventSourceCount << '\n';
+           << " meters=" << requirements.meterCount << '\n';
 
-    output << "event-sources " << program.EventSources().size() << '\n';
-    for (std::size_t index = 0; index < program.EventSources().size(); ++index) {
-        const auto& source = program.EventSources()[index];
-        output << "  ev" << index << " name=";
+    output << "meters " << program.Meters().size() << '\n';
+    for (std::size_t index = 0; index < program.Meters().size(); ++index) {
+        const auto& source = program.Meters()[index];
+        output << "  meter" << index << " name=";
         WriteId(output, 's', source.name);
         output << " transition=" << TransitionName(source.transition) << " period=";
         WriteId(output, 'e', source.period);

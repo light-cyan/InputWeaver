@@ -13,6 +13,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <span>
@@ -547,6 +548,12 @@ void TestSupport()
             && declarationSpans.back().kind
                 == inputweaver::ui::tui::SourceTokenKind::Comment,
         "Weave highlighter classifies types, variables, constants, and comments");
+    constexpr std::string_view meterDeclaration = "meter path = Mouse:move every 24;";
+    const auto meterSpans = inputweaver::ui::tui::HighlightWeaveLine(meterDeclaration, highlightState);
+    Check(hasSpan(meterDeclaration, meterSpans, "meter", inputweaver::ui::tui::SourceTokenKind::Type)
+            && hasSpan(meterDeclaration, meterSpans, "path", inputweaver::ui::tui::SourceTokenKind::Variable)
+            && hasSpan(meterDeclaration, meterSpans, "every", inputweaver::ui::tui::SourceTokenKind::Keyword),
+        "meter declarations highlight their type, name, and period keyword");
     constexpr std::string_view setting =
         "TARGET = GLOBAL; TAP_DURATION = ACTION_GAP; RAND_SEED = 42; RAND01; PAUSE";
     const auto settingSpans = inputweaver::ui::tui::HighlightWeaveLine(
@@ -1252,6 +1259,20 @@ void TestController()
         "HEALTH renders PAUSE beside the STATE viewport");
     const auto wideDebug = controller.Render(120U, 40U);
     const std::string wideDebugText = CanvasText(wideDebug);
+    for (const auto& size : std::array<std::pair<std::size_t, std::size_t>, 3>{
+             std::pair{80U, 24U}, std::pair{120U, 40U}, std::pair{360U, 90U}}) {
+        const auto layout = controller.Render(size.first, size.second);
+        const auto eventsRow = FindAscii(layout, "EVENTS") / layout.Width();
+        const auto actionsRow = FindAscii(layout, "ACTION EXECUTIONS") / layout.Width();
+        const auto healthRow = FindAscii(layout, "HEALTH") / layout.Width();
+        const auto eventsWidth = (std::min)(size.first * 2U / 3U, std::size_t{60U});
+        Check(actionsRow - eventsRow == (healthRow - eventsRow) * 3U / 5U
+                && layout.Cells()[eventsRow * layout.Width() + eventsWidth].codePoint == U'┌',
+            "Debug gives STATE three-fifths body height and width beyond the bounded event columns");
+        Check(CanvasText(layout).find("PASS") != std::string::npos
+                && (size.first == 80U || CanvasText(layout).find("PASS AGAIN") != std::string::npos),
+            "bounded EVENTS retains disposition columns and has room for flags above minimum width");
+    }
     Check(
         wideDebugText.find("combat=off") != std::string::npos
             && wideDebugText.find("count=2") != std::string::npos

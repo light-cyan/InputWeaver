@@ -1,20 +1,20 @@
-void ValidateEventSources(const CompiledProgramStorage& storage, ValidationContext& context)
+void ValidateMeters(const CompiledProgramStorage& storage, ValidationContext& context)
 {
     std::set<StringId> names;
-    for (std::size_t index = 0; index < storage.eventSources.size(); ++index) {
-        const auto& source = storage.eventSources[index];
-        const auto location = At("eventSources", index);
+    for (std::size_t index = 0; index < storage.meters.size(); ++index) {
+        const auto& source = storage.meters[index];
+        const auto location = At("meters", index);
         if (InvalidRequiredString(storage, source.name) || !names.insert(source.name).second
             || !ValidSpan(source.declaration, storage.source.byteLength)
             || !IsMouseTransition(source.transition)
             || !ValidId(source.period, storage.expressions.size())) {
-            context.Add(ProgramValidationErrorCode::Value, location, "invalid event source descriptor");
+            context.Add(ProgramValidationErrorCode::Value, location, "invalid meter descriptor");
             continue;
         }
         const auto& period = storage.expressions[source.period.value];
         if (period.resultType != ExpressionType::Number
             && !(source.transition == EventTransition::Move && period.resultType == ExpressionType::Duration)) {
-            context.Add(ProgramValidationErrorCode::Expression, location, "invalid event period type");
+            context.Add(ProgramValidationErrorCode::Expression, location, "invalid meter period type");
         }
         if (!ValidRange(period.code, storage.expressionCode.size())) continue;
         for (std::uint32_t local = 0; local < period.code.count; ++local) {

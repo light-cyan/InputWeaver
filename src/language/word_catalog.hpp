@@ -36,7 +36,7 @@ inline constexpr std::array kWordCatalog{
     WordEntry{"state", WordRole::Type},
     WordEntry{"number", WordRole::Type},
     WordEntry{"duration", WordRole::Type},
-    WordEntry{"event", WordRole::Type},
+    WordEntry{"meter", WordRole::Type},
     WordEntry{"every", WordRole::Keyword},
     WordEntry{"move", WordRole::Transition},
     WordEntry{"wheel", WordRole::Transition},

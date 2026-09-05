@@ -36,8 +36,8 @@ enum class RuntimeEvaluationFault : std::uint8_t {
     InvalidArrayIndex,
     ArrayBounds,
     MissingReturn,
-    MissingCompletedEvent,
-    InvalidEventPeriod,
+    MissingCompletedMeter,
+    InvalidMeterPeriod,
 };
 
 struct RuntimeEvaluationResult final {
@@ -115,7 +115,7 @@ struct MouseCycle final {
     std::uint64_t sequence{};
 };
 
-struct RuntimeMouseSourceSnapshot final {
+struct RuntimeMouseMeterSnapshot final {
     MouseCycle current{};
     MouseCycle completed{};
     bool moving{};
@@ -123,11 +123,11 @@ struct RuntimeMouseSourceSnapshot final {
 
 struct RuntimeMouseSnapshot final {
     MouseObservation mouse{};
-    std::vector<RuntimeMouseSourceSnapshot> sources;
+    std::vector<RuntimeMouseMeterSnapshot> meters;
 };
 
 struct MouseOccurrence final {
-    EventSourceId source{};
+    MeterId source{};
     MouseCycle cycle{};
 };
 
@@ -396,7 +396,7 @@ enum class RuntimeDebugEventKind : std::uint8_t {
     StateChanged,
     ArrayChanged,
     MouseCycleCompleted,
-    ExecutionSourceSelected,
+    ExecutionMeterSelected,
 };
 
 struct RuntimeDebugValue final {

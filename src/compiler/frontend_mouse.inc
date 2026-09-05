@@ -1,8 +1,8 @@
-    [[nodiscard]] TopLevelSyntax ParseEventDeclaration(SourceSpan begin)
+    [[nodiscard]] TopLevelSyntax ParseMeterDeclaration(SourceSpan begin)
     {
         TopLevelSyntax item{};
-        item.kind = TopLevelSyntax::Kind::EventDeclaration;
-        item.name = ExpectWordToken("an event source name").text;
+        item.kind = TopLevelSyntax::Kind::MeterDeclaration;
+        item.name = ExpectWordToken("a meter name").text;
         Expect(LexemeKind::Equal, "'='");
         item.event = ParseEvent();
         ExpectWord("every");
@@ -16,11 +16,11 @@
     [[nodiscard]] ActionSyntax ParseMouseAction(const ParserLexeme& name)
     {
         ActionSyntax action{};
-        action.kind = name.text == "restart" ? ActionSyntax::Kind::RestartEvent : ActionSyntax::Kind::Pointer;
+        action.kind = name.text == "restart" ? ActionSyntax::Kind::RestartMeter : ActionSyntax::Kind::Pointer;
         action.name = name.text;
         Expect(LexemeKind::LeftParen, "'('");
-        if (action.kind == ActionSyntax::Kind::RestartEvent) {
-            action.secondaryName = ExpectWordToken("an event source name").text;
+        if (action.kind == ActionSyntax::Kind::RestartMeter) {
+            action.secondaryName = ExpectWordToken("a meter name").text;
         } else {
             action.expression = ParseExpression();
             if (name.text == "move_by" || name.text == "move_to") {

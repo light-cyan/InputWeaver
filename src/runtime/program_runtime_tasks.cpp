@@ -205,7 +205,7 @@ void ProgramRuntime::Impl::ReportExpressionFault(
         result.instructionPosition,
         position);
     const std::uint32_t detail = static_cast<std::uint32_t>(result.fault);
-    if (fatal && result.fault != RuntimeEvaluationFault::MissingCompletedEvent) {
+    if (fatal && result.fault != RuntimeEvaluationFault::MissingCompletedMeter) {
         RequestFatal(state, kind, source, expression.value, position, detail);
     } else {
         PublishDiagnostic(state, kind, source, expression.value, position, 0, detail);
@@ -822,14 +822,14 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         case ActionOpcode::End:
             FinishTask(state, slot, false, RuntimeExecutionResult::Completed);
             return true;
-        case ActionOpcode::RestartEvent: {
+        case ActionOpcode::RestartMeter: {
             MutationTransaction transaction(*this, state, task);
             if (!transaction.current) {
                 transaction.Unlock();
                 FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
                 return true;
             }
-            state.mutableState.mouse->Restart(EventSourceId{instruction.operand0});
+            state.mutableState.mouse->Restart(MeterId{instruction.operand0});
             ++task.position;
             break;
         }

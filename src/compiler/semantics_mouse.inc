@@ -1,11 +1,11 @@
-    [[nodiscard]] EventSourceId ResolveEventSource(std::string_view name, SourceSpan span)
+    [[nodiscard]] MeterId ResolveMeter(std::string_view name, SourceSpan span)
     {
         const auto found = symbols_.find(name);
-        if (found != symbols_.end() && found->second.eventSource.IsValid()) {
-            return found->second.eventSource;
+        if (found != symbols_.end() && found->second.meter.IsValid()) {
+            return found->second.meter;
         }
         diagnostics_.Add(CompileDiagnosticCode::UnknownValue, span,
-            "unknown event source '" + std::string(name) + "'");
+            "unknown meter '" + std::string(name) + "'");
         return {};
     }
 
@@ -20,7 +20,7 @@
         return std::nullopt;
     }
 
-    void BindEventDeclaration(const TopLevelSyntax& item)
+    void BindMeterDeclaration(const TopLevelSyntax& item)
     {
         if (!CheckDeclarationName(item)) return;
         const auto transition = BindMouseTransition(item.event);
@@ -35,12 +35,12 @@
         const auto* number = std::get_if<double>(&period->constant);
         const auto* duration = std::get_if<DurationValue>(&period->constant);
         if ((number != nullptr && *number <= 0.0) || (duration != nullptr && duration->nanoseconds <= 0)) {
-            ReportType(item.condition->span, "event period must be positive");
+            ReportType(item.condition->span, "meter period must be positive");
         }
-        const EventSourceId id{static_cast<std::uint32_t>(program_.eventSources.size())};
-        program_.eventSources.push_back({item.name, *transition, std::move(period), item.span});
+        const MeterId id{static_cast<std::uint32_t>(program_.meters.size())};
+        program_.meters.push_back({item.name, *transition, std::move(period), item.span});
         Symbol symbol{};
-        symbol.eventSource = id;
+        symbol.meter = id;
         symbol.declaration = item.span;
         symbols_.emplace(item.name, symbol);
     }
@@ -52,35 +52,35 @@
         const auto subject = name.substr(0, dot);
         if (subject == "Mouse") return !ResolveNamedControl(name).has_value();
         const auto found = symbols_.find(subject);
-        return found != symbols_.end() && found->second.eventSource.IsValid();
+        return found != symbols_.end() && found->second.meter.IsValid();
     }
 
     [[nodiscard]] std::unique_ptr<BoundExpression> BindField(const ExpressionSyntax& syntax)
     {
         if (bindingPeriod_) {
-            ReportType(syntax.span, "mouse and event fields require a rule evaluation context");
+            ReportType(syntax.span, "mouse and meter fields require a rule evaluation context");
             return MakeErrorExpression(syntax.span);
         }
         const std::string_view name = syntax.reference.name;
         const auto dot = name.find('.');
         const auto subject = name.substr(0, dot);
         const auto field = dot == std::string_view::npos ? std::string_view{} : name.substr(dot + 1);
-        const auto found = std::find(kEventFieldNames.begin(), kEventFieldNames.end(), field);
-        if (found == kEventFieldNames.end()) {
-            ReportType(syntax.span, "unknown mouse or event field '" + std::string(field) + "'");
+        const auto found = std::find(kMouseFieldNames.begin(), kMouseFieldNames.end(), field);
+        if (found == kMouseFieldNames.end()) {
+            ReportType(syntax.span, "unknown mouse or meter field '" + std::string(field) + "'");
             return MakeErrorExpression(syntax.span);
         }
-        EventFieldReference reference{{}, static_cast<EventField>(found - kEventFieldNames.begin()), syntax.completed};
+        MouseFieldReference reference{{}, static_cast<MouseField>(found - kMouseFieldNames.begin()), syntax.completed};
         auto transition = EventTransition::Move;
         auto periodType = ExpressionType::Number;
         if (subject != "Mouse") {
-            reference.source = ResolveEventSource(subject, syntax.span);
+            reference.source = ResolveMeter(subject, syntax.span);
             if (!reference.source.IsValid()) return MakeErrorExpression(syntax.span);
-            const auto& source = program_.eventSources[reference.source.value];
+            const auto& source = program_.meters[reference.source.value];
             transition = source.transition;
             periodType = source.period->type;
         }
-        const auto type = EventFieldType(reference, transition, periodType);
+        const auto type = MouseFieldType(reference, transition, periodType);
         if (type == ExpressionType::None) {
             ReportType(syntax.span, "field is not available on this source view");
             return MakeErrorExpression(syntax.span);
@@ -101,7 +101,7 @@
             if (event.control.name == "Mouse") {
                 if (const auto transition = BindMouseTransition(event)) rule.transition = *transition;
             } else {
-                rule.eventSource = ResolveEventSource(event.control.name, event.span);
+                rule.meter = ResolveMeter(event.control.name, event.span);
                 rule.transition = EventTransition::Tick;
                 if (item.arrow == RuleArrowSyntax::ConsumeStop || item.arrow == RuleArrowSyntax::ConsumeContinue) {
                     ReportType(item.span, "tick subscriptions require an observation arrow");

@@ -268,11 +268,8 @@ void RenderLineEditor(
 
 #include "debug_mouse_format.inc"
 
-[[nodiscard]] std::string EventText(const debug::DebugInputEvent& event, const debug::DebugClientState& state)
+[[nodiscard]] std::string EventText(const debug::DebugInputEvent& event)
 {
-    if (IsNumericMouseEvent(event)) {
-        return FormatTime(event.captureUnixTimeMilliseconds) + "  " + MouseEventText(event, state);
-    }
     std::string text = FormatTime(event.captureUnixTimeMilliseconds) + "  "
         + FixedField(ControlName(event.control), 16U) + "  "
         + FixedField(TransitionText(event.transition), 7U) + "  "
@@ -383,14 +380,6 @@ void AppendExecutionField(
             execution.actionText.empty() ? "<none>" : execution.actionText,
             width,
             colors);
-        if (execution.completedSources.size() != execution.selectionCount) {
-            AppendExecutionField(lines, execution, "  @    ", "loading source selections", width, colors);
-        } else {
-            for (std::size_t index = 0; index < execution.completedSources.size() && index < state.eventSources.size(); ++index) {
-                AppendExecutionField(lines, execution, "  @    ",
-                    CompletedMouseText(state.eventSources[index], execution.completedSources[index]), width, colors);
-            }
-        }
     }
     return lines;
 }
@@ -1470,8 +1459,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         const std::size_t bodyHeight = healthY - bodyTop;
         const std::size_t topHeight = (std::max)(
             static_cast<std::size_t>(6U),
-            bodyHeight * 2U / 5U);
-        const std::size_t leftWidth = width * 2U / 3U;
+            bodyHeight * 3U / 5U);
+        const std::size_t leftWidth = (std::min)(width * 2U / 3U, std::size_t{60U});
         const RgbColor eventsBorder = RegionBorder(
             debugRegion_ == DebugRegion::Events,
             colors_.focusEvents,
@@ -1507,10 +1496,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             const std::size_t eventVisible = topHeight - 2U;
             std::vector<std::string> eventLines;
             for (const auto& event : debugState->recentInputEvents) {
-                const auto text = EventText(event, *debugState);
-                if (IsNumericMouseEvent(event)) {
-                    for (auto& line : WrapUtf8(text, leftWidth - 2U, 2U)) eventLines.push_back(std::move(line));
-                } else eventLines.push_back(text);
+                eventLines.push_back(EventText(event));
             }
             RenderViewportRows(
                 eventsViewport_,

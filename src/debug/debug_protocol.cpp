@@ -412,7 +412,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         writer.U64(matched.triggerInputSequence);
         writer.String(matched.conditionText);
         writer.String(matched.actionText);
-        writer.U32(matched.triggerEventSource.value);
+        writer.U32(matched.triggerMeter.value);
         writer.U64(matched.triggerCycleSequence);
         writer.U32(matched.selectionCount);
         return true;
@@ -445,9 +445,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         writer.U64(message.mouseCycleCompleted.triggerInputSequence);
         WriteOccurrence(writer, message.mouseCycleCompleted.occurrence);
         return true;
-    case MessageKind::ExecutionSourceSelected:
-        writer.U64(message.executionSourceSelected.executionMarker);
-        WriteOccurrence(writer, message.executionSourceSelected.occurrence);
+    case MessageKind::ExecutionMeterSelected:
+        writer.U64(message.executionMeterSelected.executionMarker);
+        WriteOccurrence(writer, message.executionMeterSelected.occurrence);
         return true;
     }
     return false;
@@ -516,7 +516,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
             && reader.U64(matched.triggerInputSequence)
             && reader.String(matched.conditionText)
             && reader.String(matched.actionText)
-            && reader.U32(matched.triggerEventSource.value)
+            && reader.U32(matched.triggerMeter.value)
             && reader.U64(matched.triggerCycleSequence) && reader.U32(matched.selectionCount);
     }
     case MessageKind::ExecutionEnded:
@@ -543,9 +543,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::MouseCycleCompleted:
         return reader.U64(message.mouseCycleCompleted.triggerInputSequence)
             && ReadOccurrence(reader, message.mouseCycleCompleted.occurrence);
-    case MessageKind::ExecutionSourceSelected:
-        return reader.U64(message.executionSourceSelected.executionMarker)
-            && ReadOccurrence(reader, message.executionSourceSelected.occurrence);
+    case MessageKind::ExecutionMeterSelected:
+        return reader.U64(message.executionMeterSelected.executionMarker)
+            && ReadOccurrence(reader, message.executionMeterSelected.occurrence);
     }
     return false;
 }
@@ -569,7 +569,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StreamCompleted:
     case MessageKind::MouseState:
     case MessageKind::MouseCycleCompleted:
-    case MessageKind::ExecutionSourceSelected:
+    case MessageKind::ExecutionMeterSelected:
         return true;
     }
     return false;
