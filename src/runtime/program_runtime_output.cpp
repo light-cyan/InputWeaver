@@ -26,7 +26,8 @@ bool ProgramRuntime::Impl::PublishOutput(
     RuntimeOutputTransition transition,
     std::uint64_t producerGeneration,
     TaskInstance* producer,
-    bool* rateExceeded) noexcept
+    bool* rateExceeded,
+    const RuntimePointerOutput* pointer) noexcept
 {
     if (rateExceeded != nullptr) {
         *rateExceeded = false;
@@ -37,7 +38,7 @@ bool ProgramRuntime::Impl::PublishOutput(
         && producerGeneration != currentGeneration) {
         return false;
     }
-    if (!control.IsValid() || control.value >= state.activatedControls.size()) {
+    if (!pointer && (!control.IsValid() || control.value >= state.activatedControls.size())) {
         RequestFatal(
             state,
             RuntimeDiagnosticKind::OutputFailure,
@@ -47,7 +48,8 @@ bool ProgramRuntime::Impl::PublishOutput(
             static_cast<std::uint32_t>(RuntimeOutputResult::Failed));
         return false;
     }
-    const ActivatedControl& activated = state.activatedControls[control.value];
+    const ActivatedControl activated = pointer
+        ? ActivatedControl{0, 0, DeviceKind::Mouse, true, false} : state.activatedControls[control.value];
     if (transition != RuntimeOutputTransition::Up) {
         if (!state.targetEligible.load(std::memory_order_acquire)) {
             return false;
@@ -125,9 +127,11 @@ bool ProgramRuntime::Impl::PublishOutput(
             : producerGeneration,
         state.output.nextSequence.fetch_add(1U, std::memory_order_relaxed),
         control,
-        state.program->Controls()[control.value],
+        pointer ? ControlRef{} : state.program->Controls()[control.value],
         activated,
-        transition});
+        transition,
+        pointer ? RuntimeOutputKind::Pointer : RuntimeOutputKind::Control,
+        pointer ? *pointer : RuntimePointerOutput{}});
     if (result == RuntimeOutputResult::Accepted) {
         if (transition != RuntimeOutputTransition::Up) {
             ++state.output.rateWindowTransitions;

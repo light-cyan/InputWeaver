@@ -28,41 +28,50 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         || event.origin != InputOrigin::PhysicalCandidate) {
         return InputDecision::Forward;
     }
-    if (!event.control.IsValid()
-        || event.control.value >= state->program->Controls().size()) {
-        return InputDecision::Forward;
-    }
     EventTransition transition{};
-    std::atomic<std::uint8_t>& held =
-        state->mutableState.physicalHeld[event.control.value];
-    std::atomic<std::uint8_t>& synchronized =
-        state->mutableState.physicalSynchronized[event.control.value];
-    const bool wasSynchronized = synchronized.load(
-        std::memory_order_acquire) != 0U;
-    if (event.transition == Transition::Down) {
-        const bool wasHeld = held.exchange(1U, std::memory_order_acq_rel) != 0U;
-        transition = event.device == DeviceKind::Keyboard && wasHeld
-            ? EventTransition::Again
-            : EventTransition::Down;
-    } else if (event.transition == Transition::Up) {
-        held.store(0U, std::memory_order_release);
-        if (!wasSynchronized) {
-            synchronized.store(1U, std::memory_order_release);
-            PublishDiagnostic(
-                *state,
-                RuntimeDiagnosticKind::PhysicalStateSynchronization,
-                {},
-                event.control.value,
-                0U,
-                0,
-                1U);
-        }
-        transition = EventTransition::Up;
+    bool wasSynchronized = true;
+    const bool numericMouse = event.device == DeviceKind::Mouse
+        && (event.transition == Transition::Move || event.transition == Transition::VerticalWheel
+            || event.transition == Transition::HorizontalWheel);
+    if (numericMouse) {
+        transition = event.transition == Transition::Move ? EventTransition::Move
+            : event.transition == Transition::VerticalWheel ? EventTransition::Wheel : EventTransition::HorizontalWheel;
     } else {
-        return InputDecision::Forward;
+        if (!event.control.IsValid()
+            || event.control.value >= state->program->Controls().size()) {
+            return InputDecision::Forward;
+        }
+        std::atomic<std::uint8_t>& held =
+            state->mutableState.physicalHeld[event.control.value];
+        std::atomic<std::uint8_t>& synchronized =
+            state->mutableState.physicalSynchronized[event.control.value];
+        wasSynchronized = synchronized.load(
+            std::memory_order_acquire) != 0U;
+        if (event.transition == Transition::Down) {
+            const bool wasHeld = held.exchange(1U, std::memory_order_acq_rel) != 0U;
+            transition = event.device == DeviceKind::Keyboard && wasHeld
+                ? EventTransition::Again
+                : EventTransition::Down;
+        } else if (event.transition == Transition::Up) {
+            held.store(0U, std::memory_order_release);
+            if (!wasSynchronized) {
+                synchronized.store(1U, std::memory_order_release);
+                PublishDiagnostic(
+                    *state,
+                    RuntimeDiagnosticKind::PhysicalStateSynchronization,
+                    {},
+                    event.control.value,
+                    0U,
+                    0,
+                    1U);
+            }
+            transition = EventTransition::Up;
+        } else {
+            return InputDecision::Forward;
+        }
     }
 
-    const EventKey key{event.control, transition};
+    const EventKey key{numericMouse ? ControlRefId{} : event.control, transition};
     const ExitControlBucket* const exitBucket = FindExitBucket(*state, key);
     const PauseControlBucket* const pauseBucket = FindPauseBucket(*state, key);
     const bool hasPauseRules = !state->program->PauseControlBuckets().empty();
@@ -71,6 +80,11 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         !hasPauseRules
             ? PauseLockMode::None
             : pauseBucket == nullptr ? PauseLockMode::Read : PauseLockMode::Write);
+    RefreshMouse(*state);
+    if (state->mutableState.mouse) {
+        state->mutableState.mouse->Observe(event, clock.NowNanoseconds());
+        state->mutableState.mouse->SelectCompleted(state->dispatch.completed);
+    }
     const auto accountDecision = [state](InputDecision decision) noexcept {
         if (decision == InputDecision::Suppress) {
             state->metrics.suppressedEvents.fetch_add(1U, std::memory_order_relaxed);
@@ -112,6 +126,9 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         return InputDecision::Forward;
     }
     if (!routePort.CanDispatch(state->targetKind, event)) {
+        if (event.device == DeviceKind::Mouse && state->mutableState.mouse) {
+            state->mutableState.mouse->ResetSources();
+        }
         if (event.device == DeviceKind::Keyboard
             && state->targetKind != TargetSelectorKind::Global) {
             TransitionTargetEligibility(*state, false);
@@ -160,12 +177,22 @@ InputDecision ProgramRuntime::Impl::HandleInput(
     if (hasPauseRules && !state->mutableState.pauseOn) {
         return InputDecision::Forward;
     }
-    return accountDecision(DispatchOrdinary(
+    (void)UpdateMouseSources(*state, event);
+    if (state->mutableState.mouse) state->mutableState.mouse->SelectCompleted(state->dispatch.completed);
+    const auto decision = DispatchOrdinary(
         *state,
         key,
         transactionGeneration,
         event.debugCaptureEpoch,
-        event.debugInputSequence));
+        event.debugInputSequence);
+    if (state->mutableState.mouse) {
+        for (const auto& occurrence : state->mutableState.mouse->Occurrences()) {
+            state->mutableState.mouse->SelectCompleted(state->dispatch.completed, &occurrence);
+            (void)DispatchOrdinary(*state, {{}, EventTransition::Tick, occurrence.source}, transactionGeneration,
+                event.debugCaptureEpoch, event.debugInputSequence);
+        }
+    }
+    return accountDecision(decision);
 }
 
 bool ProgramRuntime::Impl::SeedPhysicalState(
@@ -468,6 +495,7 @@ bool ProgramRuntime::Impl::ReserveTasks(
             task.cleanupResult = RuntimeExecutionResult::Completed;
             task.cleanupCancelled = false;
             task.safetyCancelled = false;
+            std::copy(state.dispatch.completed.begin(), state.dispatch.completed.end(), task.completed.begin());
             std::fill(task.repeatFrames.begin(), task.repeatFrames.end(), RepeatFrame{});
             std::fill(
                 task.ownership.begin(),

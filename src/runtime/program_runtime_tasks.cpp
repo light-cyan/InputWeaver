@@ -152,11 +152,12 @@ bool ProgramRuntime::Impl::ScheduleTimed(
 
 RuntimeEvaluationResult ProgramRuntime::Impl::EvaluateTaskExpression(
     State& state,
-    ExpressionId expression) noexcept
+    ExpressionId expression, const TaskInstance& task) noexcept
 {
     std::shared_lock pauseLock(state.mutableState.pauseMutex);
-    std::shared_lock variableLock(state.mutableState.variableMutex);
-    return Evaluate(state, expression, state.scheduler.expressionScratch);
+    std::unique_lock variableLock(state.mutableState.variableMutex);
+    RefreshMouse(state);
+    return Evaluate(state, expression, state.scheduler.expressionScratch, task.completed);
 }
 
 SourceSpan ProgramRuntime::Impl::ActionSource(
@@ -204,7 +205,7 @@ void ProgramRuntime::Impl::ReportExpressionFault(
         result.instructionPosition,
         position);
     const std::uint32_t detail = static_cast<std::uint32_t>(result.fault);
-    if (fatal) {
+    if (fatal && result.fault != RuntimeEvaluationFault::MissingCompletedEvent) {
         RequestFatal(state, kind, source, expression.value, position, detail);
     } else {
         PublishDiagnostic(state, kind, source, expression.value, position, 0, detail);
@@ -225,7 +226,7 @@ bool ProgramRuntime::Impl::ExecuteSet(
     if (!IsUserDomain(target.domain)) {
         return false;
     }
-    MutationTransaction transaction(state, task);
+    MutationTransaction transaction(*this, state, task);
     if (!transaction.current) {
         return false;
     }
@@ -233,7 +234,7 @@ bool ProgramRuntime::Impl::ExecuteSet(
     const RuntimeEvaluationResult result = Evaluate(
         state,
         expression,
-        state.scheduler.expressionScratch);
+        state.scheduler.expressionScratch, task.completed);
     if (!result.Succeeded()) {
         ReportExpressionFault(
             state,
@@ -284,7 +285,7 @@ bool ProgramRuntime::Impl::ExecuteToggle(
         || target.index >= state.mutableState.userStates.size()) {
         return false;
     }
-    MutationTransaction transaction(state, task);
+    MutationTransaction transaction(*this, state, task);
     if (!transaction.current) {
         return false;
     }
@@ -341,7 +342,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
 
     if (instruction.opcode == ActionOpcode::SetArrayElement
         || instruction.opcode == ActionOpcode::ToggleArrayElement) {
-        MutationTransaction transaction(state, task);
+        MutationTransaction transaction(*this, state, task);
         if (!transaction.current) {
             return false;
         }
@@ -349,7 +350,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
         const RuntimeEvaluationResult indexResult = Evaluate(
             state,
             indexExpression,
-            state.scheduler.expressionScratch);
+            state.scheduler.expressionScratch, task.completed);
         if (!indexResult.Succeeded()
             || indexResult.value.type != ExpressionType::Number) {
             expressionFault(indexExpression, indexResult);
@@ -369,7 +370,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
             const RuntimeEvaluationResult valueResult = Evaluate(
                 state,
                 valueExpression,
-                state.scheduler.expressionScratch);
+                state.scheduler.expressionScratch, task.completed);
             if (!valueResult.Succeeded()) {
                 expressionFault(valueExpression, valueResult);
                 return false;
@@ -386,7 +387,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
     }
 
     if (instruction.opcode == ActionOpcode::AppendArrayElement) {
-        MutationTransaction planning(state, task);
+        MutationTransaction planning(*this, state, task);
         if (!planning.current) {
             return false;
         }
@@ -394,7 +395,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
         const RuntimeEvaluationResult valueResult = Evaluate(
             state,
             valueExpression,
-            state.scheduler.expressionScratch);
+            state.scheduler.expressionScratch, task.completed);
         if (!valueResult.Succeeded()) {
             expressionFault(valueExpression, valueResult);
             return false;
@@ -424,7 +425,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
             actionFault(24U);
             return false;
         }
-        MutationTransaction commit(state, task);
+        MutationTransaction commit(*this, state, task);
         const std::uint64_t committedBytes = state.metrics.currentArrayBytes.load(
             std::memory_order_relaxed);
         if (!commit.current || array.PlanAppend() != plan) {
@@ -473,7 +474,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
             actionFault(23U);
             return false;
         }
-        MutationTransaction transaction(state, task);
+        MutationTransaction transaction(*this, state, task);
         if (!transaction.current) {
             return false;
         }
@@ -497,7 +498,7 @@ bool ProgramRuntime::Impl::ExecuteArrayAction(
     }
 
     if (instruction.opcode == ActionOpcode::ClearArray) {
-        MutationTransaction transaction(state, task);
+        MutationTransaction transaction(*this, state, task);
         if (!transaction.current) {
             return false;
         }
@@ -639,7 +640,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             const ExpressionId expression{instruction.operand0};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                expression);
+                expression, task);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Duration) {
                 ReportExpressionFault(
@@ -750,7 +751,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             const ExpressionId expression{instruction.operand0};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                expression);
+                expression, task);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Boolean) {
                 ReportExpressionFault(
@@ -771,7 +772,7 @@ bool ProgramRuntime::Impl::RunTaskSlice(
             const ExpressionId expression{instruction.operand1};
             const RuntimeEvaluationResult result = EvaluateTaskExpression(
                 state,
-                expression);
+                expression, task);
             if (!result.Succeeded()
                 || result.value.type != ExpressionType::Number) {
                 ReportExpressionFault(
@@ -821,10 +822,25 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         case ActionOpcode::End:
             FinishTask(state, slot, false, RuntimeExecutionResult::Completed);
             return true;
+        case ActionOpcode::RestartEvent: {
+            MutationTransaction transaction(*this, state, task);
+            if (!transaction.current) {
+                transaction.Unlock();
+                FinishTask(state, slot, true, RuntimeExecutionResult::Cancelled);
+                return true;
+            }
+            state.mutableState.mouse->Restart(EventSourceId{instruction.operand0});
+            ++task.position;
+            break;
+        }
         case ActionOpcode::Pointer:
-        case ActionOpcode::RestartEvent:
-            FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
-            return true;
+            if (!ExecutePointer(state, task, instruction)) {
+                FinishTask(state, slot, task.generation != state.generation.load(std::memory_order_acquire),
+                    ClassifyTaskOperationFailure(state, task));
+                return true;
+            }
+            ++task.position;
+            break;
         }
     }
 

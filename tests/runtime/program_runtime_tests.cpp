@@ -92,6 +92,8 @@ public:
 
 class FakeOutputPort final : public inputweaver::RuntimeOutputPort {
 public:
+    bool pointerSupported{};
+    bool SupportsPointerOutput() const noexcept override { return pointerSupported; }
     std::vector<inputweaver::RuntimeOutputRequest> requests;
     inputweaver::RuntimeOutputResult nextResult{
         inputweaver::RuntimeOutputResult::Accepted};
@@ -119,6 +121,13 @@ public:
 
 class FakeRoutePort final : public inputweaver::RuntimeRoutePort {
 public:
+    bool pointerAvailable{};
+    inputweaver::ScreenPoint pointer{};
+    bool QueryPointerPosition(inputweaver::ScreenPoint& position) noexcept override
+    {
+        position = pointer;
+        return pointerAvailable;
+    }
     bool targetSupported{true};
     bool targetValid{true};
     bool dispatchAllowed{true};
@@ -326,6 +335,7 @@ void RebuildControlRequirements(inputweaver::CompiledProgramStorage& storage)
 #include "program_runtime_core_tests.inc"
 #include "program_runtime_task_tests.inc"
 #include "program_runtime_integration_tests.inc"
+#include "program_runtime_mouse_tests.inc"
 
 } // namespace
 
@@ -364,6 +374,8 @@ int main()
     TestOutputRateBudget();
     TestRoutingFailureAndExit();
     TestProductionTaskThread();
+    TestMouseTaskSnapshots();
+    TestMouseQualificationLifecycle();
 
     if (g_failureCount != 0) {
         std::cerr << g_failureCount << " Phase 4 runtime test(s) failed.\n";

@@ -1059,6 +1059,7 @@ struct WindowsDebugServer::Impl final {
             (void)CancelSynchronousIo(writer.native_handle());
             writer.join();
         }
+        SetEvent(writerFinalizedEvent);
         DrainQueue();
     }
 

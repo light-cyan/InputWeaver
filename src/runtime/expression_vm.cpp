@@ -462,8 +462,15 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
             }
             ++position;
             break;
-        case ExpressionOpcode::LoadField:
-            return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
+        case ExpressionOpcode::LoadField: {
+            if (state.mouse == nullptr) return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
+            const auto result = state.mouse->Read(
+                EventFieldReference::Decode(instruction.operand0, instruction.operand1), state.completed);
+            if (!result.Succeeded()) return Fault(result.fault, position);
+            if (!push(result.value)) return Fault(RuntimeEvaluationFault::StackOverflow, position);
+            ++position;
+            break;
+        }
         case ExpressionOpcode::LoadArrayLength:
             if (instruction.operand0 >= state.arrays.size()) {
                 return Fault(RuntimeEvaluationFault::InvalidArray, position);

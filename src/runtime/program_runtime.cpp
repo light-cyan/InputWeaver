@@ -169,7 +169,8 @@ RuntimeEvaluationResult ProgramRuntime::EvaluateExpression(
     Impl::State& state = *impl_->active;
     const std::lock_guard inspectionLock(state.inspectionMutex);
     std::shared_lock pauseLock(state.mutableState.pauseMutex);
-    std::shared_lock variableLock(state.mutableState.variableMutex);
+    std::unique_lock variableLock(state.mutableState.variableMutex);
+    impl_->RefreshMouse(state);
     return impl_->Evaluate(
         state,
         expression,

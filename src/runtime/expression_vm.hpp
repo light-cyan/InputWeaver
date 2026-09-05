@@ -2,6 +2,7 @@
 
 #include "array_storage.hpp"
 #include "runtime_types.hpp"
+#include "mouse_state.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -31,6 +32,8 @@ struct RuntimeExpressionState final {
     bool pauseOn{true};
     DurationValue tapDuration{};
     DurationValue actionGap{};
+    const RuntimeMouseState* mouse{};
+    std::span<const MouseCycle> completed{};
 };
 
 class RuntimeExpressionScratch final {

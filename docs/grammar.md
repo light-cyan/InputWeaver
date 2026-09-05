@@ -460,3 +460,21 @@ Field references are read-only primary expressions. `source.field` selects the c
 | Completed wheel source | `x`, `y`, `wheel_x`, `wheel_y` | | `valid` |
 
 All current sources also expose `period`, `progress`, and `remaining`, with the period expression's type. Completed sources expose `period` with the same type. Field names are contextual and leave names such as `x` and `y` available for user declarations.
+
+### Mouse runtime semantics
+
+The platform-independent runtime observes physical position deltas in pixels and wheel deltas in standard detents. A move, vertical-wheel, or horizontal-wheel report replaces the complete `Mouse.dx/dy/wheel_x/wheel_y` tuple, setting unrelated components to zero. Keys and buttons preserve the tuple. Pointer polling updates `Mouse.x/y`; physical movement alone updates `Mouse.moving` and `Mouse.idle_time`. Idle time starts at activation and keeps growing after the timeout turns `moving` off.
+
+Each qualified input updates all named sources before ordinary matching. Raw rules run first, followed by sources in declaration order and their completed cycles in order. All matching and period openings for that input share the same variable state. A stopping rule stops only its event's subscription scan; consuming a raw report still permits its cycle statistics to advance.
+
+Distance progress sums segment lengths and keeps its remainder across ordinary idle. Wheel progress is signed, with opposite scrolling canceling the current remainder. A report crossing several boundaries creates a separate completion for each, with movement split proportionally between their start and end coordinates. Each completion immediately latches the next period expression, including an opening with zero remainder.
+
+A duration source starts at the first effective move, assigning that first displacement at elapsed time zero. Effective reports less than `MOUSE_IDLE_TIMEOUT` apart extend the same span. Later displacement is apportioned over the elapsed interval and any crossed logical boundaries. Late reports preserve phase; stationary time creates no ticks. At the idle threshold the incomplete duration cycle clears, and a move exactly at that threshold begins a new span.
+
+Before a source opens, its period and progress fields are typed zero, and its coordinate fields use the observed pointer. The first included movement establishes a fixed cycle origin. A failed dynamic period evaluation reports a source diagnostic, clears the incomplete cycle, and retries on the next qualified input while retaining the latest completed cycle.
+
+`@source` is selected when the triggering event matches. A tick selects its own exact completed cycle; other sources select their latest completion after all sources have processed that same input. Task reservation copies this selection, including an empty completion, for every source. Conditions, nested action flows, waits, and the first access after a wait share that selection. `source.field` and `Mouse.field` instead read a coherent current observation for each action evaluation.
+
+An empty completion has `valid=off`. Accessing another field on that view faults the expression: a condition does not match and reports a diagnostic, while an action ends only its task. Short-circuit guards such as `@source.valid == on and @source.dx > 0` avoid the data-field access.
+
+`restart(source)` clears that source's current and latest completed records at action execution, while existing task selections stay fixed. Program activation, cancellation-generation changes, and source qualification loss clear source statistics; global physical observation continues across pause and target changes. Pointer actions publish through the shared output sequence and use the existing cancellation, routing, and output budgets, independently of held-control ownership.

@@ -99,6 +99,7 @@ struct TaskInstance final {
     ControlRefId pendingTap{};
     std::vector<RepeatFrame> repeatFrames;
     std::vector<TaskOwnershipRecord> ownership;
+    std::vector<MouseCycle> completed;
     std::uint32_t instructionsWithoutSuspension{};
     std::uint32_t outputsWithoutSuspension{};
     std::uint64_t debugCaptureEpoch{};
@@ -304,6 +305,15 @@ using namespace program_runtime_detail;
 
 struct ProgramRuntime::Impl final {
     struct MutableState final {
+        [[nodiscard]] static std::unique_ptr<RuntimeMouseState> CreateMouse(const CompiledProgram& program)
+        {
+            if (!program.Requirements().requiresMouseObservation) return nullptr;
+            std::vector<MouseSourceConfig> sources;
+            for (const auto& source : program.EventSources()) {
+                sources.push_back({source.transition, program.Expressions()[source.period.value].resultType});
+            }
+            return std::make_unique<RuntimeMouseState>(sources, program.Settings().mouseIdleTimeout);
+        }
         [[nodiscard]] static std::vector<RuntimeArrayStorage> CreateArrays(
             const CompiledProgram& program)
         {
@@ -336,6 +346,7 @@ struct ProgramRuntime::Impl final {
               userNumbers(program.UserValues().initialNumbers),
               userDurations(program.UserValues().initialDurations),
               arrays(CreateArrays(program)),
+              mouse(CreateMouse(program)),
               randomStream(randomSeed),
               physicalHeld(std::make_unique<std::atomic<std::uint8_t>[]>(
                   program.Controls().size())),
@@ -350,7 +361,7 @@ struct ProgramRuntime::Impl final {
         }
 
         [[nodiscard]] RuntimeExpressionState ExpressionState(
-            const CompiledProgram& program) noexcept
+            const CompiledProgram& program, std::span<const MouseCycle> completed = {}) noexcept
         {
             return {
                 userStates,
@@ -361,7 +372,8 @@ struct ProgramRuntime::Impl final {
                 &randomStream,
                 pauseOn,
                 program.Settings().tapDuration,
-                program.Settings().actionGap};
+                program.Settings().actionGap,
+                mouse.get(), completed};
         }
 
         [[nodiscard]] bool PauseEnabled() const noexcept
@@ -389,6 +401,8 @@ struct ProgramRuntime::Impl final {
         std::vector<double> userNumbers;
         std::vector<DurationValue> userDurations;
         std::vector<RuntimeArrayStorage> arrays;
+        std::unique_ptr<RuntimeMouseState> mouse;
+        std::uint64_t mouseGeneration{};
         RuntimeRandomStream randomStream;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalHeld;
         std::unique_ptr<std::atomic<std::uint8_t>[]> physicalSynchronized;
@@ -410,7 +424,7 @@ struct ProgramRuntime::Impl final {
 
         std::shared_lock<std::shared_mutex> pauseRead;
         std::unique_lock<std::shared_mutex> pauseWrite;
-        std::shared_lock<std::shared_mutex> variables;
+        std::unique_lock<std::shared_mutex> variables;
     };
 
     struct DispatchState final {
@@ -421,6 +435,7 @@ struct ProgramRuntime::Impl final {
                   std::make_unique<std::atomic<std::uint32_t>[]>(
                       program.MappingSlots().size())),
               mappingOwners(program.MappingSlots().size()),
+              completed(program.EventSources().size()),
               workQueue(capacities.transactionQueueItemCount),
               transactionScratch((std::max)(
                   std::size_t{1U},
@@ -457,6 +472,7 @@ struct ProgramRuntime::Impl final {
 
         std::unique_ptr<std::atomic<std::uint32_t>[]> activeMappings;
         std::vector<MappingOwner> mappingOwners;
+        std::vector<MouseCycle> completed;
         WorkQueue workQueue;
         std::vector<WorkItem> transactionScratch;
         std::vector<std::uint32_t> reservedTaskScratch;
@@ -483,6 +499,7 @@ struct ProgramRuntime::Impl final {
             for (std::size_t index = 0U; index < taskCount; ++index) {
                 tasks[index].repeatFrames.resize(repeatCount);
                 tasks[index].ownership.resize(ownershipCount);
+                tasks[index].completed.resize(program.EventSources().size());
             }
         }
 
@@ -618,12 +635,13 @@ struct ProgramRuntime::Impl final {
     };
 
     struct MutationTransaction final {
-        MutationTransaction(State& state, const TaskInstance& task)
+        MutationTransaction(Impl& owner, State& state, const TaskInstance& task)
             : pause(state.mutableState.pauseMutex),
               variables(state.mutableState.variableMutex),
               current(task.generation
                   == state.generation.load(std::memory_order_acquire))
         {
+            owner.RefreshMouse(state);
         }
 
         void Unlock() noexcept
@@ -711,7 +729,10 @@ struct ProgramRuntime::Impl final {
     [[nodiscard]] RuntimeEvaluationResult Evaluate(
         State& state,
         ExpressionId expression,
-        RuntimeExpressionScratch& scratch) noexcept;
+        RuntimeExpressionScratch& scratch,
+        std::span<const MouseCycle> completed = {}) noexcept;
+    void RefreshMouse(State& state) noexcept;
+    [[nodiscard]] bool UpdateMouseSources(State& state, const RuntimeInputEvent& event) noexcept;
     [[nodiscard]] bool EvaluatePredicate(
         State& state,
         ExpressionId expression,
@@ -817,7 +838,10 @@ struct ProgramRuntime::Impl final {
         RuntimeOutputTransition transition,
         std::uint64_t producerGeneration,
         TaskInstance* producer = nullptr,
-        bool* rateExceeded = nullptr) noexcept;
+        bool* rateExceeded = nullptr,
+        const RuntimePointerOutput* pointer = nullptr) noexcept;
+    [[nodiscard]] bool ExecutePointer(State& state, TaskInstance& task,
+        const ActionInstruction& instruction) noexcept;
     void ProcessMappingWork(State& state, const WorkItem& item) noexcept;
     void CleanupMappingOwners(State& state) noexcept;
 
@@ -839,7 +863,7 @@ struct ProgramRuntime::Impl final {
         SourceSpan source) noexcept;
     [[nodiscard]] RuntimeEvaluationResult EvaluateTaskExpression(
         State& state,
-        ExpressionId expression) noexcept;
+        ExpressionId expression, const TaskInstance& task) noexcept;
     [[nodiscard]] SourceSpan ActionSource(
         const State& state,
         const ActionProgramDescriptor& descriptor,

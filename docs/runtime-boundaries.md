@@ -37,6 +37,8 @@ Target 未绑定时，低级钩子继续监听，Debug 继续捕获，物理退�
 | 事件事务队列项数 | 1024 |
 | 运行时内部诊断记录数 | 256 |
 
+The mouse accumulator stores at most 1024 completed cycles for one normalized input report. Each active source and task owns its cycle state and completion selections. Exceeding the per-report cycle capacity raises `TransactionCapacity` and requests fatal cancellation before that report can commit rule work; the physical report is forwarded. Mouse observation and pointer output are checked against the runtime ports during activation.
+
 编译产物保存由程序结构精确推导出的需求。激活错误输出中的 `code`、`subject`、`required` 和 `available` 分别表示失败类别、具体限制维度、该维度的需求和该维度的执行器容量；无效的调度器配置与无效的输出速率配置使用独立错误类别。激活失败不会安装输入钩子，也不会开始规则分派。
 
 任务槽和事务队列也限制运行时瞬时占用。一个事件无法完整预留它需要的任务槽或队列空间时，整个事件事务不会部分提交，本次物理输入直接放行，并产生 `TransactionCapacity` 诊断。
@@ -59,6 +61,8 @@ Target 未绑定时，低级钩子继续监听，Debug 继续捕获，物理退�
 持续就绪任务达到 16 个调度量子后，工作线程最多退避 1 毫秒。新输入、目标资格变化、取消、关闭和退出规则会提前唤醒工作线程，控制台的 `scheduler_backoffs` 记录实际发生的退避次数。
 
 普通输出速率只统计 `down` 和 `again` 转换。达到速率边界时，产生超额输出的任务或映射被取消并清理所有权；输出释放不占用普通输出额度，因此速率耗尽不会阻止必要的键抬起。
+
+Pointer requests also count toward the shared ordinary-output rate and the producing task's output budget. They use the same sequence and cancellation generation as control outputs, with a pointer-operation payload instead of held-control ownership.
 
 ## 无注入模拟
 

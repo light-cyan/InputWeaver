@@ -230,7 +230,9 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
     if (!program) {
         return {false, {RuntimeActivationErrorCode::MissingProgram}};
     }
-    if (program->Requirements().requiresMouseObservation || program->Requirements().requiresPointerOutput) {
+    ScreenPoint pointer{};
+    if ((program->Requirements().requiresMouseObservation && !routePort.QueryPointerPosition(pointer))
+        || (program->Requirements().requiresPointerOutput && !outputPort.SupportsPointerOutput())) {
         return {false, {RuntimeActivationErrorCode::MissingMouseCapability}};
     }
     const RuntimeActivationError capacityError = ValidateCapacities(*program);
@@ -312,6 +314,11 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
         observableGeneration.store(1U, std::memory_order_release);
     }
     active = std::move(candidate);
+    if (active->mutableState.mouse) {
+        active->mutableState.mouse->Initialize(
+            {static_cast<double>(pointer.x), static_cast<double>(pointer.y)}, clock.NowNanoseconds());
+        active->mutableState.mouseGeneration = active->generation.load(std::memory_order_acquire);
+    }
     ++nextProgramSerial;
     if (restartWorker) {
         (void)StartTaskThread();
@@ -334,12 +341,13 @@ void ProgramRuntime::Impl::Deactivate() noexcept
 RuntimeEvaluationResult ProgramRuntime::Impl::Evaluate(
     State& state,
     ExpressionId expression,
-    RuntimeExpressionScratch& scratch) noexcept
+    RuntimeExpressionScratch& scratch,
+    std::span<const MouseCycle> completed) noexcept
 {
     return EvaluateRuntimeExpression(
         *state.program,
         expression,
-        state.mutableState.ExpressionState(*state.program),
+        state.mutableState.ExpressionState(*state.program, completed),
         scratch);
 }
 
@@ -355,7 +363,7 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
     const RuntimeEvaluationResult result = Evaluate(
         state,
         expression,
-        state.dispatch.expressionScratch);
+        state.dispatch.expressionScratch, state.dispatch.completed);
     if (!result.Succeeded() || result.value.type != ExpressionType::Boolean) {
         ReportExpressionFault(
             state,
@@ -364,7 +372,7 @@ bool ProgramRuntime::Impl::EvaluatePredicate(
             result,
             true);
         matched = false;
-        return false;
+        return result.fault == RuntimeEvaluationFault::MissingCompletedEvent;
     }
     matched = result.value.booleanValue;
     return true;

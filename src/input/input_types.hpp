@@ -11,6 +11,13 @@ struct ScreenPoint final {
     InputCoordinate y{};
 };
 
+struct MouseDelta final {
+    double dx{};
+    double dy{};
+    double wheelX{};
+    double wheelY{};
+};
+
 enum class DeviceKind : unsigned char {
     Keyboard,
     Mouse

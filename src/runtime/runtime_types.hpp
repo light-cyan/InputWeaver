@@ -35,6 +35,8 @@ enum class RuntimeEvaluationFault : std::uint8_t {
     InvalidArrayIndex,
     ArrayBounds,
     MissingReturn,
+    MissingCompletedEvent,
+    InvalidEventPeriod,
 };
 
 struct RuntimeEvaluationResult final {
@@ -80,6 +82,14 @@ enum class RuntimeOutputTransition : std::uint8_t {
     Up,
 };
 
+enum class RuntimeOutputKind : std::uint8_t { Control, Pointer };
+
+struct RuntimePointerOutput final {
+    PointerOperation operation{};
+    double x{};
+    double y{};
+};
+
 struct RuntimeOutputRequest final {
     std::uint64_t generation{};
     std::uint64_t sequence{};
@@ -87,6 +97,8 @@ struct RuntimeOutputRequest final {
     ControlRef identity{};
     ActivatedControl activated{};
     RuntimeOutputTransition transition{};
+    RuntimeOutputKind kind{RuntimeOutputKind::Control};
+    RuntimePointerOutput pointer{};
 };
 
 enum class RuntimeOutputResult : std::uint8_t {
@@ -99,6 +111,7 @@ enum class RuntimeOutputResult : std::uint8_t {
 class RuntimeOutputPort {
 public:
     virtual ~RuntimeOutputPort() = default;
+    [[nodiscard]] virtual bool SupportsPointerOutput() const noexcept { return false; }
     [[nodiscard]] virtual RuntimeOutputResult Publish(
         const RuntimeOutputRequest& request) noexcept = 0;
 };
@@ -111,11 +124,17 @@ struct RuntimeInputEvent final {
     ScreenPoint position{};
     std::uint64_t debugCaptureEpoch{};
     std::uint64_t debugInputSequence{};
+    MouseDelta delta{};
 };
 
 class RuntimeRoutePort {
 public:
     virtual ~RuntimeRoutePort() = default;
+    [[nodiscard]] virtual bool QueryPointerPosition(ScreenPoint& position) noexcept
+    {
+        (void)position;
+        return false;
+    }
     [[nodiscard]] virtual bool ValidateTarget(
         TargetSelectorKind kind) noexcept = 0;
     [[nodiscard]] virtual bool TargetValid(

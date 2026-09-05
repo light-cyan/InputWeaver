@@ -4,6 +4,9 @@ cd /d "%~dp0.."
 
 if not exist "bin" mkdir "bin"
 
+call script\build_mouse_tests.bat
+if errorlevel 1 exit /b %errorlevel%
+
 set "INPUTWEAVER_CXX=g++"
 set "INPUTWEAVER_COMMON=-std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror -DUNICODE -D_UNICODE -Isrc"
 
@@ -14,6 +17,9 @@ echo [1/7] Building ProgramRuntimeTests.exe...
     "src\runtime\artifact_loader.cpp" ^
     "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
+    "src\runtime\mouse_state.cpp" ^
+    "src\runtime\mouse_fields.cpp" ^
+    "src\runtime\program_runtime_mouse.cpp" ^
     "src\runtime\program_runtime.cpp" ^
     "src\runtime\program_runtime_activation.cpp" ^
     "src\runtime\program_runtime_dispatch.cpp" ^
@@ -34,6 +40,9 @@ echo [2/7] Building WindowsRuntimeAdapterTests.exe...
     "src\platform\windows\runtime\compiled_target_resolver.cpp" ^
     "src\runtime\array_storage.cpp" ^
     "src\runtime\expression_vm.cpp" ^
+    "src\runtime\mouse_state.cpp" ^
+    "src\runtime\mouse_fields.cpp" ^
+    "src\runtime\program_runtime_mouse.cpp" ^
     "src\runtime\program_runtime.cpp" ^
     "src\runtime\program_runtime_activation.cpp" ^
     "src\runtime\program_runtime_dispatch.cpp" ^

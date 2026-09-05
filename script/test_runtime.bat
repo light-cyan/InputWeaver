@@ -2,6 +2,9 @@
 setlocal
 cd /d "%~dp0.."
 
+call script\test_mouse.bat
+if errorlevel 1 exit /b %errorlevel%
+
 if not exist "bin\ProgramRuntimeTests.exe" (
     echo ProgramRuntimeTests.exe is missing. Run script\build_runtime_tests.bat first.
     exit /b 2
