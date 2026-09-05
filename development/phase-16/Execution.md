@@ -12,6 +12,7 @@ The approved language input is [Grammar.md](Grammar.md). Phase 16 implements com
 - Use one pointer-output instruction with an operation discriminator and one or two expression operands. Add `restart(source)` as a source operation, using the declared source identity directly.
 - Carry `MOUSE_IDLE_TIMEOUT` through settings and builtin duration reads, with an 80 ms default. Persist the new tables and operands in `.weavec` version 5, including deterministic dumps, validation, requirements, and source information.
 - Keep mouse-specific parsing and binding in small companion files; reuse existing expression binding, instruction lowering, name checks, and source diagnostics.
+- Keep the phase checkpoint buildable across program consumers: add explicit handling for the new instruction values and an activation capability gate. Phase 17 supplies field evaluation, cycle execution, and pointer output through runtime ports; Phase 18 supplies those ports for Windows.
 
 ## Language decisions
 
