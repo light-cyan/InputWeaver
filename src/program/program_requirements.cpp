@@ -85,6 +85,7 @@ std::uint32_t ComputeMaximumExpressionStackDepth(
         case ExpressionOpcode::ReadControlState:
         case ExpressionOpcode::PushControlState:
         case ExpressionOpcode::LoadArrayLength:
+        case ExpressionOpcode::LoadField:
             ++depth;
             break;
         case ExpressionOpcode::Binary:
@@ -123,6 +124,15 @@ ProgramRequirements ComputeProgramRequirements(
     requirements.numberSlotCount = ToCount(storage.userValues.initialNumbers.size());
     requirements.durationSlotCount = ToCount(storage.userValues.initialDurations.size());
     requirements.arrayCount = ToCount(storage.arrays.size());
+    requirements.eventSourceCount = ToCount(storage.eventSources.size());
+    requirements.requiresMouseObservation = !storage.eventSources.empty()
+        || std::any_of(storage.expressionCode.begin(), storage.expressionCode.end(),
+            [](const auto& instruction) { return instruction.opcode == ExpressionOpcode::LoadField; })
+        || std::any_of(storage.eventBuckets.begin(), storage.eventBuckets.end(),
+            [](const auto& bucket) { return bucket.key.transition >= EventTransition::Move; });
+    requirements.requiresPointerOutput = std::any_of(
+        storage.actionCode.begin(), storage.actionCode.end(),
+        [](const auto& instruction) { return instruction.opcode == ActionOpcode::Pointer; });
     requirements.initialArrayElementBytes = static_cast<std::uint64_t>(
         storage.initialArrayStates.size())
         + static_cast<std::uint64_t>(storage.initialArrayNumbers.size())

@@ -230,6 +230,9 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
     if (!program) {
         return {false, {RuntimeActivationErrorCode::MissingProgram}};
     }
+    if (program->Requirements().requiresMouseObservation || program->Requirements().requiresPointerOutput) {
+        return {false, {RuntimeActivationErrorCode::MissingMouseCapability}};
+    }
     const RuntimeActivationError capacityError = ValidateCapacities(*program);
     if (capacityError.code != RuntimeActivationErrorCode::None) {
         return {false, capacityError};

@@ -262,6 +262,12 @@ private:
         if (MatchWord("RAND_SEED")) {
             return ParseRandomSeedSetting(begin);
         }
+        if (MatchWord("MOUSE_IDLE_TIMEOUT")) {
+            return ParseDurationSetting(begin, TopLevelSyntax::Kind::MouseIdleTimeoutSetting);
+        }
+        if (MatchWord("event")) {
+            return ParseEventDeclaration(begin);
+        }
         if (MatchWord("state")) {
             return ParseDeclaration(begin, TopLevelSyntax::Kind::StateDeclaration);
         }
@@ -632,9 +638,10 @@ private:
         if (!Is(LexemeKind::Word)) {
             return false;
         }
-        constexpr std::array<std::string_view, 14U> names{{
+        constexpr std::array<std::string_view, 19U> names{{
             "press", "release", "tap", "wait", "gap", "set", "toggle",
             "append", "pop", "clear", "exec", "if", "repeat", "while",
+            "move_by", "move_to", "scroll", "scroll_horizontal", "restart",
         }};
         return std::find(names.begin(), names.end(), Current().text) != names.end();
     }
@@ -711,6 +718,10 @@ private:
                 "expected an action item");
         }
         const ParserLexeme& name = Advance();
+        if (name.text == "move_by" || name.text == "move_to" || name.text == "scroll"
+            || name.text == "scroll_horizontal" || name.text == "restart") {
+            return ParseMouseAction(name);
+        }
         if (name.text == "press" || name.text == "release" || name.text == "tap") {
             ActionSyntax action{};
             action.kind = ActionSyntax::Kind::Input;
@@ -1015,6 +1026,18 @@ private:
 
     [[nodiscard]] std::unique_ptr<ExpressionSyntax> ParsePrimary()
     {
+        if (Match(LexemeKind::At)) {
+            const auto begin = Previous().span;
+            const auto source = ExpectWordToken("an event source name");
+            Expect(LexemeKind::Dot, "'.'");
+            const auto field = ExpectWordToken("a completed event field");
+            auto expression = MakeExpression(ExpressionSyntax::Kind::Reference, MergeSpans(begin, field.span));
+            expression->reference.name = std::string(source.text) + '.' + std::string(field.text);
+            expression->reference.span = expression->span;
+            expression->text = expression->reference.name;
+            expression->completed = true;
+            return expression;
+        }
         if (MatchWord("on") || MatchWord("off")) {
             const ParserLexeme value = Previous();
             auto expression = MakeExpression(
@@ -1105,6 +1128,8 @@ private:
             Current().span,
             "expected an expression");
     }
+
+#include "frontend_mouse.inc"
 
     const std::vector<language::Lexeme>& lexemes_;
     const CompilerLimits& limits_;

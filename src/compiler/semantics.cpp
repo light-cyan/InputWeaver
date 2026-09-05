@@ -30,6 +30,7 @@ struct Symbol final {
     ArrayId array{};
     ArrayElementType arrayType{ArrayElementType::State};
     SourceSpan declaration{};
+    EventSourceId eventSource{};
 };
 
 [[nodiscard]] bool IsWritable(ValueRef value) noexcept
@@ -181,10 +182,12 @@ public:
                 BindTarget(item);
                 break;
             case TopLevelSyntax::Kind::TapDurationSetting:
-                BindDurationSetting(item, true);
-                break;
             case TopLevelSyntax::Kind::ActionGapSetting:
-                BindDurationSetting(item, false);
+            case TopLevelSyntax::Kind::MouseIdleTimeoutSetting:
+                BindDurationSetting(item);
+                break;
+            case TopLevelSyntax::Kind::EventDeclaration:
+                BindEventDeclaration(item);
                 break;
             case TopLevelSyntax::Kind::RandomSeedSetting:
                 BindRandomSeedSetting(item);
@@ -243,12 +246,14 @@ private:
         }
     }
 
-    void BindDurationSetting(const TopLevelSyntax& item, bool tap)
+    void BindDurationSetting(const TopLevelSyntax& item)
     {
-        std::optional<SourceSpan>& previous = tap
+        const bool tap = item.kind == TopLevelSyntax::Kind::TapDurationSetting;
+        const bool mouse = item.kind == TopLevelSyntax::Kind::MouseIdleTimeoutSetting;
+        std::optional<SourceSpan>& previous = mouse ? mouseIdleTimeoutSetting_ : tap
             ? tapDurationSetting_
             : actionGapSetting_;
-        const std::string_view name = tap ? "TAP_DURATION" : "ACTION_GAP";
+        const std::string_view name = mouse ? "MOUSE_IDLE_TIMEOUT" : tap ? "TAP_DURATION" : "ACTION_GAP";
         if (previous.has_value()) {
             diagnostics_.Add(
                 CompileDiagnosticCode::DuplicateSetting,
@@ -266,14 +271,16 @@ private:
                 "duration literal is out of range or not exactly representable in nanoseconds");
             return;
         }
-        if (value->nanoseconds > kMaximumSettingDuration) {
+        if (mouse ? value->nanoseconds <= 0 : value->nanoseconds > kMaximumSettingDuration) {
             diagnostics_.Add(
                 CompileDiagnosticCode::SettingOutOfRange,
                 item.valueSpan,
-                std::string(name) + " must be between 0ms and 1min");
+                std::string(name) + (mouse ? " must be positive" : " must be between 0ms and 1min"));
             return;
         }
-        if (tap) {
+        if (mouse) {
+            program_.mouseIdleTimeout = *value;
+        } else if (tap) {
             program_.tapDuration = *value;
         } else {
             program_.actionGap = *value;
@@ -302,24 +309,30 @@ private:
         program_.randomSeed = *value;
     }
 
-    void BindDeclaration(const TopLevelSyntax& item)
+    [[nodiscard]] bool CheckDeclarationName(const TopLevelSyntax& item)
     {
         if (IsReservedName(item.name)) {
             diagnostics_.Add(
                 CompileDiagnosticCode::ReservedName,
                 item.span,
-                "'" + item.name + "' is reserved and cannot name a variable");
-            return;
+                "'" + item.name + "' is reserved and cannot name a declaration");
+            return false;
         }
         const auto existing = symbols_.find(item.name);
         if (existing != symbols_.end()) {
             diagnostics_.Add(
                 CompileDiagnosticCode::DuplicateSymbol,
                 item.span,
-                "variable '" + item.name + "' is already declared",
+                "name '" + item.name + "' is already declared",
                 {{existing->second.declaration, "first declaration is here"}});
-            return;
+            return false;
         }
+        return true;
+    }
+
+    void BindDeclaration(const TopLevelSyntax& item)
+    {
+        if (!CheckDeclarationName(item)) return;
 
         if (item.kind == TopLevelSyntax::Kind::StateArrayDeclaration
             || item.kind == TopLevelSyntax::Kind::NumberArrayDeclaration) {
@@ -399,6 +412,10 @@ private:
         std::string_view name,
         SourceSpan span)
     {
+        if (name == "MOUSE_IDLE_TIMEOUT") {
+            return ValueRef{ValueDomain::BuiltinDuration, ValueType::Duration,
+                static_cast<std::uint32_t>(BuiltinDuration::MouseIdleTimeout)};
+        }
         if (name == "PAUSE") {
             return ValueRef{
                 ValueDomain::BuiltinState,
@@ -435,7 +452,7 @@ private:
             diagnostics_.Add(
                 CompileDiagnosticCode::TypeMismatch,
                 span,
-                "array '" + std::string(name) + "' requires an index or .length");
+                "'" + std::string(name) + "' requires a field or array element access");
             return std::nullopt;
         }
         return found->second.value;
@@ -453,7 +470,7 @@ private:
                 "unknown array '" + std::string(name) + "'");
             return nullptr;
         }
-        if (found->second.value.has_value()) {
+        if (!found->second.array.IsValid()) {
             diagnostics_.Add(
                 CompileDiagnosticCode::TypeMismatch,
                 span,
@@ -627,12 +644,17 @@ private:
             return expression;
         }
         case ExpressionSyntax::Kind::Reference: {
+            if (!syntax.reference.raw && (syntax.completed
+                || IsFieldReference(syntax.reference.name))) {
+                return BindField(syntax);
+            }
             const bool unqualified = !syntax.reference.raw
                 && syntax.reference.name.find('.') == std::string::npos;
             const bool scalarCandidate = unqualified
                 && (syntax.text == "PAUSE"
                     || syntax.text == "TAP_DURATION"
                     || syntax.text == "ACTION_GAP"
+                    || syntax.text == "MOUSE_IDLE_TIMEOUT"
                     || syntax.text == "RAND01"
                     || symbols_.contains(syntax.text));
             if (scalarCandidate) {
@@ -648,6 +670,7 @@ private:
                 return expression;
             }
             const auto control = BindControl(syntax.reference);
+            if (bindingPeriod_) ReportType(syntax.span, "periods use program values, not physical control state");
             if (!control.has_value()) {
                 return MakeErrorExpression(syntax.span);
             }
@@ -1094,6 +1117,13 @@ private:
             BoundAction action{};
             action.span = item.span;
             switch (item.kind) {
+            case ActionSyntax::Kind::Pointer:
+                BindPointerAction(item, action);
+                break;
+            case ActionSyntax::Kind::RestartEvent:
+                action.kind = BoundAction::Kind::RestartEvent;
+                action.eventSource = ResolveEventSource(item.secondaryName, item.span);
+                break;
             case ActionSyntax::Kind::Input: {
                 const auto control = BindControl(item.control);
                 if (control.has_value()) {
@@ -1320,10 +1350,7 @@ private:
                     "mapping condition must be Boolean");
             }
         } else {
-            const auto source = BindControl(item.event.control);
-            const auto transition = BindTransition(item.event.transition, item.event.span);
-            if (source.has_value()) rule.source = *source;
-            if (transition.has_value()) rule.transition = *transition;
+            BindRuleEvent(item, rule);
             if (item.condition != nullptr) {
                 rule.condition = BindExpression(*item.condition);
                 const std::string message = item.kind == TopLevelSyntax::Kind::ExitRule
@@ -1427,6 +1454,8 @@ private:
         program_.rules.push_back(std::move(rule));
     }
 
+#include "semantics_mouse.inc"
+
     const SourceFile& source_;
     const SyntaxTree& syntax_;
     DiagnosticSink& diagnostics_;
@@ -1435,10 +1464,12 @@ private:
     std::optional<SourceSpan> targetSetting_;
     std::optional<SourceSpan> tapDurationSetting_;
     std::optional<SourceSpan> actionGapSetting_;
+    std::optional<SourceSpan> mouseIdleTimeoutSetting_;
     std::optional<SourceSpan> randomSeedSetting_;
     std::uint32_t nextSourceOrdinal_{};
     std::uint32_t suppressedConstantFaultDepth_{};
     bool hasExplicitExitRule_{};
+    bool bindingPeriod_{};
 };
 
 } // namespace

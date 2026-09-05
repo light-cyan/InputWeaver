@@ -1,6 +1,7 @@
 #pragma once
 
 #include "program/compiled_program.hpp"
+#include "program/event_fields.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -33,6 +34,7 @@ struct BoundExpression final {
         Binary,
         LogicalAnd,
         LogicalOr,
+        LoadField,
     };
 
     Kind kind{};
@@ -47,6 +49,7 @@ struct BoundExpression final {
     ValueRef value{};
     ArrayId array{};
     ControlRef control{};
+    EventFieldReference field{};
     UnaryOperator unary{};
     BinaryOperator binary{};
     std::unique_ptr<BoundExpression> left;
@@ -71,6 +74,8 @@ struct BoundAction final {
         If,
         Repeat,
         While,
+        Pointer,
+        RestartEvent,
     };
 
     Kind kind{};
@@ -79,6 +84,9 @@ struct BoundAction final {
     ValueRef value{};
     ArrayId array{};
     std::string command;
+    PointerOperation pointerOperation{};
+    EventSourceId eventSource{};
+    std::unique_ptr<BoundExpression> secondExpression;
     std::unique_ptr<BoundExpression> expression;
     std::unique_ptr<BoundExpression> index;
     std::vector<BoundAction> body;
@@ -108,6 +116,7 @@ struct BoundRule final {
     Kind kind{};
     ControlRef source{};
     EventTransition transition{};
+    EventSourceId eventSource{};
     ControlRef target{};
     std::unique_ptr<BoundExpression> condition;
     std::vector<BoundAction> actions;
@@ -119,6 +128,13 @@ struct BoundRule final {
     SourceSpan actionFlowSpan{};
 };
 
+struct BoundEventSource final {
+    std::string name;
+    EventTransition transition{};
+    std::unique_ptr<BoundExpression> period;
+    SourceSpan declaration{};
+};
+
 struct BoundProgram final {
     std::string displayPath;
     std::uint32_t sourceByteLength{};
@@ -128,6 +144,7 @@ struct BoundProgram final {
     SourceSpan targetSource{};
     DurationValue tapDuration{30'000'000};
     DurationValue actionGap{10'000'000};
+    DurationValue mouseIdleTimeout{80'000'000};
     std::uint64_t randomSeed{};
     UserValueLayout userValues;
     std::vector<ArrayDescriptor> arrays;
@@ -136,6 +153,7 @@ struct BoundProgram final {
     std::vector<BoundVariableDebug> variables;
     std::vector<BoundArrayDebug> arrayDebug;
     std::vector<BoundRule> rules;
+    std::vector<BoundEventSource> eventSources;
 };
 
 } // namespace inputweaver::compiler

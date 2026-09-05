@@ -1,6 +1,7 @@
 #pragma once
 
 #include "program_validator.hpp"
+#include "event_fields.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -162,7 +163,7 @@ template <typename Id>
             && value.index == static_cast<std::uint32_t>(BuiltinState::Pause);
     case ValueDomain::BuiltinDuration:
         return value.type == ValueType::Duration
-            && value.index <= static_cast<std::uint32_t>(BuiltinDuration::ActionGap);
+            && value.index <= static_cast<std::uint32_t>(BuiltinDuration::MouseIdleTimeout);
     case ValueDomain::BuiltinNumber:
         return value.type == ValueType::Number
             && value.index == static_cast<std::uint32_t>(BuiltinNumber::Rand01);

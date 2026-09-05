@@ -821,6 +821,10 @@ bool ProgramRuntime::Impl::RunTaskSlice(
         case ActionOpcode::End:
             FinishTask(state, slot, false, RuntimeExecutionResult::Completed);
             return true;
+        case ActionOpcode::Pointer:
+        case ActionOpcode::RestartEvent:
+            FinishTask(state, slot, true, RuntimeExecutionResult::Failed);
+            return true;
         }
     }
 

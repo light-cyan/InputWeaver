@@ -19,7 +19,7 @@
 namespace inputweaver {
 namespace {
 
-constexpr std::array<std::uint8_t, 8U> kWeavecMagicV4{
+constexpr std::array<std::uint8_t, 8U> kWeavecMagicV5{
     0x57U,
     0x45U,
     0x41U,
@@ -27,7 +27,7 @@ constexpr std::array<std::uint8_t, 8U> kWeavecMagicV4{
     0x45U,
     0x43U,
     0x00U,
-    0x04U,
+    0x05U,
 };
 
 class ByteWriter final {
@@ -254,6 +254,7 @@ void WriteEventKey(ByteWriter& writer, EventKey key)
 {
     WriteId(writer, key.control);
     WriteEnum(writer, key.transition);
+    WriteId(writer, key.source);
 }
 
 void WriteSource(ByteWriter& writer, const ProgramSource& source)
@@ -271,6 +272,7 @@ void WriteSettings(ByteWriter& writer, const ProgramSettings& settings)
     WriteDuration(writer, settings.tapDuration);
     WriteDuration(writer, settings.actionGap);
     writer.U64(settings.randomSeed);
+    WriteDuration(writer, settings.mouseIdleTimeout);
 }
 
 void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requirements)
@@ -292,6 +294,9 @@ void WriteRequirements(ByteWriter& writer, const ProgramRequirements& requiremen
     writer.U32(requirements.maximumRepeatFramesPerTask);
     writer.U32(requirements.maximumOwnedControlsPerTask);
     writer.U8(requirements.requiresProcessLaunch ? 1U : 0U);
+    writer.U8(requirements.requiresMouseObservation ? 1U : 0U);
+    writer.U8(requirements.requiresPointerOutput ? 1U : 0U);
+    writer.U32(requirements.eventSourceCount);
 }
 
 template <typename Id>
@@ -380,7 +385,8 @@ template <typename Value, typename ReadElement>
 [[nodiscard]] bool ReadEventKey(ByteReader& reader, EventKey& key)
 {
     return ReadId(reader, key.control)
-        && ReadEnum(reader, key.transition, EventTransition::Up);
+        && ReadEnum(reader, key.transition, EventTransition::Tick)
+        && ReadId(reader, key.source);
 }
 
 [[nodiscard]] bool ReadSource(ByteReader& reader, ProgramSource& source)
@@ -400,7 +406,8 @@ template <typename Value, typename ReadElement>
         && ReadSpan(reader, settings.target.source)
         && ReadDuration(reader, settings.tapDuration)
         && ReadDuration(reader, settings.actionGap)
-        && reader.U64(settings.randomSeed);
+        && reader.U64(settings.randomSeed)
+        && ReadDuration(reader, settings.mouseIdleTimeout);
 }
 
 [[nodiscard]] bool ReadRequirements(
@@ -408,6 +415,8 @@ template <typename Value, typename ReadElement>
     ProgramRequirements& requirements)
 {
     std::uint8_t requiresProcessLaunch = 0U;
+    std::uint8_t requiresMouseObservation = 0U;
+    std::uint8_t requiresPointerOutput = 0U;
     if (!reader.U32(requirements.stateSlotCount)
         || !reader.U32(requirements.numberSlotCount)
         || !reader.U32(requirements.durationSlotCount)) {
@@ -428,15 +437,20 @@ template <typename Value, typename ReadElement>
         || !reader.U32(requirements.maximumExpressionStackDepth)
         || !reader.U32(requirements.maximumRepeatFramesPerTask)
         || !reader.U32(requirements.maximumOwnedControlsPerTask)
-        || !reader.U8(requiresProcessLaunch)) {
+        || !reader.U8(requiresProcessLaunch)
+        || !reader.U8(requiresMouseObservation)
+        || !reader.U8(requiresPointerOutput)
+        || !reader.U32(requirements.eventSourceCount)) {
         return false;
     }
-    if (requiresProcessLaunch > 1U) {
+    if (requiresProcessLaunch > 1U || requiresMouseObservation > 1U || requiresPointerOutput > 1U) {
         return reader.Fail(
             WeavecDecodeErrorCode::InvalidScalar,
             "Boolean field must be encoded as zero or one");
     }
     requirements.requiresProcessLaunch = requiresProcessLaunch != 0U;
+    requirements.requiresMouseObservation = requiresMouseObservation != 0U;
+    requirements.requiresPointerOutput = requiresPointerOutput != 0U;
     return true;
 }
 
@@ -653,6 +667,12 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             WriteId(output, value.conditionText);
             WriteId(output, value.actionText);
         });
+    WriteVector(writer, program.EventSources(), [](ByteWriter& output, const EventSourceDescriptor& value) {
+        WriteId(output, value.name);
+        WriteEnum(output, value.transition);
+        WriteId(output, value.period);
+        WriteSpan(output, value.declaration);
+    });
 }
 
 [[nodiscard]] bool DecodePayload(
@@ -808,7 +828,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
                 if (!ReadEnum(
                         input,
                         value.opcode,
-                        ExpressionOpcode::LoadArrayElement)
+                        ExpressionOpcode::LoadField)
                     || !ReadEnum(
                         input,
                         value.type,
@@ -845,7 +865,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             limits,
             13U,
             [](ByteReader& input, ActionInstruction& value) {
-                if (!ReadEnum(input, value.opcode, ActionOpcode::ClearArray)
+                if (!ReadEnum(input, value.opcode, ActionOpcode::RestartEvent)
                     || !input.U32(value.operand0)
                     || !input.U32(value.operand1)) {
                     return false;
@@ -877,7 +897,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             reader,
             storage.exitControlBuckets,
             limits,
-            13U,
+            17U,
             [](ByteReader& input, ExitControlBucket& value) {
                 return ReadEventKey(input, value.key)
                     && ReadRange(input, value.rules);
@@ -896,7 +916,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             reader,
             storage.pauseControlBuckets,
             limits,
-            13U,
+            17U,
             [](ByteReader& input, PauseControlBucket& value) {
                 return ReadEventKey(input, value.key)
                     && ReadRange(input, value.rules);
@@ -917,7 +937,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             reader,
             storage.eventBuckets,
             limits,
-            13U,
+            17U,
             [](ByteReader& input, EventBucket& value) {
                 return ReadEventKey(input, value.key)
                     && ReadRange(input, value.rules);
@@ -991,7 +1011,13 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
             return input.U32(value.sourceOrdinal)
                 && ReadId(input, value.conditionText)
                 && ReadId(input, value.actionText);
-        });
+        }) && ReadVector(reader, storage.eventSources, limits, 17U,
+            [](ByteReader& input, EventSourceDescriptor& value) {
+                return ReadId(input, value.name)
+                    && ReadEnum(input, value.transition, EventTransition::HorizontalWheel)
+                    && ReadId(input, value.period)
+                    && ReadSpan(input, value.declaration);
+            });
 }
 
 [[nodiscard]] std::uint64_t ReadHeaderPayloadLength(
@@ -1008,7 +1034,7 @@ void EncodePayload(ByteWriter& writer, const CompiledProgram& program)
 std::vector<std::uint8_t> EncodeWeavec(const CompiledProgram& program)
 {
     ByteWriter writer;
-    writer.Raw(kWeavecMagicV4);
+    writer.Raw(kWeavecMagicV5);
     writer.U64(0U);
     EncodePayload(writer, program);
     const std::uint64_t payloadSize = static_cast<std::uint64_t>(
@@ -1030,12 +1056,12 @@ DecodeWeavecResult DecodeWeavec(
         return result;
     }
     if (!std::equal(
-            kWeavecMagicV4.begin(),
-            kWeavecMagicV4.end(),
+            kWeavecMagicV5.begin(),
+            kWeavecMagicV5.end(),
             bytes.begin())) {
         std::size_t mismatch = 0U;
-        while (mismatch < kWeavecMagicV4.size()
-            && bytes[mismatch] == kWeavecMagicV4[mismatch]) {
+        while (mismatch < kWeavecMagicV5.size()
+            && bytes[mismatch] == kWeavecMagicV5[mismatch]) {
             ++mismatch;
         }
         result.decodeError = WeavecDecodeError{

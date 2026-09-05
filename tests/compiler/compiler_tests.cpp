@@ -1012,6 +1012,8 @@ void TestDiagnosticFormatting()
     }
 }
 
+#include "compiler_mouse_tests.inc"
+
 } // namespace
 
 int main()
@@ -1027,6 +1029,7 @@ int main()
     TestGoldenFixtureSemantics();
     TestArtifactAndFileCommands();
     TestDiagnosticFormatting();
+    TestMouseCompilation();
 
     if (g_failureCount != 0) {
         std::cerr << g_failureCount << " compiler test(s) failed.\n";

@@ -61,6 +61,9 @@ void CanonicalizeStrings(CompiledProgramStorage& storage)
 
     RemapId(storage.source.displayPath, remap);
     RemapId(storage.settings.target.text, remap);
+    for (auto& source : storage.eventSources) {
+        RemapId(source.name, remap);
+    }
     for (auto& variable : storage.debugInfo.variables) {
         RemapId(variable.name, remap);
     }
@@ -397,6 +400,11 @@ std::span<const ExpressionDescriptor> CompiledProgram::Expressions() const noexc
 std::span<const ExpressionInstruction> CompiledProgram::ExpressionCode() const noexcept
 {
     return storage_.expressionCode;
+}
+
+std::span<const EventSourceDescriptor> CompiledProgram::EventSources() const noexcept
+{
+    return storage_.eventSources;
 }
 
 std::span<const ActionProgramDescriptor> CompiledProgram::ActionPrograms() const noexcept

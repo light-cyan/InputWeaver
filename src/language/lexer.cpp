@@ -411,6 +411,7 @@ private:
         case '<': kind = LexemeKind::Less; break;
         case '>': kind = LexemeKind::Greater; break;
         case ':': kind = LexemeKind::Colon; break;
+        case '@': kind = LexemeKind::At; break;
         case ';': kind = LexemeKind::Semicolon; break;
         case '.': kind = LexemeKind::Dot; break;
         case ',': kind = LexemeKind::Comma; break;

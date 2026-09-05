@@ -358,6 +358,26 @@ void ValidateExpressionDescriptor(
             }
             stack = stacks.Push(stack, ExpressionType::ControlState);
             break;
+        case ExpressionOpcode::LoadField: {
+            const auto reference = EventFieldReference::Decode(instruction.operand0, instruction.operand1);
+            ExpressionType expected = ExpressionType::None;
+            if (!reference.source.IsValid()) {
+                expected = EventFieldType(reference);
+            } else if (ValidId(reference.source, storage.eventSources.size())) {
+                const auto& source = storage.eventSources[reference.source.value];
+                if (ValidId(source.period, storage.expressions.size())) {
+                    expected = EventFieldType(reference, source.transition,
+                        storage.expressions[source.period.value].resultType);
+                }
+            }
+            if (instruction.operand1 != reference.Selector()
+                || expected == ExpressionType::None || instruction.type != expected) {
+                context.Add(ProgramValidationErrorCode::Expression, location,
+                    "field reference or result type is invalid");
+            }
+            stack = stacks.Push(stack, expected);
+            break;
+        }
         case ExpressionOpcode::LoadArrayLength:
             if (instruction.type != ExpressionType::Number
                 || instruction.operand0 >= storage.arrays.size()
@@ -585,6 +605,7 @@ void ValidateActionDescriptor(
         bool fallthrough = true;
 
         if (instruction.opcode != ActionOpcode::SetArrayElement
+            && instruction.opcode != ActionOpcode::Pointer
             && instruction.operand2 != 0U) {
             context.Add(
                 ProgramValidationErrorCode::Action,
@@ -604,6 +625,22 @@ void ValidateActionDescriptor(
                     "control action reference or unused operand is invalid");
             } else if (instruction.opcode != ActionOpcode::Release) {
                 acquiredControls.insert(instruction.operand0);
+            }
+            break;
+        case ActionOpcode::Pointer:
+            if (instruction.operand0 > static_cast<std::uint32_t>(PointerOperation::ScrollHorizontal)
+                || ExpressionResultType(storage, instruction.operand1) != ExpressionType::Number
+                || (instruction.operand0 <= static_cast<std::uint32_t>(PointerOperation::MoveTo)
+                    ? ExpressionResultType(storage, instruction.operand2) != ExpressionType::Number
+                    : instruction.operand2 != 0U)) {
+                context.Add(ProgramValidationErrorCode::Action, location,
+                    "pointer output requires numeric arguments");
+            }
+            break;
+        case ActionOpcode::RestartEvent:
+            if (instruction.operand0 >= storage.eventSources.size() || instruction.operand1 != 0U) {
+                context.Add(ProgramValidationErrorCode::Action, location,
+                    "restart requires a declared event source");
             }
             break;
         case ActionOpcode::Wait:

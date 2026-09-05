@@ -48,6 +48,7 @@ enum class LexemeKind : std::uint8_t {
     LeftBracket,
     RightBracket,
     Pipe,
+    At,
     Invalid,
     EndOfInput,
 };

@@ -80,6 +80,10 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "again";
     case EventTransition::Up:
         return "up";
+    case EventTransition::Move: return "move";
+    case EventTransition::Wheel: return "wheel";
+    case EventTransition::HorizontalWheel: return "horizontalwheel";
+    case EventTransition::Tick: return "tick";
     }
     return "unknown";
 }
@@ -187,6 +191,7 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "load-array-length";
     case ExpressionOpcode::LoadArrayElement:
         return "load-array-element";
+    case ExpressionOpcode::LoadField: return "load-field";
     }
     return "unknown";
 }
@@ -234,6 +239,8 @@ void WriteControl(std::ostream& output, ControlRef control)
         return "pop-array-element";
     case ActionOpcode::ClearArray:
         return "clear-array";
+    case ActionOpcode::Pointer: return "pointer";
+    case ActionOpcode::RestartEvent: return "restart-event";
     }
     return "unknown";
 }
@@ -286,7 +293,8 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     WriteSpan(output, program.Settings().target.source);
     output << " tap-ns=" << program.Settings().tapDuration.nanoseconds
            << " gap-ns=" << program.Settings().actionGap.nanoseconds
-           << " rand-seed=" << program.Settings().randomSeed << '\n';
+           << " rand-seed=" << program.Settings().randomSeed
+           << " mouse-idle-ns=" << program.Settings().mouseIdleTimeout.nanoseconds << '\n';
 
     const ProgramRequirements& requirements = program.Requirements();
     output << "requirements states=" << requirements.stateSlotCount
@@ -315,7 +323,22 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
            << " owned-controls/task="
            << requirements.maximumOwnedControlsPerTask
            << " process-launch="
-           << (requirements.requiresProcessLaunch ? "true" : "false") << '\n';
+           << (requirements.requiresProcessLaunch ? "true" : "false")
+           << " mouse-observation=" << requirements.requiresMouseObservation
+           << " pointer-output=" << requirements.requiresPointerOutput
+           << " event-sources=" << requirements.eventSourceCount << '\n';
+
+    output << "event-sources " << program.EventSources().size() << '\n';
+    for (std::size_t index = 0; index < program.EventSources().size(); ++index) {
+        const auto& source = program.EventSources()[index];
+        output << "  ev" << index << " name=";
+        WriteId(output, 's', source.name);
+        output << " transition=" << TransitionName(source.transition) << " period=";
+        WriteId(output, 'e', source.period);
+        output << " declaration=";
+        WriteSpan(output, source.declaration);
+        output << '\n';
+    }
 
     output << "strings " << program.Strings().size() << '\n';
     for (std::size_t index = 0; index < program.Strings().size(); ++index) {
@@ -508,7 +531,9 @@ std::string DumpCompiledProgram(const CompiledProgram& program)
     for (std::size_t index = 0; index < program.EventBuckets().size(); ++index) {
         const EventBucket& bucket = program.EventBuckets()[index];
         output << "  b" << index << " key=";
-        WriteId(output, 'c', bucket.key.control);
+        if (bucket.key.source.IsValid()) WriteId(output, 'v', bucket.key.source);
+        else if (bucket.key.control.IsValid()) WriteId(output, 'c', bucket.key.control);
+        else output << "Mouse";
         output << ':' << TransitionName(bucket.key.transition) << " rules=";
         WriteRange(output, bucket.rules);
         output << '\n';

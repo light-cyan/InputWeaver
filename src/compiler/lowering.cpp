@@ -78,6 +78,7 @@ private:
         storage.settings.tapDuration = program_.tapDuration;
         storage.settings.actionGap = program_.actionGap;
         storage.settings.randomSeed = program_.randomSeed;
+        storage.settings.mouseIdleTimeout = program_.mouseIdleTimeout;
         storage.userValues = std::move(program_.userValues);
         storage.arrays = std::move(program_.arrays);
         storage.initialArrayStates = std::move(program_.initialArrayStates);
@@ -93,6 +94,10 @@ private:
                 InternString(array.name),
                 array.array,
                 array.declaration});
+        }
+        for (const auto& source : program_.eventSources) {
+            const auto period = LowerExpression(*source.period);
+            storage.eventSources.push_back({InternString(source.name), source.transition, period, source.declaration});
         }
     }
 
@@ -169,6 +174,10 @@ private:
             code.spans.push_back(expression.span);
         };
         switch (expression.kind) {
+        case BoundExpression::Kind::LoadField:
+            emit({ExpressionOpcode::LoadField, expression.type,
+                expression.field.source.value, expression.field.Selector()});
+            break;
         case BoundExpression::Kind::BooleanConstant:
             emit({
                 ExpressionOpcode::PushBoolean,
@@ -341,6 +350,16 @@ private:
     {
         for (const BoundAction& action : actions) {
             switch (action.kind) {
+            case BoundAction::Kind::Pointer: {
+                const auto first = LowerExpression(*action.expression);
+                const auto second = action.secondExpression ? LowerExpression(*action.secondExpression).value : 0U;
+                EmitAction(code, ActionOpcode::Pointer, static_cast<std::uint32_t>(action.pointerOperation),
+                    first.value, second, action.span);
+                break;
+            }
+            case BoundAction::Kind::RestartEvent:
+                EmitAction(code, ActionOpcode::RestartEvent, action.eventSource.value, 0U, action.span);
+                break;
             case BoundAction::Kind::Press:
             case BoundAction::Kind::Release:
             case BoundAction::Kind::Tap: {
@@ -567,8 +586,8 @@ private:
             if (rule.condition != nullptr) {
                 condition = LowerExpression(*rule.condition);
             }
-            const ControlRefId source = InternControl(rule.source);
-            const EventKey key{source, rule.transition};
+            const ControlRefId source = rule.transition <= EventTransition::Up ? InternControl(rule.source) : ControlRefId{};
+            const EventKey key{source, rule.transition, rule.eventSource};
             if (rule.kind == BoundRule::Kind::Exit) {
                 exitRules_[key].push_back({
                     condition,
@@ -666,6 +685,7 @@ private:
         CompiledProgramStorage& storage = builder_.Storage();
         std::vector<std::uint8_t> uses(storage.controls.size(), 0U);
         const auto add = [&uses](ControlRefId control, ControlUse use) {
+            if (!control.IsValid()) return;
             uses[control.value] = static_cast<std::uint8_t>(
                 uses[control.value] | ToControlUseBits(use));
         };

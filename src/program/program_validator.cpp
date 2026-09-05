@@ -175,6 +175,8 @@ void ValidateCanonicalPools(
     }
 }
 
+#include "program_event_validator.inc"
+
 void ValidateSourceAndSettings(
     const CompiledProgramStorage& storage,
     ValidationContext& context)
@@ -249,7 +251,8 @@ void ValidateSourceAndSettings(
         break;
     }
     if (storage.settings.tapDuration.nanoseconds < 0
-        || storage.settings.actionGap.nanoseconds < 0) {
+        || storage.settings.actionGap.nanoseconds < 0
+        || storage.settings.mouseIdleTimeout.nanoseconds <= 0) {
         context.Add(
             ProgramValidationErrorCode::Value,
             "settings",
@@ -499,8 +502,14 @@ void ValidateRuleBuckets(
     for (std::size_t bucketIndex = 0; bucketIndex < buckets.size(); ++bucketIndex) {
         const auto& bucket = buckets[bucketIndex];
         const std::string bucketLocation = At(text.buckets, bucketIndex);
-        if (!ValidId(bucket.key.control, storage.controls.size())
-            || !ValidEventTransition(bucket.key.transition)
+        const bool controlEvent = ValidEventTransition(bucket.key.transition);
+        const bool validKey = controlEvent
+            ? ValidId(bucket.key.control, storage.controls.size()) && !bucket.key.source.IsValid()
+            : !bucket.key.control.IsValid() && (IsMouseTransition(bucket.key.transition)
+                ? !bucket.key.source.IsValid()
+                : bucket.key.transition == EventTransition::Tick
+                    && ValidId(bucket.key.source, storage.eventSources.size()));
+        if (!validKey
             || (havePreviousKey && previousKey >= bucket.key)) {
             context.Add(
                 ProgramValidationErrorCode::Rule,
@@ -509,7 +518,7 @@ void ValidateRuleBuckets(
         }
         previousKey = bucket.key;
         havePreviousKey = true;
-        AddExpectedControlUse(
+        if (controlEvent) AddExpectedControlUse(
             storage,
             expectedControlUses,
             bucket.key.control,
@@ -608,7 +617,11 @@ void ValidateExitControls(
             "exit-control condition must be invalid or Boolean",
             "exit-control bucket ranges do not cover the complete rule table",
         },
-        [](const auto&, const auto&, const std::string&) {});
+        [&context](const auto& bucket, const auto&, const std::string& location) {
+            if (!ValidEventTransition(bucket.key.transition)) {
+                context.Add(ProgramValidationErrorCode::Rule, location, "exit requires a control event");
+            }
+        });
 }
 
 void ValidatePauseControls(
@@ -635,9 +648,12 @@ void ValidatePauseControls(
             "pause-control bucket ranges do not cover the complete rule table",
         },
         [&context](
-            const PauseControlBucket&,
+            const PauseControlBucket& bucket,
             const PauseControlRule& rule,
             const std::string& ruleLocation) {
+            if (!ValidEventTransition(bucket.key.transition)) {
+                context.Add(ProgramValidationErrorCode::Rule, ruleLocation, "pause requires a control event");
+            }
             if (rule.delivery != Delivery::Observe
                 && rule.delivery != Delivery::Consume) {
                 context.Add(
@@ -731,6 +747,9 @@ void ValidateRulesAndMappings(
             const EventBucket& bucket,
             const CompiledRule& rule,
             const std::string& ruleLocation) {
+            if (bucket.key.transition == EventTransition::Tick && rule.delivery != Delivery::Observe) {
+                context.Add(ProgramValidationErrorCode::Rule, ruleLocation, "tick rules observe their source");
+            }
             if (rule.delivery != Delivery::Observe
                 && rule.delivery != Delivery::Consume) {
                 context.Add(
@@ -923,6 +942,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
         {"durationConstants", storage.durationConstants.size()},
         {"expressions", storage.expressions.size()},
         {"expressionCode", storage.expressionCode.size()},
+        {"eventSources", storage.eventSources.size()},
         {"actionPrograms", storage.actionPrograms.size()},
         {"actionCode", storage.actionCode.size()},
         {"mappingSlots", storage.mappingSlots.size()},
@@ -954,6 +974,7 @@ std::vector<ProgramValidationError> ValidateCompiledProgram(
     ValidateSourceAndSettings(storage, context);
     ValidateUserValuesAndDebug(storage, context);
     ValidateArraysAndDebug(storage, context);
+    ValidateEventSources(storage, context);
 
     ValidateRangeCoverage(
         storage.expressions,

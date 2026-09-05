@@ -389,10 +389,10 @@ void WriteLittleEndianU64(
 void TestRequiredFixtures()
 {
     constexpr std::array<std::uint64_t, 4> expectedDumpHashes{
-        3026090136955141491ULL,
-        16667569394712554932ULL,
-        715892691562162642ULL,
-        8701880781902487440ULL,
+        14266916754674283268ULL,
+        9073278042415446105ULL,
+        10692574025948081081ULL,
+        6974028566661281057ULL,
     };
     const std::array<inputweaver::CompiledProgramStorage, 4> storages{
         inputweaver::test::MakeTapFixtureStorage(),
@@ -523,7 +523,7 @@ void TestWeavecRoundTrips()
         MakeOpcodeCoverageStorage(),
     };
     constexpr std::array<std::uint8_t, 8U> magic{
-        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x04U};
+        0x57U, 0x45U, 0x41U, 0x56U, 0x45U, 0x43U, 0x00U, 0x05U};
 
     for (std::size_t index = 0; index < storages.size(); ++index) {
         const auto original = FinalizeFixture(storages[index], "weavec source fixture");
@@ -631,7 +631,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t requirementsBooleanOffset =
-            kWeavecHeaderSize + 16U + 37U + 68U;
+            kWeavecHeaderSize + 16U + 45U + 68U;
         bytes[requirementsBooleanOffset] = 2U;
         const auto result = DecodeWeavec(bytes);
         Check(HasDecodeError(result, WeavecDecodeErrorCode::InvalidScalar),
@@ -654,7 +654,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumRulesOffset =
-            kWeavecHeaderSize + 16U + 37U + 36U;
+            kWeavecHeaderSize + 16U + 45U + 36U;
         bytes[maximumRulesOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -666,7 +666,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t maximumTasksOffset =
-            kWeavecHeaderSize + 16U + 37U + 44U;
+            kWeavecHeaderSize + 16U + 45U + 44U;
         bytes[maximumTasksOffset] = 0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr
@@ -678,7 +678,7 @@ void TestWeavecRejection()
     {
         auto bytes = valid;
         constexpr std::size_t firstStringByteOffset =
-            kWeavecHeaderSize + 16U + 37U + 69U + 4U + 4U;
+            kWeavecHeaderSize + 16U + 45U + 75U + 4U + 4U;
         bytes[firstStringByteOffset] = 0xc0U;
         const auto result = DecodeWeavec(bytes);
         Check(!result.decodeError.has_value() && result.program == nullptr

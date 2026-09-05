@@ -56,6 +56,7 @@ struct ExpressionSyntax final {
     bool stateValue{};
     ControlState controlStateValue{};
     ControlSyntax reference;
+    bool completed{};
     std::unique_ptr<ExpressionSyntax> left;
     std::unique_ptr<ExpressionSyntax> right;
 };
@@ -80,6 +81,8 @@ struct ActionSyntax final {
         If,
         Repeat,
         While,
+        Pointer,
+        RestartEvent,
     };
 
     Kind kind{};
@@ -90,6 +93,7 @@ struct ActionSyntax final {
     TargetSyntax target;
     std::string stringValue;
     std::unique_ptr<ExpressionSyntax> expression;
+    std::unique_ptr<ExpressionSyntax> secondExpression;
     std::vector<ActionSyntax> body;
     std::vector<ActionSyntax> alternative;
 };
@@ -114,6 +118,8 @@ struct TopLevelSyntax final {
         ExitRule,
         PauseRule,
         EventRule,
+        MouseIdleTimeoutSetting,
+        EventDeclaration,
     };
 
     Kind kind{};

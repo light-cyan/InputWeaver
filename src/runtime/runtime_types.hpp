@@ -231,6 +231,7 @@ enum class RuntimeActivationErrorCode : std::uint8_t {
     InvalidTarget,
     CleanupFailure,
     AllocationFailure,
+    MissingMouseCapability,
 };
 
 enum class RuntimeActivationSubject : std::uint32_t {

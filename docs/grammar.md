@@ -426,3 +426,37 @@ exit F12:down when (LCtrl == held or RCtrl == held) and (LShift == held or RShif
 `InputWeaverCompiler.exe validate source.weave` 执行源码加载、词法分析、语法分析、名称绑定、类型检查、降低检查和编译程序验证，但不会写出 `.weavec`。诊断会在适用时给出源码路径、行、列、源码区间和关联位置。
 
 `InputWeaverCompiler.exe compile source.weave output.weavec` 执行相同检查，并且只在没有错误时发布编译产物。
+
+## Mouse compilation contract
+
+The compiler also accepts the following mouse constructs and encodes them in the version 5 `.weavec` contract. These programs carry explicit mouse-observation and pointer-output requirements, checked by the executor during activation.
+
+```weave
+MOUSE_IDLE_TIMEOUT = 80ms;
+number stride = 24;
+event path = Mouse:move every stride;
+event pulse = Mouse:move every 100ms;
+event vertical = Mouse:wheel every 1;
+event horizontal = Mouse:horizontalwheel every 0.25;
+
+Mouse:move when Mouse.dx > 0 ~> move_by(1, 0);
+path:tick ~> wait(10ms) move_by(@path.dx, @path.dy);
+F1:down when @path.valid == on ~> move_to(@path.start_x, @path.start_y);
+F2:down => restart(path) scroll(0.25) scroll_horizontal(-1);
+```
+
+Each `event` declaration has a distinct program-level identity in the scalar/array declaration namespace. Declare the source and its expression dependencies before use. Moving sources accept a `number` distance or `duration` period; wheel sources accept a `number` period in standard detents. Period expressions use literals, scalar values, array reads, and arithmetic. Constant periods must be positive; dynamic periods carry their expression for runtime evaluation.
+
+`Mouse:move`, `Mouse:wheel`, and `Mouse:horizontalwheel` accept the four ordinary rule arrows. Named `source:tick` subscriptions accept `~>` and `~>>`. `MOUSE_IDLE_TIMEOUT` is a read-only builtin duration with an 80 ms default; its optional top-level assignment accepts a positive duration literal. `move_by` and `move_to` take two numeric expressions, `scroll` and `scroll_horizontal` take one, and `restart` takes a declared event source name.
+
+Field references are read-only primary expressions. `source.field` selects the current view; `@source.field` selects the completed view. Fields belong to rule conditions and action expressions, including mapping, pause, and exit conditions. Their static types are as follows:
+
+| Source view | Number fields | Duration fields | State fields |
+| --- | --- | --- | --- |
+| `Mouse` | `x`, `y`, `dx`, `dy`, `wheel_x`, `wheel_y` | `idle_time` | `moving` |
+| Current movement source | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `moving` |
+| Completed movement source | `start_x`, `start_y`, `x`, `y`, `dx`, `dy`, `distance` | | `valid` |
+| Current wheel source | `x`, `y`, `wheel_x`, `wheel_y` | | |
+| Completed wheel source | `x`, `y`, `wheel_x`, `wheel_y` | | `valid` |
+
+All current sources also expose `period`, `progress`, and `remaining`, with the period expression's type. Completed sources expose `period` with the same type. Field names are contextual and leave names such as `x` and `y` available for user declarations.

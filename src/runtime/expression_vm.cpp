@@ -425,6 +425,8 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
                 } else if (ref.index
                     == static_cast<std::uint32_t>(BuiltinDuration::ActionGap)) {
                     value.durationValue = state.actionGap;
+                } else if (ref.index == static_cast<std::uint32_t>(BuiltinDuration::MouseIdleTimeout)) {
+                    value.durationValue = program.Settings().mouseIdleTimeout;
                 } else {
                     return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
                 }
@@ -460,6 +462,8 @@ RuntimeEvaluationResult EvaluateRuntimeExpression(
             }
             ++position;
             break;
+        case ExpressionOpcode::LoadField:
+            return Fault(RuntimeEvaluationFault::InvalidInstruction, position);
         case ExpressionOpcode::LoadArrayLength:
             if (instruction.operand0 >= state.arrays.size()) {
                 return Fault(RuntimeEvaluationFault::InvalidArray, position);

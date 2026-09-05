@@ -36,6 +36,7 @@ struct ExpressionIdTag;
 struct ActionProgramIdTag;
 struct MappingIdTag;
 struct MappingSlotIdTag;
+struct EventSourceIdTag;
 
 using StringId = ProgramId<StringIdTag>;
 using ControlRefId = ProgramId<ControlRefIdTag>;
@@ -45,6 +46,7 @@ using ExpressionId = ProgramId<ExpressionIdTag>;
 using ActionProgramId = ProgramId<ActionProgramIdTag>;
 using MappingId = ProgramId<MappingIdTag>;
 using MappingSlotId = ProgramId<MappingSlotIdTag>;
+using EventSourceId = ProgramId<EventSourceIdTag>;
 
 struct TableRange final {
     std::uint32_t begin{};
@@ -97,11 +99,16 @@ enum class EventTransition : std::uint8_t {
     Down,
     Again,
     Up,
+    Move,
+    Wheel,
+    HorizontalWheel,
+    Tick,
 };
 
 struct EventKey final {
     ControlRefId control{};
     EventTransition transition{};
+    EventSourceId source{};
 
     auto operator<=>(const EventKey&) const = default;
 };
@@ -129,6 +136,7 @@ struct ProgramSettings final {
     DurationValue tapDuration{};
     DurationValue actionGap{};
     std::uint64_t randomSeed{};
+    DurationValue mouseIdleTimeout{80'000'000};
 };
 
 enum class ValueType : std::uint8_t {
@@ -173,6 +181,7 @@ enum class BuiltinState : std::uint8_t {
 enum class BuiltinDuration : std::uint8_t {
     TapDuration,
     ActionGap,
+    MouseIdleTimeout,
 };
 
 enum class BuiltinNumber : std::uint8_t {
@@ -252,6 +261,7 @@ enum class ExpressionOpcode : std::uint8_t {
     PushControlState,
     LoadArrayLength,
     LoadArrayElement,
+    LoadField,
 };
 
 struct ExpressionInstruction final {
@@ -266,6 +276,13 @@ struct ExpressionDescriptor final {
     ExpressionType resultType{};
     std::uint32_t maximumStackDepth{};
     SourceSpan source{};
+};
+
+struct EventSourceDescriptor final {
+    StringId name{};
+    EventTransition transition{EventTransition::Move};
+    ExpressionId period{};
+    SourceSpan declaration{};
 };
 
 enum class UnaryOperator : std::uint8_t {
@@ -314,6 +331,15 @@ enum class ActionOpcode : std::uint8_t {
     AppendArrayElement,
     PopArrayElement,
     ClearArray,
+    Pointer,
+    RestartEvent,
+};
+
+enum class PointerOperation : std::uint8_t {
+    MoveBy,
+    MoveTo,
+    Scroll,
+    ScrollHorizontal,
 };
 
 struct ActionInstruction final {
@@ -435,6 +461,9 @@ struct ProgramRequirements final {
     std::uint32_t maximumRepeatFramesPerTask{};
     std::uint32_t maximumOwnedControlsPerTask{};
     bool requiresProcessLaunch{};
+    bool requiresMouseObservation{};
+    bool requiresPointerOutput{};
+    std::uint32_t eventSourceCount{};
 
     auto operator<=>(const ProgramRequirements&) const = default;
 };
@@ -466,6 +495,7 @@ struct CompiledProgramStorage final {
     std::vector<DurationValue> durationConstants;
     std::vector<ExpressionDescriptor> expressions;
     std::vector<ExpressionInstruction> expressionCode;
+    std::vector<EventSourceDescriptor> eventSources;
 
     std::vector<ActionProgramDescriptor> actionPrograms;
     std::vector<ActionInstruction> actionCode;
@@ -522,6 +552,7 @@ public:
     [[nodiscard]] std::span<const DurationValue> DurationConstants() const noexcept;
     [[nodiscard]] std::span<const ExpressionDescriptor> Expressions() const noexcept;
     [[nodiscard]] std::span<const ExpressionInstruction> ExpressionCode() const noexcept;
+    [[nodiscard]] std::span<const EventSourceDescriptor> EventSources() const noexcept;
     [[nodiscard]] std::span<const ActionProgramDescriptor> ActionPrograms() const noexcept;
     [[nodiscard]] std::span<const ActionInstruction> ActionCode() const noexcept;
     [[nodiscard]] std::span<const MappingSlotDescriptor> MappingSlots() const noexcept;
