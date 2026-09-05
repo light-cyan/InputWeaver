@@ -188,6 +188,25 @@ void TestWheelAndLiveObservation()
     mouse.Observe(wheel, 93'000'000);
     Check(Field(mouse, EventField::WheelX) == -1.5, "key and mouse buttons retain numeric observation");
 }
+void TestReportedMovementCoordinates()
+{
+    const std::array configs{MouseSourceConfig{}};
+    RuntimeMouseState mouse(configs, {80'000'000});
+    Periods periods{Number(8)};
+    mouse.Initialize({0, 0}, 0);
+    Input(mouse, periods, Move(5, 0, 5, 0), 1);
+    mouse.Refresh({100, 0}, 2'000'000);
+    Input(mouse, periods, Move(3, 0, 103, 0), 3);
+    Check(Field(mouse, EventField::Dx, 0, true) == 8 && Field(mouse, EventField::Distance, 0, true) == 8
+        && Field(mouse, EventField::StartX, 0, true) == 0 && Field(mouse, EventField::X, 0, true) == 103,
+        "pointer relocation changes boundary coordinates without adding physical travel");
+    mouse.Initialize({0, 0}, 0);
+    Input(mouse, periods, Move(5, 0, 5, 0), 1);
+    Input(mouse, periods, Move(5, 0, 5, 0), 2);
+    Check(Field(mouse, EventField::Dx, 0, true) == 8 && Field(mouse, EventField::X, 0, true) == 3
+        && Field(mouse, EventField::Dx, 0) == 2 && Field(mouse, EventField::X, 0) == 5,
+        "consumed reports retain movement totals and interpolate within the actual report segment");
+}
 } // namespace
 
 int main()
@@ -196,6 +215,7 @@ int main()
     TestDynamicPeriodsAndTurns();
     TestTimePhase();
     TestWheelAndLiveObservation();
+    TestReportedMovementCoordinates();
     if (failures != 0) return 1;
     std::cout << "All mouse state tests passed.\n";
 }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "input/input_types.hpp"
+#include "runtime/runtime_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +34,7 @@ enum class WindowsOutputKind : std::uint8_t {
     KeyboardVirtualKey,
     KeyboardScanCode,
     MouseButton,
+    Pointer,
 };
 
 enum class WindowsOutputTransition : std::uint8_t {
@@ -60,6 +61,7 @@ struct WindowsOutputItem final {
     bool requiresPointerTarget{};
     WindowsOutputRecipe recipe{};
     WindowsOutputTransition transition{WindowsOutputTransition::Down};
+    RuntimePointerOutput pointer{};
 };
 
 } // namespace inputweaver

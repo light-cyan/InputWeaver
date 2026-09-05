@@ -2,6 +2,14 @@
 
 namespace inputweaver::win32 {
 
+bool WindowsRuntimeRoutePort::QueryPointerPosition(ScreenPoint& position) noexcept
+{
+    POINT pointer{};
+    if (!GetPhysicalCursorPos(&pointer)) return false;
+    position = {pointer.x, pointer.y};
+    return true;
+}
+
 WindowsRuntimeRoutePort::WindowsRuntimeRoutePort(
     TargetProcessContext* targetContext,
     const ForegroundProcessExclusion* processExclusion,

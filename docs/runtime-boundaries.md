@@ -52,7 +52,7 @@ The mouse accumulator stores at most 1024 completed cycles for one normalized in
 | 持续就绪调度量子数 | 16 |
 | 达到持续就绪阈值后的退避时间 | 1 毫秒 |
 | 普通输出速率 | 每 1 秒 2048 个 `down` 或 `again` 转换 |
-| Windows 待注入输出队列 | 256 项 |
+| Windows 待注入输出队列 | 8192 项 |
 
 动作任务在一个调度片段中连续运行到完成、取消、正时长挂起或循环让步，片段执行期间不调度其他任务。求值为 `0ms` 的 `wait`、配置为 `0ms` 的 `gap()`、`|` 和 `tap` 不建立定时状态、不结束当前片段，也不重置任务预算；零时长 `tap` 在当前片段中连续完成按下和释放。
 
@@ -64,11 +64,15 @@ The mouse accumulator stores at most 1024 completed cycles for one normalized in
 
 Pointer requests also count toward the shared ordinary-output rate and the producing task's output budget. They use the same sequence and cancellation generation as control outputs, with a pointer-operation payload instead of held-control ownership.
 
+Windows pointer output uses the existing output queue and injection circuit breaker. Coordinates are normalized to monitor pixels within the cursor clipping rectangle before checking the movement origin and destination against the target. Fractional relative movement and wheel units share per-generation remainder state across tasks; only successful native or simulated completion commits it.
+
 ## 无注入模拟
 
 `--dry-run` 保留程序激活、输入状态、规则匹配、任务调度、变量修改、PAUSE、退出规则、调试事件和诊断路径，但最终始终放行物理输入，不调用 `SendInput`。运行时仍计算原本的抑制决定，因此 debug `DROP`、钩子诊断中的 `suppressed` 和运行指标中的 `suppressed` 表示正常模式下将被抑制，而不是系统输入实际被阻止。
 
 动作输出仍经过运行时所有权、代次、目标和容量检查；到达 Windows 注入边界后作为成功模拟完成。`exec` 仍要求 `--allow-exec` 通过激活权限检查，但不会解析可执行文件或调用 `CreateProcess`，并作为成功动作继续后续指令。
+
+Dry-run pointer preparation maintains a simulated destination for consecutive outputs. Physical mouse reports rebase it; committing an output preserves any newer physical rebase. The simulator never calls `SendInput` and does not rewrite the runtime's physical Mouse fields.
 
 ## 输入线程状态一致性
 

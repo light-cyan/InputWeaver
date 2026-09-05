@@ -9,6 +9,7 @@ using InputCoordinate = std::int32_t;
 struct ScreenPoint final {
     InputCoordinate x{};
     InputCoordinate y{};
+    bool operator==(const ScreenPoint&) const = default;
 };
 
 struct MouseDelta final {

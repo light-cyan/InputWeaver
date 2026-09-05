@@ -75,6 +75,7 @@ namespace {
         case WindowsOutputKind::MouseButton:
             return BuildMouseInput(item, selfTag, input);
         case WindowsOutputKind::None:
+        case WindowsOutputKind::Pointer:
             return false;
     }
     return false;
@@ -104,13 +105,22 @@ PreparedInput InputInjector::Prepare(
 
 InjectionResult InputInjector::Inject(
     const WindowsOutputItem& item) const noexcept {
+    return InjectPrepared(Prepare(item));
+}
+
+InjectionResult InputInjector::InjectPrepared(PreparedInput prepared) const noexcept {
     InjectionResult result{};
     if (selfTag_ == 0) {
         result.outcome = InjectionOutcome::InvalidSelfTag;
         result.error = ERROR_INVALID_PARAMETER;
         return result;
     }
-    if (dryRun_) {
+    if (!prepared.Succeeded()) {
+        result.outcome = InjectionOutcome::ConversionFailed;
+        result.error = prepared.error;
+        return result;
+    }
+    if (dryRun_ || !prepared.emit) {
         result.outcome = InjectionOutcome::Succeeded;
         return result;
     }
@@ -120,13 +130,7 @@ InjectionResult InputInjector::Inject(
         return result;
     }
 
-    PreparedInput prepared = Prepare(item);
-    if (!prepared.Succeeded()) {
-        result.outcome = InjectionOutcome::ConversionFailed;
-        result.error = prepared.error;
-        return result;
-    }
-
+    if (prepared.input.type == INPUT_MOUSE) prepared.input.mi.dwExtraInfo = static_cast<ULONG_PTR>(selfTag_);
     result.requested = 1U;
     SetLastError(ERROR_SUCCESS);
     result.sent = sendInput_(

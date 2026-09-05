@@ -56,6 +56,7 @@ echo [2/7] Building WindowsRuntimeAdapterTests.exe...
     "src\platform\windows\runtime\runtime_process_launcher.cpp" ^
     "src\platform\windows\runtime\runtime_route_adapter.cpp" ^
     "src\platform\windows\runtime\input_injector.cpp" ^
+    "src\platform\windows\runtime\pointer_output.cpp" ^
     "src\platform\windows\runtime\process_context.cpp" ^
     "src\platform\windows\runtime\process_locator.cpp" ^
     -o "bin\WindowsRuntimeAdapterTests.exe" ^

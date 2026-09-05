@@ -45,8 +45,8 @@ RuntimeEvaluationResult RuntimeMouseState::Read(EventFieldReference reference,
     case EventField::StartY: value.numberValue = start.y; break;
     case EventField::X: value.numberValue = point.x; break;
     case EventField::Y: value.numberValue = point.y; break;
-    case EventField::Dx: value.numberValue = point.x - start.x; break;
-    case EventField::Dy: value.numberValue = point.y - start.y; break;
+    case EventField::Dx: value.numberValue = cycle.displacement.x; break;
+    case EventField::Dy: value.numberValue = cycle.displacement.y; break;
     case EventField::Distance: value.numberValue = cycle.distance; break;
     case EventField::WheelX:
         value.numberValue = source.config.transition == EventTransition::HorizontalWheel ? cycle.progress : 0;

@@ -25,6 +25,7 @@ enum class InjectionOutcome : unsigned char {
 struct PreparedInput {
     INPUT input{};
     DWORD error{ERROR_INVALID_DATA};
+    bool emit{true};
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return error == ERROR_SUCCESS;
@@ -78,6 +79,7 @@ public:
         const WindowsOutputItem& item) const noexcept;
     [[nodiscard]] InjectionResult Inject(
         const WindowsOutputItem& item) const noexcept;
+    [[nodiscard]] InjectionResult InjectPrepared(PreparedInput prepared) const noexcept;
 
 private:
     WindowsSelfTag selfTag_;

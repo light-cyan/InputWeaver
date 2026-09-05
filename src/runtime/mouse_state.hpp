@@ -27,6 +27,7 @@ struct MouseCycle final {
     std::int64_t elapsedNanoseconds{};
     MousePoint start{};
     MousePoint point{};
+    MousePoint displacement{};
     double distance{};
     std::uint64_t sequence{};
 };

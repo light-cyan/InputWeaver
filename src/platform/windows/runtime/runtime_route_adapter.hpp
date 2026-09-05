@@ -24,6 +24,7 @@ public:
     [[nodiscard]] bool CanInject(
         TargetSelectorKind kind,
         const ActivatedControl& control) noexcept override;
+    [[nodiscard]] bool QueryPointerPosition(ScreenPoint& position) noexcept override;
 
 private:
     TargetProcessContext* targetContext_;

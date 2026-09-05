@@ -143,9 +143,9 @@ bool RuntimeMouseState::Move(EventSourceId id, const RuntimeInputEvent& event,
     if (timed && !continuous) ClearCurrent(source);
     if (!Open(id, evaluator)) return false;
     auto& cycle = source.current;
+    cycle.point = {event.position.x - event.delta.dx, event.position.y - event.delta.dy};
     if (!source.hasOrigin) {
-        cycle.start = {event.position.x - event.delta.dx, event.position.y - event.delta.dy};
-        cycle.point = cycle.start;
+        cycle.start = cycle.point;
         source.hasOrigin = true;
     }
     double dx = event.delta.dx;
@@ -164,6 +164,8 @@ bool RuntimeMouseState::Move(EventSourceId id, const RuntimeInputEvent& event,
         const double partDistance = distance * fraction;
         cycle.point.x += dx * fraction;
         cycle.point.y += dy * fraction;
+        cycle.displacement.x += dx * fraction;
+        cycle.displacement.y += dy * fraction;
         cycle.distance += partDistance;
         if (timed) cycle.elapsedNanoseconds += completes ? remainingTime : elapsed;
         else cycle.progress += completes ? remainingDistance : partDistance;

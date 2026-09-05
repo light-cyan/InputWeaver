@@ -513,6 +513,8 @@ WindowsRuntimeInputAdapter::WindowsRuntimeInputAdapter(
     const WindowsControlCatalog& catalog) noexcept
     : catalog_(catalog)
 {
+    POINT pointer{};
+    if (GetPhysicalCursorPos(&pointer)) SeedPointerPosition({pointer.x, pointer.y});
 }
 
 RuntimeInputEvent WindowsRuntimeInputAdapter::Normalize(
@@ -523,11 +525,36 @@ RuntimeInputEvent WindowsRuntimeInputAdapter::Normalize(
     normalized.origin = event.origin;
     normalized.transition = event.transition;
     normalized.position = event.position;
+    if (event.device == DeviceKind::Mouse && event.origin == InputOrigin::PhysicalCandidate) {
+        if (event.transition == Transition::Move && pointerKnown_) {
+            normalized.delta.dx = static_cast<double>(event.position.x) - pointerPosition_.x;
+            normalized.delta.dy = static_cast<double>(event.position.y) - pointerPosition_.y;
+        } else if (event.transition == Transition::VerticalWheel || event.transition == Transition::HorizontalWheel) {
+            const auto nativeDelta = static_cast<std::int16_t>(event.mouseData >> 16U);
+            const double detents = static_cast<double>(nativeDelta) / WHEEL_DELTA;
+            if (event.transition == Transition::VerticalWheel) normalized.delta.wheelY = detents;
+            else normalized.delta.wheelX = detents;
+        }
+    }
     const std::optional<ControlRefId> control = catalog_.Normalize(event);
     if (control.has_value()) {
         normalized.control = *control;
     }
     return normalized;
+}
+
+void WindowsRuntimeInputAdapter::SeedPointerPosition(ScreenPoint position) noexcept
+{
+    pointerPosition_ = position;
+    pointerKnown_ = true;
+}
+
+void WindowsRuntimeInputAdapter::CompleteInput(const WindowsNativeInputEvent& event, InputDecision delivered) noexcept
+{
+    if (event.device == DeviceKind::Mouse
+        && (event.transition != Transition::Move || delivered == InputDecision::Forward)) {
+        SeedPointerPosition(event.position);
+    }
 }
 
 WindowsRuntimeOutputPort::WindowsRuntimeOutputPort(
@@ -543,18 +570,23 @@ WindowsRuntimeOutputPort::WindowsRuntimeOutputPort(
 RuntimeOutputResult WindowsRuntimeOutputPort::Publish(
     const RuntimeOutputRequest& request) noexcept
 {
-    const WindowsControlBinding* const binding = catalog_.Binding(
-        request.activated.backendToken);
-    if (binding == nullptr
-        || binding->outputRecipe.kind == WindowsOutputKind::None
-        || publish_ == nullptr) {
-        return RuntimeOutputResult::Failed;
-    }
+    if (publish_ == nullptr) return RuntimeOutputResult::Failed;
     WindowsOutputItem item{};
     item.sourceSequence = request.sequence;
     item.outputStateGeneration = request.generation;
-    item.outputCode = binding->virtualKey;
     item.requiresPointerTarget = request.activated.requiresPointerTarget;
+    if (request.kind == RuntimeOutputKind::Pointer) {
+        item.recipe.kind = WindowsOutputKind::Pointer;
+        item.pointer = request.pointer;
+        return publish_(publishContext_, item);
+    }
+    const WindowsControlBinding* const binding = catalog_.Binding(
+        request.activated.backendToken);
+    if (binding == nullptr
+        || binding->outputRecipe.kind == WindowsOutputKind::None) {
+        return RuntimeOutputResult::Failed;
+    }
+    item.outputCode = binding->virtualKey;
     item.recipe = binding->outputRecipe;
     item.transition = request.transition == RuntimeOutputTransition::Up
         ? WindowsOutputTransition::Up

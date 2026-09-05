@@ -82,9 +82,13 @@ public:
 
     [[nodiscard]] RuntimeInputEvent Normalize(
         const WindowsNativeInputEvent& event) noexcept;
+    void SeedPointerPosition(ScreenPoint position) noexcept;
+    void CompleteInput(const WindowsNativeInputEvent& event, InputDecision delivered) noexcept;
 
 private:
     const WindowsControlCatalog& catalog_;
+    ScreenPoint pointerPosition_{};
+    bool pointerKnown_{};
 };
 
 using WindowsOutputPublishFunction = RuntimeOutputResult (*)(
@@ -93,6 +97,7 @@ using WindowsOutputPublishFunction = RuntimeOutputResult (*)(
 
 class WindowsRuntimeOutputPort final : public RuntimeOutputPort {
 public:
+    [[nodiscard]] bool SupportsPointerOutput() const noexcept override { return publish_ != nullptr; }
     WindowsRuntimeOutputPort(
         const WindowsControlCatalog& catalog,
         void* publishContext,

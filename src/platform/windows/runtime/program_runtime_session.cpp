@@ -3,6 +3,7 @@
 #include "platform/windows/debug/debug_server.hpp"
 #include "platform/windows/diagnostics/diagnostic_log.hpp"
 #include "platform/windows/runtime/input_injector.hpp"
+#include "platform/windows/runtime/pointer_output.hpp"
 #include "platform/windows/runtime/low_level_hooks.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/runtime_control_catalog.hpp"
@@ -56,12 +57,16 @@ void PopulateInjectionIdentity(
     record.outputStateGeneration = item.outputStateGeneration;
     record.targetPid = targetPid;
     record.outputCode = item.outputCode;
-    record.outputDevice = item.recipe.kind == WindowsOutputKind::MouseButton
+    record.outputDevice = item.recipe.kind == WindowsOutputKind::MouseButton || item.recipe.kind == WindowsOutputKind::Pointer
         ? DeviceKind::Mouse
         : DeviceKind::Keyboard;
     record.outputTransition = item.transition == WindowsOutputTransition::Up
         ? Transition::Up
         : Transition::Down;
+    if (item.recipe.kind == WindowsOutputKind::Pointer) {
+        record.outputTransition = item.pointer.operation <= PointerOperation::MoveTo ? Transition::Move
+            : item.pointer.operation == PointerOperation::Scroll ? Transition::VerticalWheel : Transition::HorizontalWheel;
+    }
 }
 
 [[nodiscard]] bool IsReleaseOutput(const WindowsOutputItem& item) noexcept
@@ -121,6 +126,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
           diagnosticLog(sessionDiagnosticLog),
           processExclusion(options.excludedProcessSelector),
           injector(options.selfTag, &::SendInput, options.dryRun),
+          pointerOutput(options.dryRun),
           injectionCircuitBreaker(3U)
     {
         LARGE_INTEGER frequency{};
@@ -324,6 +330,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         hookEvents.fetch_add(1U, std::memory_order_relaxed);
 
         RuntimeInputEvent normalized = inputAdapter->Normalize(event);
+        if (event.device == DeviceKind::Mouse && event.origin == InputOrigin::PhysicalCandidate) {
+            pointerOutput.ObservePhysical(event.position);
+        }
         const win32::DebugInputCorrelation debugCorrelation =
             debugServer != nullptr && IsDebugInputTransition(event.transition)
             ? debugServer->BeginInput()
@@ -368,7 +377,9 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             record,
             startCounter,
             normalized.control.IsValid());
-        return options.dryRun ? InputDecision::Forward : decision;
+        const auto delivered = options.dryRun ? InputDecision::Forward : decision;
+        inputAdapter->CompleteInput(event, delivered);
+        return delivered;
     }
 
     void SetTargetEligible(bool eligible) noexcept override
@@ -418,6 +429,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     [[nodiscard]] bool SeedActivatedPhysicalState() noexcept override
     {
+        ScreenPoint pointer{};
+        if (routePort->QueryPointerPosition(pointer)) inputAdapter->SeedPointerPosition(pointer);
         return SeedActivatedPhysicalControls();
     }
 
@@ -816,6 +829,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             ? currentGeneration.load(std::memory_order_acquire)
             : runtime->Generation();
         currentGeneration.store(liveGeneration, std::memory_order_release);
+        win32::PreparedPointerOutput pointer{};
+        const bool isPointer = item.recipe.kind == WindowsOutputKind::Pointer;
         if (!release && shutdownRequested.load(std::memory_order_acquire)) {
             record.cancelledForShutdown = true;
         } else if (!release && circuitBreakerOpen.load(std::memory_order_acquire)) {
@@ -824,7 +839,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             && item.outputStateGeneration
                 != liveGeneration) {
             record.cancelledForGeneration = true;
-        } else if (!release && !TargetRouteAllows(item)) {
+        } else if (!release && !PrepareOutputRoute(item, isPointer ? &pointer : nullptr)) {
             record.cancelledForTarget = true;
             if (processExclusion.IsForegroundExcluded()) {
                 SetTargetEligible(false);
@@ -839,7 +854,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             && item.outputStateGeneration != runtime->Generation()) {
             record.cancelledForGeneration = true;
         } else {
-            ExecuteOutput(item, record);
+            ExecuteOutput(item, record, isPointer ? &pointer : nullptr);
             return;
         }
         cancelledOutputs.fetch_add(1U, std::memory_order_relaxed);
@@ -847,9 +862,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         (void)diagnosticLog.TryPushInjection(record);
     }
 
-    [[nodiscard]] bool TargetRouteAllows(
-        const WindowsOutputItem& item) const noexcept
+    [[nodiscard]] bool PrepareOutputRoute(
+        const WindowsOutputItem& item, win32::PreparedPointerOutput* pointer) noexcept
     {
+        if (pointer != nullptr) *pointer = pointerOutput.Prepare(item.pointer, item.outputStateGeneration);
         if (processExclusion.IsForegroundExcluded()) {
             return false;
         }
@@ -857,10 +873,13 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             return true;
         }
         const std::lock_guard targetLock(targetContextMutex);
-        return targetContext->IsTargetAlive()
-            && targetContext->IsTargetForeground()
-            && (!item.requiresPointerTarget
-                || targetContext->IsTargetPointerTargetAtCursor());
+        if (!targetContext->IsTargetAlive() || !targetContext->IsTargetForeground()) return false;
+        if (pointer != nullptr && pointer->native.Succeeded()) {
+            return pointer->TargetsMatch({targetContext, [](void* context, ScreenPoint point) noexcept {
+                return static_cast<TargetProcessContext*>(context)->IsTargetPointerTarget(point);
+            }});
+        }
+        return !item.requiresPointerTarget || targetContext->IsTargetPointerTargetAtCursor();
     }
 
     [[nodiscard]] WindowsProcessId TargetProcessId() const noexcept
@@ -886,9 +905,10 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
 
     void ExecuteOutput(
         const WindowsOutputItem& item,
-        InjectionDiagnosticRecord& record) noexcept
+        InjectionDiagnosticRecord& record, const win32::PreparedPointerOutput* pointer) noexcept
     {
-        const InjectionResult result = injector.Inject(item);
+        const InjectionResult result = pointer != nullptr ? injector.InjectPrepared(pointer->native) : injector.Inject(item);
+        if (pointer != nullptr && result.Succeeded()) pointerOutput.Commit(*pointer);
         record.requested = result.requested;
         record.sent = result.sent;
         record.win32Error = result.error;
@@ -1000,6 +1020,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     WindowsProgramRuntimeSessionMetrics metricsSnapshot{};
     WindowsOutputQueue outputQueue;
     InputInjector injector;
+    win32::WindowsPointerOutput pointerOutput;
     InjectionCircuitBreaker injectionCircuitBreaker;
     std::thread outputThread;
     std::unique_ptr<win32::WindowsControlCatalog> controlCatalog;

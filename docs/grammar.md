@@ -469,6 +469,8 @@ Each qualified input updates all named sources before ordinary matching. Raw rul
 
 Distance progress sums segment lengths and keeps its remainder across ordinary idle. Wheel progress is signed, with opposite scrolling canceling the current remainder. A report crossing several boundaries creates a separate completion for each, with movement split proportionally between their start and end coordinates. Each completion immediately latches the next period expression, including an opening with zero remainder.
 
+Movement `dx/dy` sum the physical report displacements included in the cycle. Its start and end fields retain the corresponding report coordinates. Consumed movement can leave the actual pointer stationary, and pointer output can relocate it between physical reports; neither changes the reported displacement sum or adds output movement to path length. Under uninterrupted forwarded physical motion, displacement equals endpoint minus origin.
+
 A duration source starts at the first effective move, assigning that first displacement at elapsed time zero. Effective reports less than `MOUSE_IDLE_TIMEOUT` apart extend the same span. Later displacement is apportioned over the elapsed interval and any crossed logical boundaries. Late reports preserve phase; stationary time creates no ticks. At the idle threshold the incomplete duration cycle clears, and a move exactly at that threshold begins a new span.
 
 Before a source opens, its period and progress fields are typed zero, and its coordinate fields use the observed pointer. The first included movement establishes a fixed cycle origin. A failed dynamic period evaluation reports a source diagnostic, clears the incomplete cycle, and retries on the next qualified input while retaining the latest completed cycle.
@@ -478,3 +480,11 @@ Before a source opens, its period and progress fields are typed zero, and its co
 An empty completion has `valid=off`. Accessing another field on that view faults the expression: a condition does not match and reports a diagnostic, while an action ends only its task. Short-circuit guards such as `@source.valid == on and @source.dx > 0` avoid the data-field access.
 
 `restart(source)` clears that source's current and latest completed records at action execution, while existing task selections stay fixed. Program activation, cancellation-generation changes, and source qualification loss clear source statistics; global physical observation continues across pause and target changes. Pointer actions publish through the shared output sequence and use the existing cancellation, routing, and output budgets, independently of held-control ownership.
+
+### Windows pointer execution
+
+The Windows executor uses physical virtual-desktop pixels. `move_by` resolves its destination from the pointer position at output execution; `move_to` names an absolute destination. Both select a reachable monitor pixel within the current cursor clipping rectangle, including the nearest edge for finite coordinates outside the desktop or in a monitor gap. Absolute targets round to the nearest pixel. Movement is injected as a virtual-desktop absolute position, preserving pixel distances independently of pointer acceleration.
+
+Relative pixel fractions and sub-native wheel fractions accumulate across tasks in the same cancellation generation. Successful output commits its remainder; generation changes clear remainders, and absolute movement resets relative movement fractions. Vertical and horizontal wheel axes retain separate signed remainders; one detent corresponds to 120 native wheel units.
+
+Executable-target movement checks its execution-time origin and normalized destination; wheel output checks its execution-time pointer target. Foreground, exclusion, cancellation, and shutdown rules apply at the shared publication and injection boundaries. Dry-run performs the same preparation with a simulated pointer: consecutive relative outputs use the previous simulated destination, and new physical mouse input rebases it. `Mouse.x/y` still report the actual pointer, and simulated output leaves physical movement history unchanged.

@@ -241,7 +241,7 @@ bool ForegroundProcessExclusion::IsForegroundExcluded() const noexcept
     }
     const HWND routeWindow = threadInformation.hwndCapture != nullptr
         ? threadInformation.hwndCapture
-        : WindowFromPoint({
+        : WindowFromPhysicalPoint({
             static_cast<LONG>(screenPoint.x),
             static_cast<LONG>(screenPoint.y)});
     return WindowBelongsToProcess(routeWindow, processId);
@@ -436,7 +436,7 @@ bool TargetProcessContext::IsTargetPointerTarget(
 
 bool TargetProcessContext::IsTargetPointerTargetAtCursor() const noexcept {
     POINT cursor{};
-    return GetCursorPos(&cursor) && IsTargetPointerTarget({
+    return GetPhysicalCursorPos(&cursor) && IsTargetPointerTarget({
         static_cast<InputCoordinate>(cursor.x),
         static_cast<InputCoordinate>(cursor.y)});
 }

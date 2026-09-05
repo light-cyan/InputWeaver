@@ -24,6 +24,7 @@ echo [2/2] Building InputWeaver.exe...
     "src\platform\windows\runtime\program_runtime_session.cpp" ^
     "src\platform\windows\runtime\low_level_hooks.cpp" ^
     "src\platform\windows\runtime\input_injector.cpp" ^
+    "src\platform\windows\runtime\pointer_output.cpp" ^
     "src\platform\windows\runtime\process_context.cpp" ^
     "src\platform\windows\runtime\process_locator.cpp" ^
     "src\platform\windows\runtime\runtime_control_catalog.cpp" ^

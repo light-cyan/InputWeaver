@@ -1,5 +1,6 @@
 #include "platform/windows/runtime/compiled_target_resolver.hpp"
 #include "platform/windows/runtime/input_injector.hpp"
+#include "platform/windows/runtime/pointer_output.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/runtime_control_catalog.hpp"
 #include "platform/windows/runtime/runtime_process_launcher.hpp"
@@ -12,6 +13,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -193,6 +195,9 @@ public:
 {
     inputweaver::FinalizeResult result = inputweaver::FinalizeCompiledProgram(
         std::move(storage));
+    for (const auto& error : result.errors) {
+        std::cerr << "Fixture validation error: " << error.location << ": " << error.message << '\n';
+    }
     Check(result.program != nullptr, "Windows adapter fixture finalizes");
     return std::move(result.program);
 }
@@ -1018,6 +1023,9 @@ void TestChildWorkingDirectoryAndImmediateReturn()
     Check(elapsed < 500U, "successful launch returns without waiting for child exit");
 }
 
+#include "windows_mouse_adapter_tests.inc"
+#include "windows_pointer_output_tests.inc"
+
 int RunChildMode(int argc, char** argv)
 {
     if (argc == 3 && std::string_view(argv[1]) == "--write-cwd") {
@@ -1049,6 +1057,10 @@ int main(int argc, char** argv)
     TestCompiledTargetResolution();
     TestUnboundExecutableRoute();
     TestRuntimeAdaptersAndExit();
+    TestMouseInputNormalization();
+    TestPointerPreparation();
+    TestPointerSimulation();
+    TestMouseWindowsPipeline();
     TestExecutableResolutionAndCreateContract();
     TestChildWorkingDirectoryAndImmediateReturn();
 
