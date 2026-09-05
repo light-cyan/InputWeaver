@@ -46,3 +46,7 @@ git diff --check
 ```
 
 The completed feature remains subject to the cross-phase `script\verify_project.bat` gate after Windows and Debug implementation.
+
+## Verification prerequisite
+
+The existing Windows Debug server shutdown test reproduced a disconnected-client race during phase verification. Connection teardown must notify a concurrently waiting `Stop()` after joining the writer, including when the writer exits normally on the connection-stop event. Apply this notification correction and use the existing shutdown tests to verify it.
