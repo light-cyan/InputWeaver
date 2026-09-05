@@ -81,6 +81,9 @@ struct DebugInputEvent final {
     InputDisposition disposition{InputDisposition::NotApplicable};
     bool againDown{};
     bool unmatchedUp{};
+    MousePoint position{};
+    MouseDelta delta{};
+    MouseOccurrence occurrence{};
 };
 
 struct DebugPressedControl final {
@@ -98,13 +101,15 @@ struct DebugArrayState final {
     DebugArrayValue value{};
 };
 
-struct DebugRuleExecution final {
+struct DebugRuleExecution {
     std::uint64_t executionMarker{};
     DebugInputEvent triggerInput{};
     std::string conditionText;
     std::string actionText;
     std::int64_t matchedUnixTimeMilliseconds{};
     std::optional<RuntimeExecutionResult> result;
+    std::uint32_t selectionCount{};
+    std::vector<MouseCycle> completedSources;
 };
 
 struct DebugRuntimeIssue final {
@@ -129,6 +134,8 @@ struct DebugClientState final {
     std::vector<DebugArrayState> arrays;
     std::vector<DebugRuleExecution> ruleExecutions;
     std::vector<DebugRuntimeIssue> runtimeIssues;
+    std::vector<DebugEventSource> eventSources;
+    RuntimeMouseSnapshot mouse;
 };
 
 struct DebugClientCapacities final {

@@ -1,4 +1,5 @@
 #include "debug/debug_protocol.hpp"
+#include "mouse_debug_fixture.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -80,7 +81,7 @@ void TestCaptureStarted()
 
     const auto decoded = RoundTrip(message);
     Check(
-        inputweaver::debug::kProtocolVersion == 5U
+        inputweaver::debug::kProtocolVersion == 6U
             && decoded.Succeeded()
             && decoded.message.captureStarted.captureUnixTimeMilliseconds
                 == 1'725'000'000'123LL
@@ -89,7 +90,7 @@ void TestCaptureStarted()
             && decoded.message.captureStarted.values[1].value.numberValue == 2.5
             && decoded.message.captureStarted.values[2].value.durationValue
                     .nanoseconds == 80'000'000,
-        "capture wall-clock anchor and values round trip in protocol version 5");
+        "capture wall-clock anchor and values round trip in protocol version 6");
 }
 
 void TestRuleMatched()
@@ -253,11 +254,14 @@ void TestMalformedFrame()
         "truncated header is rejected");
 }
 
+#include "debug_mouse_protocol_tests.inc"
+
 } // namespace
 
 int main()
 {
     TestCaptureStarted();
+    TestMouseMessages();
     TestInputEvent();
     TestRuleMatched();
     TestArrayValues();

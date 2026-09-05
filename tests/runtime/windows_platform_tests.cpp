@@ -683,6 +683,8 @@ void TestShutdownGraceWindow() {
         "shutdown grace expires at its deadline");
 }
 
+#include "windows_mouse_diagnostic_tests.inc"
+
 }  // namespace
 
 int main() {
@@ -694,6 +696,7 @@ int main() {
     TestInjectorSafety();
     TestInjectionCircuitBreaker();
     TestDiagnosticPrivacyAndBounds();
+    TestMouseNumericDiagnostics();
     TestConcurrentRuntimeDiagnosticPublication();
     TestProcessLocatorAndContext();
     TestTargetProcessLifecycle();

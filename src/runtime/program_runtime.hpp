@@ -62,6 +62,7 @@ public:
     [[nodiscard]] bool ReadUserState(
         std::uint32_t index,
         bool& value) const noexcept;
+    [[nodiscard]] bool ReadMouseSnapshot(RuntimeMouseSnapshot& snapshot) noexcept;
 
     [[nodiscard]] bool TryPopDiagnostic(
         RuntimeDiagnosticRecord& record) noexcept;

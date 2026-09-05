@@ -187,6 +187,14 @@ InputDecision ProgramRuntime::Impl::HandleInput(
         event.debugInputSequence);
     if (state->mutableState.mouse) {
         for (const auto& occurrence : state->mutableState.mouse->Occurrences()) {
+            if (debugPort && event.debugCaptureEpoch != 0 && event.debugInputSequence != 0) {
+                RuntimeDebugEvent completed{};
+                completed.kind = RuntimeDebugEventKind::MouseCycleCompleted;
+                completed.captureEpoch = event.debugCaptureEpoch;
+                completed.triggerInputSequence = event.debugInputSequence;
+                completed.occurrence = occurrence;
+                (void)debugPort->Publish(completed);
+            }
             state->mutableState.mouse->SelectCompleted(state->dispatch.completed, &occurrence);
             (void)DispatchOrdinary(*state, {{}, EventTransition::Tick, occurrence.source}, transactionGeneration,
                 event.debugCaptureEpoch, event.debugInputSequence);
@@ -390,6 +398,11 @@ InputDecision ProgramRuntime::Impl::DispatchOrdinary(
     }
 
     std::size_t reservedCount = 0U;
+    for (std::size_t index = 0; index < scratchCount; ++index) {
+        auto& item = state.dispatch.transactionScratch[index];
+        item.debugEventSource = key.source;
+        item.debugCycleSequence = key.source.IsValid() ? state.dispatch.completed[key.source.value].sequence : 0;
+    }
     if (!ReserveTasks(state, scratchCount, reservedCount)) {
         state.metrics.transactionRejections.fetch_add(
             1U,

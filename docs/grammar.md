@@ -488,3 +488,7 @@ The Windows executor uses physical virtual-desktop pixels. `move_by` resolves it
 Relative pixel fractions and sub-native wheel fractions accumulate across tasks in the same cancellation generation. Successful output commits its remainder; generation changes clear remainders, and absolute movement resets relative movement fractions. Vertical and horizontal wheel axes retain separate signed remainders; one detent corresponds to 120 native wheel units.
 
 Executable-target movement checks its execution-time origin and normalized destination; wheel output checks its execution-time pointer target. Foreground, exclusion, cancellation, and shutdown rules apply at the shared publication and injection boundaries. Dry-run performs the same preparation with a simulated pointer: consecutive relative outputs use the previous simulated destination, and new physical mouse input rebases it. `Mouse.x/y` still report the actual pointer, and simulated output leaves physical movement history unchanged.
+
+### Mouse Debug views
+
+STATE exposes the same coherent `Mouse` observation and named current/latest cycle values as language field reads. EVENTS relates every named completion to its originating raw input using a semantic cycle number. ACTION EXECUTIONS retains each task's trigger-time source selections, including older and empty completions, independently of subsequent STATE refreshes. Capture start, stop, and recovery leave source phase, completion identities, and physical movement history unchanged.

@@ -63,6 +63,8 @@ struct HookDiagnosticRecord {
     ExtraInfoCategory extraInfo{ExtraInfoCategory::Zero};
     bool lowerIntegrityInjected{};
     bool suppressed{};
+    ScreenPoint position{};
+    MouseDelta delta{};
 };
 
 struct InjectionDiagnosticRecord {
@@ -81,6 +83,12 @@ struct InjectionDiagnosticRecord {
     bool cancelledForShutdown{};
     bool cancelledForGeneration{};
     bool circuitBreakerOpen{};
+    RuntimeOutputKind outputKind{RuntimeOutputKind::Control};
+    RuntimePointerOutput pointer{};
+    bool pointerPrepared{};
+    ScreenPoint pointerOrigin{};
+    ScreenPoint pointerDestination{};
+    double preparedWheel{};
 };
 
 DiagnosticControl ClassifyDiagnosticControl(

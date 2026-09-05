@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace inputweaver {
 
@@ -88,6 +89,46 @@ struct RuntimePointerOutput final {
     PointerOperation operation{};
     double x{};
     double y{};
+};
+
+struct MousePoint final {
+    double x{};
+    double y{};
+    auto operator<=>(const MousePoint&) const = default;
+};
+
+struct MouseObservation final {
+    MousePoint position{};
+    MouseDelta delta{};
+    DurationValue idleTime{};
+    bool moving{};
+};
+
+struct MouseCycle final {
+    RuntimeValue period{};
+    double progress{};
+    std::int64_t elapsedNanoseconds{};
+    MousePoint start{};
+    MousePoint point{};
+    MousePoint displacement{};
+    double distance{};
+    std::uint64_t sequence{};
+};
+
+struct RuntimeMouseSourceSnapshot final {
+    MouseCycle current{};
+    MouseCycle completed{};
+    bool moving{};
+};
+
+struct RuntimeMouseSnapshot final {
+    MouseObservation mouse{};
+    std::vector<RuntimeMouseSourceSnapshot> sources;
+};
+
+struct MouseOccurrence final {
+    EventSourceId source{};
+    MouseCycle cycle{};
 };
 
 struct RuntimeOutputRequest final {
@@ -354,6 +395,8 @@ enum class RuntimeDebugEventKind : std::uint8_t {
     RuntimeIssue,
     StateChanged,
     ArrayChanged,
+    MouseCycleCompleted,
+    ExecutionSourceSelected,
 };
 
 struct RuntimeDebugValue final {
@@ -400,6 +443,8 @@ struct RuntimeDebugEvent final {
     RuntimeDebugIssue issue{};
     RuntimeDebugValue value{};
     RuntimeDebugArraySnapshot array{};
+    MouseOccurrence occurrence{};
+    std::uint32_t selectionCount{};
 };
 
 class RuntimeDebugEventPort {

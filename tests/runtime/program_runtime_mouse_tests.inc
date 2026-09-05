@@ -158,6 +158,103 @@ void TestMouseTaskSnapshots()
     Check(!harness.runtime.FatalShutdownRequested(), "mouse task flow completes normally");
 }
 
+void TestMouseDebugSnapshots()
+{
+    using namespace inputweaver;
+    const auto program = MakeMouseTaskProgram();
+    if (!program) return;
+    RuntimeHarness harness;
+    harness.route.pointerAvailable = true;
+    harness.output.pointerSupported = true;
+    harness.route.pointer = {100, -200};
+    Check(harness.runtime.Activate(program).activated, "mouse Debug program activates");
+    RuntimeMouseSnapshot snapshot;
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.sources.size() == 2
+        && snapshot.sources[0].current.start == MousePoint{100, -200}
+        && snapshot.sources[0].current.period.type == ExpressionType::Number
+        && snapshot.sources[0].current.period.numberValue == 0,
+        "unopened Debug sources expose observed origins and typed zero periods");
+    RuntimeInputEvent input{};
+    input.device = DeviceKind::Mouse;
+    input.transition = Transition::Move;
+    input.position = {127, -200};
+    input.delta.dx = 27;
+    input.debugCaptureEpoch = 1;
+    input.debugInputSequence = 10;
+    harness.route.pointer = input.position;
+    (void)harness.runtime.HandleInput(input);
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.mouse.delta.dx == 27
+        && snapshot.sources[0].current.start.x == 124 && snapshot.sources[0].current.progress == 3
+        && snapshot.sources[1].completed.start.x == 100 && snapshot.sources[1].completed.point.x == 124,
+        "Debug snapshots reuse interpolated boundaries, remainder, and latest observation");
+    const auto firstCompletion = snapshot.sources[0].completed.sequence;
+    std::vector<MouseOccurrence> occurrences;
+    for (const auto& event : harness.debug.events) {
+        if (event.kind != RuntimeDebugEventKind::MouseCycleCompleted) continue;
+        Check(event.captureEpoch == 1 && event.triggerInputSequence == 10,
+            "every cycle retains its parent raw-input identity");
+        occurrences.push_back(event.occurrence);
+    }
+    Check(occurrences.size() == 4 && occurrences[0].cycle.start.x == 100
+        && occurrences[1].cycle.start.x == 108 && occurrences[2].cycle.start.x == 116,
+        "one input publishes each named completion separately");
+    (void)harness.runtime.Pump();
+    std::size_t subscriptions = 0;
+    for (const auto& event : harness.debug.events) {
+        if (event.kind != RuntimeDebugEventKind::RuleMatched) continue;
+        Check(event.selectionCount == 2, "each task publishes its full fixed source selection");
+        for (const auto& selected : harness.debug.events) {
+            if (selected.kind != RuntimeDebugEventKind::ExecutionSourceSelected
+                || selected.executionMarker != event.executionMarker) continue;
+            Check(selected.occurrence.cycle.sequence != 0,
+                "same-input selections include all completed sources");
+            if (event.occurrence.source == selected.occurrence.source) {
+                Check(selected.occurrence.cycle.sequence == event.occurrence.cycle.sequence,
+                    "tick execution names its own exact cycle, not the latest cycle");
+                ++subscriptions;
+            }
+        }
+    }
+    Check(subscriptions == 7, "shared subscriptions retain independent execution identities");
+    harness.clock.Advance(100'000'000);
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && !snapshot.mouse.moving
+        && snapshot.mouse.idleTime.nanoseconds == 100'000'000 && snapshot.mouse.delta.dx == 27
+        && snapshot.sources[0].completed.sequence == firstCompletion
+        && snapshot.sources[0].current.progress == 3,
+        "STATE polling updates idle state without clearing deltas, distance, or completion identity");
+    input.debugCaptureEpoch = 2;
+    input.debugInputSequence = 1;
+    input.position.x = 132;
+    input.delta.dx = 5;
+    harness.route.pointer = input.position;
+    (void)harness.runtime.HandleInput(input);
+    Check(harness.runtime.ReadMouseSnapshot(snapshot)
+        && snapshot.sources[0].completed.sequence > firstCompletion
+        && snapshot.sources[0].completed.start.x == 124 && snapshot.sources[0].completed.point.x == 132,
+        "a new capture epoch preserves the ongoing cycle and semantic identity sequence");
+}
+
+void TestKeyProgramMouseDebugObservation()
+{
+    using namespace inputweaver;
+    RuntimeHarness harness;
+    harness.route.pointerAvailable = true;
+    harness.route.pointer = {-80, 20};
+    Check(harness.runtime.Activate(Finalize(test::MakeTapFixtureStorage())).activated,
+        "key-only program activates with a Debug observation port");
+    RuntimeMouseSnapshot snapshot;
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.sources.empty()
+        && snapshot.mouse.position == MousePoint{-80, 20}, "Debug observes Mouse for key-only programs");
+    RuntimeInputEvent input{};
+    input.device = DeviceKind::Mouse;
+    input.transition = Transition::VerticalWheel;
+    input.position = {-80, 20};
+    input.delta.wheelY = 0.25;
+    (void)harness.runtime.HandleInput(input);
+    Check(harness.runtime.ReadMouseSnapshot(snapshot) && snapshot.mouse.delta.wheelY == 0.25,
+        "key-only Debug observation retains normalized fractional wheel input");
+}
+
 void TestMouseQualificationLifecycle()
 {
     using namespace inputweaver;

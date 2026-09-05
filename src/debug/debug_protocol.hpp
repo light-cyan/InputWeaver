@@ -13,7 +13,7 @@
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 5U;
+inline constexpr std::uint16_t kProtocolVersion = 6U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
@@ -35,6 +35,9 @@ enum class MessageKind : std::uint16_t {
     StateChanged = 22U,
     ArrayChanged = 23U,
     StreamCompleted = 24U,
+    MouseState = 25U,
+    MouseCycleCompleted = 26U,
+    ExecutionSourceSelected = 27U,
 };
 
 enum class InputDisposition : std::uint8_t {
@@ -97,10 +100,18 @@ struct DebugNamedArray final {
     DebugArrayValue value{};
 };
 
+struct DebugEventSource final {
+    std::string name;
+    EventTransition transition{EventTransition::Move};
+    ExpressionType periodType{ExpressionType::Number};
+};
+
 struct CaptureStartedPayload final {
     std::int64_t captureUnixTimeMilliseconds{};
     std::vector<DebugNamedValue> values;
     std::vector<DebugNamedArray> arrays;
+    std::vector<DebugEventSource> sources;
+    RuntimeMouseSnapshot mouse;
 };
 
 struct InputEventPayload final {
@@ -115,6 +126,8 @@ struct InputEventPayload final {
     std::uint32_t scanCode{};
     std::uint32_t nativeQualifier{};
     std::uint32_t mouseData{};
+    MousePoint position{};
+    MouseDelta delta{};
 };
 
 struct RuleMatchedPayload final {
@@ -122,6 +135,19 @@ struct RuleMatchedPayload final {
     std::uint64_t triggerInputSequence{};
     std::string conditionText;
     std::string actionText;
+    EventSourceId triggerEventSource{};
+    std::uint64_t triggerCycleSequence{};
+    std::uint32_t selectionCount{};
+};
+
+struct MouseCycleCompletedPayload final {
+    std::uint64_t triggerInputSequence{};
+    MouseOccurrence occurrence{};
+};
+
+struct ExecutionSourceSelectedPayload final {
+    std::uint64_t executionMarker{};
+    MouseOccurrence occurrence{};
 };
 
 struct ExecutionEndedPayload final {
@@ -156,6 +182,9 @@ struct Message final {
     RuntimeIssuePayload runtimeIssue{};
     StateChangedPayload stateChanged{};
     ArrayChangedPayload arrayChanged{};
+    RuntimeMouseSnapshot mouseState;
+    MouseCycleCompletedPayload mouseCycleCompleted{};
+    ExecutionSourceSelectedPayload executionSourceSelected{};
 };
 
 enum class DecodeError : std::uint8_t {

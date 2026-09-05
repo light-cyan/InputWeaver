@@ -53,7 +53,7 @@ void ProgramRuntime::Impl::DrainWork(State& state) noexcept
                     std::memory_order_relaxed);
                 continue;
             }
-            const std::uint64_t marker = BeginDebugExecution(state, item);
+            const std::uint64_t marker = BeginDebugExecution(state, item, task.completed);
             if (marker != 0U) {
                 task.debugCaptureEpoch = item.debugCaptureEpoch;
                 task.debugExecutionMarker = marker;

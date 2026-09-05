@@ -12,6 +12,7 @@
 #include "program/compiled_program.hpp"
 #include "program/program_requirements.hpp"
 #include "../program/compiled_program_fixtures.hpp"
+#include "mouse_debug_fixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -923,12 +924,15 @@ void TestFinalDrainFailures()
     }
 }
 
+#include "windows_mouse_debug_tests.inc"
+
 } // namespace
 
 int main()
 {
     TestPipeSession();
     TestDebugClientIntegration();
+    TestMouseDebugTransport();
     TestFinalIssueDrain();
     TestFinalDrainFailures();
     if (gFailureCount != 0) {

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <optional>
@@ -262,8 +263,16 @@ void RenderLineEditor(
     return "unknown";
 }
 
-[[nodiscard]] std::string EventText(const debug::DebugInputEvent& event)
+[[nodiscard]] std::string DebugNumberText(double value);
+[[nodiscard]] std::string DebugValueText(const debug::DebugValue& value);
+
+#include "debug_mouse_format.inc"
+
+[[nodiscard]] std::string EventText(const debug::DebugInputEvent& event, const debug::DebugClientState& state)
 {
+    if (IsNumericMouseEvent(event)) {
+        return FormatTime(event.captureUnixTimeMilliseconds) + "  " + MouseEventText(event, state);
+    }
     std::string text = FormatTime(event.captureUnixTimeMilliseconds) + "  "
         + FixedField(ControlName(event.control), 16U) + "  "
         + FixedField(TransitionText(event.transition), 7U) + "  "
@@ -279,8 +288,9 @@ void RenderLineEditor(
 }
 
 [[nodiscard]] std::string ExecutionEventText(
-    const debug::DebugInputEvent& event)
+    const debug::DebugInputEvent& event, const debug::DebugClientState& state)
 {
+    if (IsNumericMouseEvent(event)) return MouseEventText(event, state);
     std::string text = ControlName(event.control) + ' '
         + std::string{TransitionText(event.transition)};
     if (event.disposition != debug::InputDisposition::NotApplicable) {
@@ -348,7 +358,7 @@ void AppendExecutionField(
             + FormatTime(execution.triggerInput.captureUnixTimeMilliseconds)
             + "  MATCH "
             + FormatTime(execution.matchedUnixTimeMilliseconds) + "  "
-            + ExecutionEventText(execution.triggerInput);
+            + ExecutionEventText(execution.triggerInput, state);
         const std::size_t markerWidth = Utf8DisplayWidth(marker);
         const std::vector<std::string> wrapped = WrapUtf8(
             header,
@@ -373,6 +383,14 @@ void AppendExecutionField(
             execution.actionText.empty() ? "<none>" : execution.actionText,
             width,
             colors);
+        if (execution.completedSources.size() != execution.selectionCount) {
+            AppendExecutionField(lines, execution, "  @    ", "loading source selections", width, colors);
+        } else {
+            for (std::size_t index = 0; index < execution.completedSources.size() && index < state.eventSources.size(); ++index) {
+                AppendExecutionField(lines, execution, "  @    ",
+                    CompletedMouseText(state.eventSources[index], execution.completedSources[index]), width, colors);
+            }
+        }
     }
     return lines;
 }
@@ -1487,15 +1505,22 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
 
         if (debugState != nullptr) {
             const std::size_t eventVisible = topHeight - 2U;
+            std::vector<std::string> eventLines;
+            for (const auto& event : debugState->recentInputEvents) {
+                const auto text = EventText(event, *debugState);
+                if (IsNumericMouseEvent(event)) {
+                    for (auto& line : WrapUtf8(text, leftWidth - 2U, 2U)) eventLines.push_back(std::move(line));
+                } else eventLines.push_back(text);
+            }
             RenderViewportRows(
                 eventsViewport_,
-                debugState->recentInputEvents.size(),
+                eventLines.size(),
                 eventVisible,
                 [&](std::size_t row, std::size_t index) {
                     canvas.Text(
                         1U,
                         bodyTop + 1U + row,
-                        EventText(debugState->recentInputEvents[index]),
+                        eventLines[index],
                         leftWidth - 2U,
                         Foreground(colors_.text));
                 });
@@ -1519,6 +1544,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                     + std::string{debug::InputOriginLabel(pressed.origin)} + ']';
                 stateCells.push_back(std::move(cell));
             }
+            AppendMouseStateCells(stateCells, *debugState);
             using StateLine = std::vector<std::pair<std::size_t, std::string>>;
             std::vector<StateLine> stateRows;
             StateLine stateLine;

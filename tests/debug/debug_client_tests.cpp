@@ -1,4 +1,5 @@
 #include "debug/debug_client.hpp"
+#include "mouse_debug_fixture.hpp"
 
 #include <array>
 #include <cstdint>
@@ -634,11 +635,15 @@ void TestStreamCompletion()
         "messages after the terminal marker invalidate completeness");
 }
 
+#include "debug_mouse_client_tests.inc"
+
 } // namespace
 
 int main()
 {
     TestOriginsAndPressedState();
+    TestMouseStateAndCorrelation();
+    TestRetainedTickCorrelation();
     TestRuleCorrelationAndInterleaving();
     TestIssuesAndRecovery();
     TestStrictValidationAndCapacity();

@@ -761,6 +761,9 @@ struct WindowsDebugServer::Impl final {
         }
         payload.executionMarker = event.executionMarker;
         payload.triggerInputSequence = event.triggerInputSequence;
+        payload.triggerEventSource = event.occurrence.source;
+        payload.triggerCycleSequence = event.occurrence.cycle.sequence;
+        payload.selectionCount = event.selectionCount;
         const CompiledRule& rule = program->Rules()[event.ruleIndex];
         const auto debugRules = program->DebugInfo().rules;
         const auto debugRule = std::find_if(
@@ -797,6 +800,10 @@ struct WindowsDebugServer::Impl final {
         std::uint64_t& protocolSequence) const
     {
         const RuntimeDebugEvent& event = record.runtime;
+        if (event.kind == RuntimeDebugEventKind::MouseCycleCompleted
+            || event.kind == RuntimeDebugEventKind::ExecutionSourceSelected) {
+            return SendMouseRecord(pipe, record, protocolSequence);
+        }
         if (event.kind == RuntimeDebugEventKind::RuleMatched) {
             debug::Message message = MakeMessage(
                 debug::MessageKind::RuleMatched,
@@ -878,6 +885,8 @@ struct WindowsDebugServer::Impl final {
         return WriteMessage(pipe, message);
     }
 
+#include "debug_mouse_server.inc"
+
     [[nodiscard]] bool SendProducerRecord(
         HANDLE pipe,
         const ProducerRecord& record,
@@ -900,7 +909,8 @@ struct WindowsDebugServer::Impl final {
             message.captureStarted.captureUnixTimeMilliseconds =
                 record.captureUnixTimeMilliseconds;
             if (!PopulateStateSnapshot(message.captureStarted.values)
-                || !PopulateArraySnapshot(message.captureStarted.arrays)) {
+                || !PopulateArraySnapshot(message.captureStarted.arrays)
+                || !PopulateMouseCapture(message.captureStarted)) {
                 return false;
             }
             return WriteMessage(pipe, message);
@@ -924,6 +934,8 @@ struct WindowsDebugServer::Impl final {
     {
         std::uint64_t protocolSequence = 1U;
         std::uint64_t writerEpoch{};
+        std::int64_t nextMouseSample{};
+        debug::Message mouseMessage{};
         const HANDLE waitHandles[] = {connectionStopEvent, queueEvent};
         bool healthy = true;
         while (healthy
@@ -950,12 +962,18 @@ struct WindowsDebugServer::Impl final {
                 break;
             }
             if (healthy) {
+                const auto now = CaptureTimeNanoseconds();
+                if (writerEpoch != 0 && now >= nextMouseSample) {
+                    healthy = SendMouseState(pipe, writerEpoch, protocolSequence, mouseMessage);
+                    nextMouseSample = now + 50'000'000;
+                }
+                if (!healthy) break;
                 const DWORD wait = WaitForMultipleObjects(
                     2U,
                     waitHandles,
                     FALSE,
-                    INFINITE);
-                healthy = wait == WAIT_OBJECT_0 + 1U;
+                    writerEpoch != 0 ? 50U : INFINITE);
+                healthy = wait == WAIT_OBJECT_0 + 1U || wait == WAIT_TIMEOUT;
             }
         }
         if (!healthy && writerFinalizedEvent != nullptr) {

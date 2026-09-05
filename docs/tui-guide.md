@@ -214,6 +214,16 @@ HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient �
 
 该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
 
+## Mouse observation
+
+Debug observes mouse position and numeric input even when the running program only declares key rules. STATE adds `Mouse.x/y`, the latest complete `dx/dy/wheel_x/wheel_y` tuple, `moving`, and `idle_time`. The writer samples live mouse state every 50 ms while capturing; stationary time updates idle state while preserving the most recent input deltas.
+
+Each declared event source appears under its own name. Its current row shows the latched period, progress, remaining amount, coordinates, and movement or wheel statistics. Its `@` row shows the latest completed cycle with `valid=on` and a semantic cycle number, or `valid=off`. Distance and duration periods retain their respective numeric and time formatting. Long mouse rows wrap within the existing scrollable regions.
+
+EVENTS shows `Mouse:move`, `Mouse:wheel`, and `Mouse:horizontalwheel` with coordinates, normalized deltas, and `input=#N`. A named `source:tick` also shows `cycle=#N`, its parent input number, and its boundary data. Numeric mouse events leave the pressed-control set unchanged.
+
+ACTION EXECUTIONS identifies the actual raw or tick trigger. Each task's source selection is shown with an `@` prefix after all its source records arrive. These records retain the exact trigger-time completions, including older and empty selections, while STATE continues updating. A new capture rebuilds the displayed state from the runtime without restarting source statistics, changing phase, or resetting semantic cycle numbers.
+
 ## 配色
 
 托盘宿主启动时读取 `InputWeaverHost.exe` 同目录下的 `res\InputWeaverTUI.colors.json`。所有颜色使用 `#RRGGBB`；修改后需要重新启动 InputWeaver。文件缺失、版本错误、字段缺失、字段重复、包含未知字段或颜色值无效时，托盘宿主会报告错误并停止启动。

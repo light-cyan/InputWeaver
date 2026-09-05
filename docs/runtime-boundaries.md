@@ -124,6 +124,14 @@ Debug 是运行时旁路观测通道，不改变规则分派和动作执行的�
 
 捕获开始消息携带 `PAUSE`、全部用户 `state`、`number`、`duration` 值以及全部数组的有界快照；短数组携带全部元素，长数组携带前四项、后四项和精确长度，之后只发送实际变化。生产队列溢出时，执行器停止当前捕获并报告 `DebugStreamOverflow`，DebugClient 把派生状态标记为不可信并请求新的捕获代次；规则执行本身继续运行。
 
+### Mouse Debug transport
+
+The local Debug protocol is version 6. CaptureStarted includes declared source names and types plus a complete mouse/source snapshot. Live mouse snapshots replace that state atomically at a 50 ms sampling cadence on the pipe writer thread. Snapshot reads share the runtime variable transaction lock; the hook publishes raw inputs and completed-cycle records through the bounded producer queue.
+
+Raw inputs and named ticks share the 512-entry recent-event capacity. Up to 512 completed-cycle records can await their parent raw input. Each task publishes one fixed selection record per source, with an explicit expected count on its execution record. The client presents the selection after receiving that count. Semantic cycle numbers remain independent of capture epochs, and capture recovery queries the existing runtime state.
+
+Mouse hook JSONL records include `x`, `y`, `dx`, `dy`, `wheel_x`, and `wheel_y`. Pointer injection records include `operation`, `argument_x`, `argument_y`, and `prepared`. Successful preparation adds `origin_x/y` and either `destination_x/y` or `wheel_amount` in detents. These values use the existing bounded logging and privacy policy.
+
 ## 控制台统计
 
 | 字段 | 含义 |

@@ -129,6 +129,8 @@ struct WorkItem final {
     std::uint64_t debugCaptureEpoch{};
     std::uint64_t debugInputSequence{};
     std::uint32_t debugRuleIndex{kInvalidProgramIndex};
+    EventSourceId debugEventSource{};
+    std::uint64_t debugCycleSequence{};
 };
 
 class WorkQueue final {
@@ -305,9 +307,9 @@ using namespace program_runtime_detail;
 
 struct ProgramRuntime::Impl final {
     struct MutableState final {
-        [[nodiscard]] static std::unique_ptr<RuntimeMouseState> CreateMouse(const CompiledProgram& program)
+        [[nodiscard]] static std::unique_ptr<RuntimeMouseState> CreateMouse(const CompiledProgram& program, bool debugging)
         {
-            if (!program.Requirements().requiresMouseObservation) return nullptr;
+            if (!program.Requirements().requiresMouseObservation && !debugging) return nullptr;
             std::vector<MouseSourceConfig> sources;
             for (const auto& source : program.EventSources()) {
                 sources.push_back({source.transition, program.Expressions()[source.period.value].resultType});
@@ -341,12 +343,13 @@ struct ProgramRuntime::Impl final {
 
         MutableState(
             const CompiledProgram& program,
-            std::uint64_t randomSeed)
+            std::uint64_t randomSeed,
+            bool debugging)
             : userStates(program.UserValues().initialStates),
               userNumbers(program.UserValues().initialNumbers),
               userDurations(program.UserValues().initialDurations),
               arrays(CreateArrays(program)),
-              mouse(CreateMouse(program)),
+              mouse(CreateMouse(program, debugging)),
               randomStream(randomSeed),
               physicalHeld(std::make_unique<std::atomic<std::uint8_t>[]>(
                   program.Controls().size())),
@@ -585,11 +588,12 @@ struct ProgramRuntime::Impl final {
             std::uint64_t randomSeed,
             std::uint64_t serial,
             std::atomic<std::uint64_t>& runtimeGeneration,
-            const RuntimeCapacities& capacities)
+            const RuntimeCapacities& capacities,
+            bool debugging)
             : program(std::move(immutableProgram)),
               programSerial(serial),
               activatedControls(program->Controls().size()),
-              mutableState(*program, randomSeed),
+              mutableState(*program, randomSeed, debugging),
               dispatch(*program, capacities),
               scheduler(*program, capacities),
               inspectionScratch((std::max)(
@@ -786,7 +790,8 @@ struct ProgramRuntime::Impl final {
         const MutationPublication& publication) noexcept;
     [[nodiscard]] std::uint64_t BeginDebugExecution(
         State& state,
-        const WorkItem& item) noexcept;
+        const WorkItem& item,
+        std::span<const MouseCycle> completed = {}) noexcept;
     void PublishDebugExecutionEnded(
         std::uint64_t captureEpoch,
         std::uint64_t executionMarker,

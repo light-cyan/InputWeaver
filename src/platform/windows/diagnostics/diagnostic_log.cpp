@@ -1,6 +1,7 @@
 #include "diagnostic_log.hpp"
 
 #include <sstream>
+#include <iomanip>
 #include <utility>
 
 namespace inputweaver {
@@ -8,6 +9,16 @@ namespace {
 
 const char* DeviceName(DeviceKind value) noexcept {
     return value == DeviceKind::Keyboard ? "Keyboard" : "Mouse";
+}
+
+const char* PointerOperationName(PointerOperation operation) noexcept {
+    switch (operation) {
+    case PointerOperation::MoveBy: return "move_by";
+    case PointerOperation::MoveTo: return "move_to";
+    case PointerOperation::Scroll: return "scroll";
+    case PointerOperation::ScrollHorizontal: return "scroll_horizontal";
+    }
+    return "unknown";
 }
 
 const char* OriginName(InputOrigin value) noexcept {
@@ -188,6 +199,7 @@ bool ShouldPublishProgramHookDiagnostic(
 
 std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record) {
     std::ostringstream stream;
+    stream << std::setprecision(17);
     stream << "{\"kind\":\"hook\",\"seq\":" << record.sequence << ",\"qpc\":" << record.qpcTimestamp
            << ",\"duration_us\":" << record.processingMicroseconds
            << ",\"device\":\"" << DeviceName(record.device)
@@ -196,12 +208,19 @@ std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record) {
            << ",\"flags\":" << record.rawFlags << ",\"mouse_data\":" << record.mouseData << ",\"origin\":\""
            << OriginName(record.origin) << "\",\"lower_il\":" << (record.lowerIntegrityInjected ? "true" : "false")
            << ",\"extra\":\"" << ExtraInfoName(record.extraInfo) << "\",\"foreground_pid\":" << record.foregroundPid
-           << ",\"suppressed\":" << (record.suppressed ? "true" : "false") << "}";
+           << ",\"suppressed\":" << (record.suppressed ? "true" : "false");
+    if (record.device == DeviceKind::Mouse) {
+        stream << ",\"x\":" << record.position.x << ",\"y\":" << record.position.y
+               << ",\"dx\":" << record.delta.dx << ",\"dy\":" << record.delta.dy
+               << ",\"wheel_x\":" << record.delta.wheelX << ",\"wheel_y\":" << record.delta.wheelY;
+    }
+    stream << '}';
     return stream.str();
 }
 
 std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& record) {
     std::ostringstream stream;
+    stream << std::setprecision(17);
     stream << "{\"kind\":\"injection\",\"source_seq\":" << record.sourceSequence
            << ",\"generation\":" << record.outputStateGeneration << ",\"qpc\":" << record.qpcTimestamp
            << ",\"target_pid\":" << record.targetPid << ",\"device\":\"" << DeviceName(record.outputDevice)
@@ -212,7 +231,20 @@ std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& recor
            << (record.cancelledForCircuitBreaker ? "true" : "false") << ",\"cancelled_shutdown\":"
            << (record.cancelledForShutdown ? "true" : "false") << ",\"cancelled_generation\":"
            << (record.cancelledForGeneration ? "true" : "false") << ",\"circuit_open\":"
-           << (record.circuitBreakerOpen ? "true" : "false") << "}";
+           << (record.circuitBreakerOpen ? "true" : "false");
+    if (record.outputKind == RuntimeOutputKind::Pointer) {
+        stream << ",\"operation\":\"" << PointerOperationName(record.pointer.operation)
+               << "\",\"argument_x\":" << record.pointer.x << ",\"argument_y\":" << record.pointer.y
+               << ",\"prepared\":" << (record.pointerPrepared ? "true" : "false");
+        if (record.pointerPrepared) {
+            stream << ",\"origin_x\":" << record.pointerOrigin.x << ",\"origin_y\":" << record.pointerOrigin.y;
+            if (record.pointer.operation <= PointerOperation::MoveTo) {
+                stream << ",\"destination_x\":" << record.pointerDestination.x
+                       << ",\"destination_y\":" << record.pointerDestination.y;
+            } else stream << ",\"wheel_amount\":" << record.preparedWheel;
+        }
+    }
+    stream << '}';
     return stream.str();
 }
 

@@ -334,6 +334,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     return ValidArrayValue(value);
 }
 
+#include "debug_mouse_codec.inc"
+
 [[nodiscard]] bool EncodePayload(
     const Message& message,
     std::vector<std::uint8_t>& payload)
@@ -382,7 +384,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
                 return false;
             }
         }
-        return true;
+        return WriteMouseCapture(writer, message.captureStarted);
     case MessageKind::InputEvent: {
         const InputEventPayload& input = message.inputEvent;
         writer.U64(input.inputSequence);
@@ -396,6 +398,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         writer.U32(input.scanCode);
         writer.U32(input.nativeQualifier);
         writer.U32(input.mouseData);
+        WritePoint(writer, input.position);
+        WriteMouseDelta(writer, input.delta);
         return true;
     }
     case MessageKind::RuleMatched: {
@@ -408,6 +412,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
         writer.U64(matched.triggerInputSequence);
         writer.String(matched.conditionText);
         writer.String(matched.actionText);
+        writer.U32(matched.triggerEventSource.value);
+        writer.U64(matched.triggerCycleSequence);
+        writer.U32(matched.selectionCount);
         return true;
     }
     case MessageKind::ExecutionEnded:
@@ -431,6 +438,17 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::ArrayChanged:
         writer.U32(message.arrayChanged.arrayIndex);
         return WriteArrayValue(writer, message.arrayChanged.value);
+    case MessageKind::MouseState:
+        WriteMouseSnapshot(writer, message.mouseState);
+        return true;
+    case MessageKind::MouseCycleCompleted:
+        writer.U64(message.mouseCycleCompleted.triggerInputSequence);
+        WriteOccurrence(writer, message.mouseCycleCompleted.occurrence);
+        return true;
+    case MessageKind::ExecutionSourceSelected:
+        writer.U64(message.executionSourceSelected.executionMarker);
+        WriteOccurrence(writer, message.executionSourceSelected.occurrence);
+        return true;
     }
     return false;
 }
@@ -475,7 +493,7 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
                 return false;
             }
         }
-        return true;
+        return ReadMouseCapture(reader, message.captureStarted);
     }
     case MessageKind::InputEvent: {
         InputEventPayload& input = message.inputEvent;
@@ -489,14 +507,17 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
             && reader.U32(input.virtualKey)
             && reader.U32(input.scanCode)
             && reader.U32(input.nativeQualifier)
-            && reader.U32(input.mouseData);
+            && reader.U32(input.mouseData)
+            && ReadPoint(reader, input.position) && ReadMouseDelta(reader, input.delta);
     }
     case MessageKind::RuleMatched: {
         RuleMatchedPayload& matched = message.ruleMatched;
         return reader.U64(matched.executionMarker)
             && reader.U64(matched.triggerInputSequence)
             && reader.String(matched.conditionText)
-            && reader.String(matched.actionText);
+            && reader.String(matched.actionText)
+            && reader.U32(matched.triggerEventSource.value)
+            && reader.U64(matched.triggerCycleSequence) && reader.U32(matched.selectionCount);
     }
     case MessageKind::ExecutionEnded:
         return reader.U64(message.executionEnded.executionMarker)
@@ -517,6 +538,14 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::ArrayChanged:
         return reader.U32(message.arrayChanged.arrayIndex)
             && ReadArrayValue(reader, message.arrayChanged.value);
+    case MessageKind::MouseState:
+        return ReadMouseSnapshot(reader, message.mouseState);
+    case MessageKind::MouseCycleCompleted:
+        return reader.U64(message.mouseCycleCompleted.triggerInputSequence)
+            && ReadOccurrence(reader, message.mouseCycleCompleted.occurrence);
+    case MessageKind::ExecutionSourceSelected:
+        return reader.U64(message.executionSourceSelected.executionMarker)
+            && ReadOccurrence(reader, message.executionSourceSelected.occurrence);
     }
     return false;
 }
@@ -538,6 +567,9 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
     case MessageKind::StateChanged:
     case MessageKind::ArrayChanged:
     case MessageKind::StreamCompleted:
+    case MessageKind::MouseState:
+    case MessageKind::MouseCycleCompleted:
+    case MessageKind::ExecutionSourceSelected:
         return true;
     }
     return false;

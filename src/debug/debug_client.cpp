@@ -65,13 +65,10 @@ std::string_view InputOriginLabel(InputOrigin origin) noexcept
 }
 
 struct DebugStateReducer::Impl final {
-    struct PendingExecution final {
-        std::uint64_t executionMarker{};
+    struct PendingExecution final : DebugRuleExecution {
         std::uint64_t triggerInputSequence{};
-        std::string conditionText;
-        std::string actionText;
-        std::int64_t matchedUnixTimeMilliseconds{};
-        std::optional<RuntimeExecutionResult> result;
+        EventSourceId triggerEventSource{};
+        std::uint64_t triggerCycleSequence{};
     };
 
     explicit Impl(DebugClientCapacities selectedCapacities)
@@ -95,6 +92,9 @@ struct DebugStateReducer::Impl final {
         state.arrays.clear();
         state.ruleExecutions.clear();
         state.runtimeIssues.clear();
+        state.eventSources.clear();
+        state.mouse = {};
+        pendingCycles.clear();
         pendingExecutions.clear();
         lastInputSequence = 0U;
         captureStartTimeNanoseconds = 0;
@@ -177,13 +177,15 @@ struct DebugStateReducer::Impl final {
         return true;
     }
 
-    [[nodiscard]] DebugInputEvent* FindInput(std::uint64_t sequence)
+    [[nodiscard]] DebugInputEvent* FindInput(std::uint64_t sequence,
+        EventSourceId source = {}, std::uint64_t cycle = 0)
     {
         const auto found = std::find_if(
             state.recentInputEvents.begin(),
             state.recentInputEvents.end(),
-            [sequence](const DebugInputEvent& input) {
-                return input.inputSequence == sequence;
+            [=](const DebugInputEvent& input) {
+                return input.inputSequence == sequence && input.occurrence.source == source
+                    && input.occurrence.cycle.sequence == cycle;
             });
         return found == state.recentInputEvents.end() ? nullptr : &*found;
     }
@@ -251,14 +253,8 @@ struct DebugStateReducer::Impl final {
         pendingExecutions.erase(
             pendingExecutions.begin()
             + static_cast<std::ptrdiff_t>(pendingIndex));
-        DebugRuleExecution execution{};
-        execution.executionMarker = pending.executionMarker;
+        DebugRuleExecution execution = std::move(pending);
         execution.triggerInput = trigger;
-        execution.conditionText = std::move(pending.conditionText);
-        execution.actionText = std::move(pending.actionText);
-        execution.matchedUnixTimeMilliseconds =
-            pending.matchedUnixTimeMilliseconds;
-        execution.result = pending.result;
         state.ruleExecutions.push_back(std::move(execution));
         return true;
     }
@@ -267,7 +263,9 @@ struct DebugStateReducer::Impl final {
     {
         for (std::size_t index = 0U; index < pendingExecutions.size();) {
             if (pendingExecutions[index].triggerInputSequence
-                != trigger.inputSequence) {
+                != trigger.inputSequence
+                || pendingExecutions[index].triggerEventSource != trigger.occurrence.source
+                || pendingExecutions[index].triggerCycleSequence != trigger.occurrence.cycle.sequence) {
                 ++index;
                 continue;
             }
@@ -292,7 +290,8 @@ struct DebugStateReducer::Impl final {
         if (message.header.captureTimeNanoseconds < 0
             || message.captureStarted.captureUnixTimeMilliseconds <= 0
             || message.captureStarted.values.size() > capacities.maximumValues
-            || message.captureStarted.arrays.size() > capacities.maximumArrays) {
+            || message.captureStarted.arrays.size() > capacities.maximumArrays
+            || message.captureStarted.sources.size() != message.captureStarted.mouse.sources.size()) {
             return Recover(DebugClientFault::InconsistentState);
         }
         ClearCapture();
@@ -300,6 +299,8 @@ struct DebugStateReducer::Impl final {
         captureStartUnixTimeMilliseconds =
             message.captureStarted.captureUnixTimeMilliseconds;
         state.captureEpoch = message.header.captureEpoch;
+        state.eventSources = message.captureStarted.sources;
+        state.mouse = message.captureStarted.mouse;
         state.values.reserve(message.captureStarted.values.size());
         for (const DebugNamedValue& value : message.captureStarted.values) {
             state.values.push_back({value.name, value.value});
@@ -350,6 +351,8 @@ struct DebugStateReducer::Impl final {
         input.transition = payload.transition;
         input.origin = payload.origin;
         input.disposition = payload.disposition;
+        input.position = payload.position;
+        input.delta = payload.delta;
         if (payload.transition == Transition::Down) {
             if (payload.origin == InputOrigin::InitialSample) {
                 input.againDown = FindPressed(
@@ -387,8 +390,7 @@ struct DebugStateReducer::Impl final {
             state.recentInputEvents,
             input,
             capacities.maximumInputEvents);
-        DebugInputEvent* stored = FindInput(payload.inputSequence);
-        if (stored == nullptr || !MaterializeForInput(*stored)) {
+        if (!MaterializeForInput(input) || !MaterializeCycles(input)) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
         Publish();
@@ -401,6 +403,8 @@ struct DebugStateReducer::Impl final {
         const RuleMatchedPayload& matched = message.ruleMatched;
         if (matched.executionMarker == 0U
             || matched.triggerInputSequence == 0U
+            || (matched.selectionCount != 0 && matched.selectionCount != state.eventSources.size())
+            || (matched.triggerEventSource.IsValid() && matched.triggerEventSource.value >= state.eventSources.size())
             || MarkerExists(matched.executionMarker)) {
             return Recover(DebugClientFault::InconsistentState);
         }
@@ -411,7 +415,8 @@ struct DebugStateReducer::Impl final {
             return Recover(DebugClientFault::InconsistentState);
         }
         if (matched.triggerInputSequence <= lastInputSequence
-            && FindInput(matched.triggerInputSequence) == nullptr) {
+            && FindInput(matched.triggerInputSequence) == nullptr
+            && FindInput(matched.triggerInputSequence, matched.triggerEventSource, matched.triggerCycleSequence) == nullptr) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
         if (pendingExecutions.size()
@@ -421,11 +426,15 @@ struct DebugStateReducer::Impl final {
         PendingExecution pending{};
         pending.executionMarker = matched.executionMarker;
         pending.triggerInputSequence = matched.triggerInputSequence;
+        pending.triggerEventSource = matched.triggerEventSource;
+        pending.triggerCycleSequence = matched.triggerCycleSequence;
+        pending.selectionCount = matched.selectionCount;
         pending.conditionText = matched.conditionText;
         pending.actionText = matched.actionText;
         pending.matchedUnixTimeMilliseconds = matchedUnixTimeMilliseconds;
         pendingExecutions.push_back(std::move(pending));
-        DebugInputEvent* trigger = FindInput(matched.triggerInputSequence);
+        DebugInputEvent* trigger = FindInput(matched.triggerInputSequence,
+            matched.triggerEventSource, matched.triggerCycleSequence);
         if (trigger != nullptr
             && !Materialize(pendingExecutions.size() - 1U, *trigger)) {
             return Recover(DebugClientFault::CapacityExceeded);
@@ -527,6 +536,8 @@ struct DebugStateReducer::Impl final {
         return DebugReductionAction::None;
     }
 
+#include "debug_mouse_reducer.inc"
+
     [[nodiscard]] DebugReductionAction Accept(const Message& message)
     {
         if (!state.connected) {
@@ -591,6 +602,12 @@ struct DebugStateReducer::Impl final {
             return AcceptStateChanged(message);
         case MessageKind::ArrayChanged:
             return AcceptArrayChanged(message);
+        case MessageKind::MouseState:
+            return AcceptMouseState(message);
+        case MessageKind::MouseCycleCompleted:
+            return AcceptMouseCycle(message);
+        case MessageKind::ExecutionSourceSelected:
+            return AcceptSourceSelection(message);
         case MessageKind::Hello:
         case MessageKind::HelloAccepted:
         case MessageKind::StartCapture:
@@ -609,6 +626,7 @@ struct DebugStateReducer::Impl final {
     DebugClientState state;
     std::shared_ptr<const DebugClientState> published;
     std::vector<PendingExecution> pendingExecutions;
+    std::vector<DebugInputEvent> pendingCycles;
     std::uint64_t nextProtocolSequence{1U};
     std::uint64_t lastInputSequence{};
     std::int64_t captureStartTimeNanoseconds{};
@@ -629,6 +647,7 @@ void DebugStateReducer::Connected(std::uint64_t targetSessionId)
     std::lock_guard lock(impl_->mutex);
     impl_->state = {};
     impl_->pendingExecutions.clear();
+    impl_->pendingCycles.clear();
     impl_->lastInputSequence = 0U;
     impl_->captureStartTimeNanoseconds = 0;
     impl_->captureStartUnixTimeMilliseconds = 0;

@@ -375,6 +375,8 @@ int main()
     TestRoutingFailureAndExit();
     TestProductionTaskThread();
     TestMouseTaskSnapshots();
+    TestMouseDebugSnapshots();
+    TestKeyProgramMouseDebugObservation();
     TestMouseQualificationLifecycle();
 
     if (g_failureCount != 0) {

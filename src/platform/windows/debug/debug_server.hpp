@@ -35,6 +35,7 @@ struct DebugInputCorrelation final {
 struct DebugServerCallbacks final {
     support::CallbackRef<void() noexcept> wakeInputThread{};
     support::CallbackRef<void() noexcept> requestExecutorStop{};
+    support::CallbackRef<bool(RuntimeMouseSnapshot&) noexcept> readMouseSnapshot{};
 };
 
 class WindowsDebugServer final : public RuntimeDebugEventPort {

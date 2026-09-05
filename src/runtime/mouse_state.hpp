@@ -8,30 +8,6 @@
 
 namespace inputweaver {
 
-struct MousePoint final {
-    double x{};
-    double y{};
-    auto operator<=>(const MousePoint&) const = default;
-};
-
-struct MouseObservation final {
-    MousePoint position{};
-    MouseDelta delta{};
-    DurationValue idleTime{};
-    bool moving{};
-};
-
-struct MouseCycle final {
-    RuntimeValue period{};
-    double progress{};
-    std::int64_t elapsedNanoseconds{};
-    MousePoint start{};
-    MousePoint point{};
-    MousePoint displacement{};
-    double distance{};
-    std::uint64_t sequence{};
-};
-
 struct MouseSourceConfig final {
     EventTransition transition{EventTransition::Move};
     ExpressionType periodType{ExpressionType::Number};
@@ -46,11 +22,6 @@ struct MouseSourceState final {
     bool opened{};
     bool hasOrigin{};
     bool moving{};
-};
-
-struct MouseOccurrence final {
-    EventSourceId source{};
-    MouseCycle cycle{};
 };
 
 using MousePeriodEvaluator = support::CallbackRef<RuntimeEvaluationResult(EventSourceId) noexcept>;

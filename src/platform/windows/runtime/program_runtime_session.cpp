@@ -64,6 +64,8 @@ void PopulateInjectionIdentity(
         ? Transition::Up
         : Transition::Down;
     if (item.recipe.kind == WindowsOutputKind::Pointer) {
+        record.outputKind = RuntimeOutputKind::Pointer;
+        record.pointer = item.pointer;
         record.outputTransition = item.pointer.operation <= PointerOperation::MoveTo ? Transition::Move
             : item.pointer.operation == PointerOperation::Scroll ? Transition::VerticalWheel : Transition::HorizontalWheel;
     }
@@ -72,11 +74,6 @@ void PopulateInjectionIdentity(
 [[nodiscard]] bool IsReleaseOutput(const WindowsOutputItem& item) noexcept
 {
     return item.transition == WindowsOutputTransition::Up;
-}
-
-[[nodiscard]] bool IsDebugInputTransition(Transition transition) noexcept
-{
-    return transition == Transition::Down || transition == Transition::Up;
 }
 
 [[nodiscard]] bool IsMouseButtonVirtualKey(
@@ -330,11 +327,13 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         hookEvents.fetch_add(1U, std::memory_order_relaxed);
 
         RuntimeInputEvent normalized = inputAdapter->Normalize(event);
+        record.position = normalized.position;
+        record.delta = normalized.delta;
         if (event.device == DeviceKind::Mouse && event.origin == InputOrigin::PhysicalCandidate) {
             pointerOutput.ObservePhysical(event.position);
         }
         const win32::DebugInputCorrelation debugCorrelation =
-            debugServer != nullptr && IsDebugInputTransition(event.transition)
+            debugServer != nullptr
             ? debugServer->BeginInput()
             : win32::DebugInputCorrelation{};
         normalized.debugCaptureEpoch = debugCorrelation.captureEpoch;
@@ -598,6 +597,8 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                     : kControlQualifierNone;
         }
         input.mouseData = event.mouseData;
+        input.position = {static_cast<double>(event.position.x), static_cast<double>(event.position.y)};
+        input.delta = normalized.delta;
         if (normalized.control.IsValid()
             && activeProgram != nullptr
             && normalized.control.value < activeProgram->Controls().size()) {
@@ -714,7 +715,12 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                 program,
                 {
                     {this, &Impl::WakeDebugInputThreadThunk},
-                    {this, &Impl::SignalStopThunk}},
+                    {this, &Impl::SignalStopThunk},
+                    {this, [](void* context, RuntimeMouseSnapshot& snapshot) noexcept {
+                        auto& session = *static_cast<Impl*>(context);
+                        const std::lock_guard runtimeLock(session.runtimeCallMutex);
+                        return session.runtime && session.runtime->ReadMouseSnapshot(snapshot);
+                    }}},
                 errorMessage)) {
             debugServer.reset();
             return false;
@@ -839,7 +845,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
             && item.outputStateGeneration
                 != liveGeneration) {
             record.cancelledForGeneration = true;
-        } else if (!release && !PrepareOutputRoute(item, isPointer ? &pointer : nullptr)) {
+        } else if (!release && !PrepareOutputRoute(item, isPointer ? &pointer : nullptr, record)) {
             record.cancelledForTarget = true;
             if (processExclusion.IsForegroundExcluded()) {
                 SetTargetEligible(false);
@@ -863,9 +869,16 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
     }
 
     [[nodiscard]] bool PrepareOutputRoute(
-        const WindowsOutputItem& item, win32::PreparedPointerOutput* pointer) noexcept
+        const WindowsOutputItem& item, win32::PreparedPointerOutput* pointer, InjectionDiagnosticRecord& record) noexcept
     {
-        if (pointer != nullptr) *pointer = pointerOutput.Prepare(item.pointer, item.outputStateGeneration);
+        if (pointer != nullptr) {
+            *pointer = pointerOutput.Prepare(item.pointer, item.outputStateGeneration);
+            record.pointerPrepared = pointer->native.Succeeded();
+            record.pointerOrigin = pointer->origin;
+            record.pointerDestination = pointer->destination;
+            if (!pointer->movement) record.preparedWheel = static_cast<double>(
+                static_cast<LONG>(pointer->native.input.mi.mouseData)) / WHEEL_DELTA;
+        }
         if (processExclusion.IsForegroundExcluded()) {
             return false;
         }

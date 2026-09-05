@@ -5,6 +5,7 @@
 #include "ui/tui/support/source_highlighter.hpp"
 #include "ui/tui/support/text_layout.hpp"
 #include "ui/tui/tui_controller.hpp"
+#include "../debug/mouse_debug_fixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -910,6 +911,8 @@ void TestSupport()
         "document highlighting caches revisions and preserves cross-line declarations");
 }
 
+#include "tui_mouse_tests.inc"
+
 void TestController()
 {
     using inputweaver::ui::tui::Key;
@@ -1286,6 +1289,7 @@ void TestController()
         stateNumber < stateControl
             && stateControl < wideDebug.Cells().size(),
         "STATE keeps user values before pressed controls");
+    TestMouseDebugRendering(controller, platform);
     controller.Handle({Key::Right, 0U});
     const auto stateDebug = controller.Render(80U, 24U);
     Check(

@@ -231,7 +231,9 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
         return {false, {RuntimeActivationErrorCode::MissingProgram}};
     }
     ScreenPoint pointer{};
-    if ((program->Requirements().requiresMouseObservation && !routePort.QueryPointerPosition(pointer))
+    const bool pointerAvailable = (program->Requirements().requiresMouseObservation || debugPort != nullptr)
+        && routePort.QueryPointerPosition(pointer);
+    if ((program->Requirements().requiresMouseObservation && !pointerAvailable)
         || (program->Requirements().requiresPointerOutput && !outputPort.SupportsPointerOutput())) {
         return {false, {RuntimeActivationErrorCode::MissingMouseCapability}};
     }
@@ -248,7 +250,8 @@ RuntimeActivationResult ProgramRuntime::Impl::Activate(
             randomSeed,
             nextProgramSerial,
             observableGeneration,
-            capacities);
+            capacities,
+            debugPort != nullptr);
     } catch (const std::bad_alloc&) {
         return {false, {RuntimeActivationErrorCode::AllocationFailure}};
     }
@@ -518,29 +521,6 @@ bool ProgramRuntime::Impl::CompleteMutation(
         PublishArrayChanged(publication.array);
     }
     return true;
-}
-
-std::uint64_t ProgramRuntime::Impl::BeginDebugExecution(
-    State& state,
-    const WorkItem& item) noexcept
-{
-    if (debugPort == nullptr
-        || item.debugCaptureEpoch == 0U
-        || item.debugInputSequence == 0U
-        || item.debugRuleIndex == kInvalidProgramIndex) {
-        return 0U;
-    }
-    const std::uint64_t marker = state.scheduler.nextDebugExecutionMarker++;
-    if (marker == 0U) {
-        return 0U;
-    }
-    RuntimeDebugEvent event{};
-    event.kind = RuntimeDebugEventKind::RuleMatched;
-    event.captureEpoch = item.debugCaptureEpoch;
-    event.executionMarker = marker;
-    event.triggerInputSequence = item.debugInputSequence;
-    event.ruleIndex = item.debugRuleIndex;
-    return debugPort->Publish(event) ? marker : 0U;
 }
 
 void ProgramRuntime::Impl::PublishDebugExecutionEnded(

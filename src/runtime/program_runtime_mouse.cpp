@@ -2,6 +2,54 @@
 
 namespace inputweaver {
 
+std::uint64_t ProgramRuntime::Impl::BeginDebugExecution(State& state, const WorkItem& item,
+    std::span<const MouseCycle> completed) noexcept
+{
+    if (!debugPort || item.debugCaptureEpoch == 0 || item.debugInputSequence == 0
+        || item.debugRuleIndex == kInvalidProgramIndex) return 0;
+    RuntimeDebugEvent event{};
+    event.kind = RuntimeDebugEventKind::RuleMatched;
+    event.captureEpoch = item.debugCaptureEpoch;
+    event.executionMarker = state.scheduler.nextDebugExecutionMarker++;
+    if (event.executionMarker == 0) return 0;
+    event.triggerInputSequence = item.debugInputSequence;
+    event.ruleIndex = item.debugRuleIndex;
+    event.occurrence.source = item.debugEventSource;
+    event.occurrence.cycle.sequence = item.debugCycleSequence;
+    event.selectionCount = static_cast<std::uint32_t>(completed.size());
+    if (!debugPort->Publish(event)) return 0;
+    event.kind = RuntimeDebugEventKind::ExecutionSourceSelected;
+    for (std::uint32_t index = 0; index < completed.size(); ++index) {
+        event.occurrence = {EventSourceId{index}, completed[index]};
+        if (!debugPort->Publish(event)) return 0;
+    }
+    return event.executionMarker;
+}
+
+bool ProgramRuntime::ReadMouseSnapshot(RuntimeMouseSnapshot& snapshot) noexcept
+{
+    if (!impl_->active || !impl_->active->mutableState.mouse) return false;
+    auto& state = *impl_->active;
+    std::shared_lock pauseLock(state.mutableState.pauseMutex);
+    std::unique_lock variableLock(state.mutableState.variableMutex);
+    impl_->RefreshMouse(state);
+    const auto& mouse = *state.mutableState.mouse;
+    const auto sources = mouse.Sources();
+    try {
+        snapshot.sources.resize(sources.size());
+    } catch (...) {
+        return false;
+    }
+    snapshot.mouse = mouse.Observation();
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        const auto& source = sources[index];
+        auto& view = snapshot.sources[index];
+        view = {source.current, source.completed, source.moving};
+        if (!source.hasOrigin) view.current.start = view.current.point = snapshot.mouse.position;
+    }
+    return true;
+}
+
 void ProgramRuntime::Impl::RefreshMouse(State& state) noexcept
 {
     auto& values = state.mutableState;
