@@ -39,8 +39,8 @@ private:
     UniqueHandle process_;
     TuiIpcChannel channel_;
     HWND window_{};
-    std::size_t width_{80U};
-    std::size_t height_{24U};
+    std::size_t width_{kMinimumTuiColumns};
+    std::size_t height_{kMinimumTuiRows};
     std::vector<std::uint8_t> lastFramePayload_;
     ULONGLONG startedAt_{};
     ULONGLONG lastHeartbeatAt_{};

@@ -94,6 +94,7 @@ struct DebugStateReducer::Impl final {
         state.runtimeIssues.clear();
         state.meters.clear();
         state.mouse = {};
+        controlInputs.clear();
         mouseInputs.clear();
         pendingCycles.clear();
         pendingExecutions.clear();
@@ -181,7 +182,7 @@ struct DebugStateReducer::Impl final {
     [[nodiscard]] DebugInputEvent* FindInput(std::uint64_t sequence,
         MeterId source = {}, std::uint64_t cycle = 0)
     {
-        for (auto* history : {&state.recentInputEvents, &mouseInputs}) {
+        for (auto* history : {&controlInputs, &mouseInputs}) {
             const auto found = std::find_if(history->begin(), history->end(),
                 [=](const DebugInputEvent& input) {
                     return input.inputSequence == sequence && input.occurrence.source == source
@@ -190,6 +191,30 @@ struct DebugStateReducer::Impl final {
             if (found != history->end()) return &*found;
         }
         return nullptr;
+    }
+
+    void AppendVisibleInput(const DebugInputEvent& input)
+    {
+        if (!state.recentInputEvents.empty()) {
+            auto& previous = state.recentInputEvents.back();
+            const bool sameMeter = input.occurrence.source.IsValid()
+                && input.occurrence.source == previous.occurrence.source;
+            const bool sameRepeat = !input.occurrence.source.IsValid()
+                && !previous.occurrence.source.IsValid()
+                && input.againDown && previous.againDown
+                && SameDebugControl(input.control, previous.control)
+                && input.transition == previous.transition;
+            if ((sameMeter || sameRepeat)
+                && input.origin == previous.origin
+                && input.disposition == previous.disposition) {
+                const auto count = previous.repeatCount;
+                previous = input;
+                previous.repeatCount = count == (std::numeric_limits<std::uint64_t>::max)()
+                    ? count : count + 1U;
+                return;
+            }
+        }
+        AppendRecent(state.recentInputEvents, input, capacities.maximumInputEvents);
     }
 
     [[nodiscard]] DebugRuleExecution* FindExecution(std::uint64_t marker)
@@ -391,9 +416,12 @@ struct DebugStateReducer::Impl final {
         const bool numericMouse = input.control.device == DeviceKind::Mouse
             && input.transition != Transition::Down && input.transition != Transition::Up;
         AppendRecent(
-            numericMouse ? mouseInputs : state.recentInputEvents,
+            numericMouse ? mouseInputs : controlInputs,
             input,
             capacities.maximumInputEvents);
+        if (!numericMouse) {
+            AppendVisibleInput(input);
+        }
         if (!MaterializeForInput(input) || !MaterializeCycles(input)) {
             return Recover(DebugClientFault::CapacityExceeded);
         }
@@ -630,6 +658,7 @@ struct DebugStateReducer::Impl final {
     DebugClientState state;
     std::shared_ptr<const DebugClientState> published;
     std::vector<PendingExecution> pendingExecutions;
+    std::vector<DebugInputEvent> controlInputs;
     std::vector<DebugInputEvent> mouseInputs;
     std::vector<DebugInputEvent> pendingCycles;
     std::uint64_t nextProtocolSequence{1U};
@@ -653,6 +682,7 @@ void DebugStateReducer::Connected(std::uint64_t targetSessionId)
     impl_->state = {};
     impl_->pendingExecutions.clear();
     impl_->pendingCycles.clear();
+    impl_->controlInputs.clear();
     impl_->mouseInputs.clear();
     impl_->lastInputSequence = 0U;
     impl_->captureStartTimeNanoseconds = 0;

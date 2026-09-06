@@ -644,6 +644,7 @@ int main()
     TestOriginsAndPressedState();
     TestMouseStateAndCorrelation();
     TestMouseHistoryKeepsControls();
+    TestCompactEventHistory();
     TestRetainedTickCorrelation();
     TestRuleCorrelationAndInterleaving();
     TestIssuesAndRecovery();

@@ -31,6 +31,7 @@
         if (capacities.maximumInputEvents == 0) return Recover(DebugClientFault::CapacityExceeded);
         DebugInputEvent cycle{};
         cycle.inputSequence = payload.triggerInputSequence;
+        cycle.control.device = DeviceKind::Mouse;
         cycle.occurrence = payload.occurrence;
         cycle.captureTimeNanoseconds = message.header.captureTimeNanoseconds;
         if (!CaptureUnixTime(cycle.captureTimeNanoseconds, cycle.captureUnixTimeMilliseconds)) {
@@ -38,13 +39,14 @@
         }
         if (const auto* raw = FindInput(cycle.inputSequence)) {
             const auto parent = *raw;
-            if (!AddMouseCycle(std::move(cycle), parent)) return Recover(DebugClientFault::CapacityExceeded);
+            if (!AddMouseCycle(cycle, parent)) return Recover(DebugClientFault::CapacityExceeded);
         } else {
             if (cycle.inputSequence <= lastInputSequence || pendingCycles.size() >= capacities.maximumInputEvents) {
                 return Recover(DebugClientFault::CapacityExceeded);
             }
-            pendingCycles.push_back(std::move(cycle));
+            pendingCycles.push_back(cycle);
         }
+        AppendVisibleInput(cycle);
         Publish();
         return DebugReductionAction::None;
     }

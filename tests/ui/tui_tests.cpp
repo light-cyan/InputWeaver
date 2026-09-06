@@ -134,6 +134,34 @@ void Check(bool condition, std::string_view name)
         && lowerLeft.style.foreground == color;
 }
 
+[[nodiscard]] std::string BoxText(
+    const inputweaver::ui::tui::Canvas& canvas,
+    std::string_view title)
+{
+    const auto position = FindAscii(canvas, title, 1U);
+    if (position >= canvas.Cells().size() || position % canvas.Width() < 2U) {
+        return {};
+    }
+    const auto left = position % canvas.Width() - 2U;
+    const auto top = position / canvas.Width();
+    auto right = left + 1U;
+    while (right < canvas.Width() && canvas.Cells()[top * canvas.Width() + right].codePoint != U'┐') {
+        ++right;
+    }
+    std::string text;
+    for (auto row = top + 1U; row < canvas.Height(); ++row) {
+        if (canvas.Cells()[row * canvas.Width() + left].codePoint == U'└') {
+            break;
+        }
+        for (auto column = left + 1U; column < right; ++column) {
+            const auto& cell = canvas.Cells()[row * canvas.Width() + column];
+            if (!cell.continuation) text += inputweaver::ui::tui::EncodeUtf8(cell.codePoint);
+        }
+        text.push_back('\n');
+    }
+    return text;
+}
+
 class FakePlatform final : public inputweaver::app::AppPlatform {
 public:
     [[nodiscard]] inputweaver::app::LibraryLoadResult LoadProgramLibrary()
@@ -1225,7 +1253,8 @@ void TestController()
             && debugText.find("Epoch") == std::string::npos,
         "Debug executions render readable event, AS, and ACT lines");
     const std::size_t marker = FindAscii(minimumDebug, "#17");
-    const std::size_t event = FindAscii(minimumDebug, "EVENT ");
+    const std::size_t event = FindAscii(minimumDebug, "EVENT ",
+        FindAscii(minimumDebug, "ACTION EXECUTIONS") / minimumDebug.Width());
     const std::size_t conditionLabel = FindAscii(
         minimumDebug,
         "AS   combat == on and LCtrl == held");
@@ -1255,23 +1284,42 @@ void TestController()
         "execution labels are muted while entry content uses one status color");
     Check(
         debugText.find("PAUSE=on") != std::string::npos
-            && debugText.find("STATE") != std::string::npos,
+            && debugText.find("VARIABLES") != std::string::npos,
         "HEALTH renders PAUSE beside the STATE viewport");
     const auto wideDebug = controller.Render(120U, 40U);
     const std::string wideDebugText = CanvasText(wideDebug);
-    for (const auto& size : std::array<std::pair<std::size_t, std::size_t>, 3>{
-             std::pair{80U, 24U}, std::pair{120U, 40U}, std::pair{360U, 90U}}) {
+    for (const auto& size : std::array<std::pair<std::size_t, std::size_t>, 4>{
+             std::pair{80U, 24U}, std::pair{100U, 32U}, std::pair{144U, 44U}, std::pair{360U, 90U}}) {
         const auto layout = controller.Render(size.first, size.second);
         const auto eventsRow = FindAscii(layout, "EVENTS") / layout.Width();
         const auto actionsRow = FindAscii(layout, "ACTION EXECUTIONS") / layout.Width();
         const auto healthRow = FindAscii(layout, "HEALTH") / layout.Width();
-        const auto eventsWidth = (std::min)(size.first * 2U / 3U, std::size_t{60U});
-        Check(actionsRow - eventsRow == (healthRow - eventsRow) * 3U / 5U
-                && layout.Cells()[eventsRow * layout.Width() + eventsWidth].codePoint == U'┌',
-            "Debug gives STATE three-fifths body height and width beyond the bounded event columns");
-        Check(CanvasText(layout).find("PASS") != std::string::npos
-                && (size.first == 80U || CanvasText(layout).find("PASS AGAIN") != std::string::npos),
-            "bounded EVENTS retains disposition columns and has room for flags above minimum width");
+        const auto variablesPosition = FindAscii(layout, "VARIABLES");
+        const auto metersPosition = FindAscii(layout, "METERS");
+        const auto inputPosition = FindAscii(layout, "INPUT STATE");
+        const auto variablesRow = variablesPosition / layout.Width();
+        const auto inputRow = inputPosition / layout.Width();
+        const auto metersRow = metersPosition / layout.Width();
+        const auto leftWidth = metersPosition % layout.Width() - 2U;
+        Check(metersRow == eventsRow && variablesRow > metersRow && inputRow > eventsRow
+                && inputPosition % layout.Width() == 2U
+                && variablesPosition % layout.Width() == metersPosition % layout.Width()
+                && actionsRow - inputRow <= 7U && healthRow >= actionsRow + 5U,
+            "Debug stacks Events and compact Input State on the left, Meters and Variables on the right");
+        if (size.first >= 100U) {
+            Check((size.first - leftWidth) * (variablesRow - metersRow)
+                        > leftWidth * (inputRow - eventsRow)
+                    && actionsRow - inputRow >= 5U,
+                "both right-hand state regions receive more space than Events at native window sizes");
+        }
+        Check(layout.Cells()[variablesPosition].style.foreground == colors.focusVariables
+                && layout.Cells()[inputPosition].style.foreground == colors.focusInputState
+                && layout.Cells()[metersPosition].style.foreground == colors.focusMeters,
+            "state titles keep their distinct colors while Events is selected");
+        Check(BoxText(layout, "EVENTS").find("COUNT") != std::string::npos
+                && BoxText(layout, "EVENTS").find("PASS") != std::string::npos
+                && BoxText(layout, "EVENTS").find("AGAIN") != std::string::npos,
+            "EVENTS retains aligned result, repeat status, and count columns at every size");
     }
     Check(
         wideDebugText.find("combat=off") != std::string::npos
@@ -1280,7 +1328,7 @@ void TestController()
             && wideDebugText.find("[empty[0]=[]]") != std::string::npos
             && wideDebugText.find("[gates[2]=[on, off]]") != std::string::npos
             && wideDebugText.find("AGAIN") != std::string::npos,
-        "STATE shows all scalars and short arrays with explicit array lengths");
+        "VARIABLES shows all scalars and short arrays with explicit array lengths");
     const std::size_t gatesPosition = FindAscii(wideDebug, "[gates[2]=[on, off]]");
     const std::size_t valuesPosition = FindAscii(wideDebug, "[values[10]=[");
     const std::size_t combatPosition = FindAscii(wideDebug, "[combat=off]");
@@ -1290,32 +1338,30 @@ void TestController()
         gatesPosition < wideDebug.Cells().size()
             && valuesPosition < wideDebug.Cells().size()
             && wideDebugText.find("10]]") != std::string::npos,
-        "STATE wraps array cells without dropping their suffix");
+        "VARIABLES wraps array cells without dropping their suffix");
     Check(
         combatPosition / wideDebug.Width() == countPosition / wideDebug.Width()
             && countPosition / wideDebug.Width()
                 == delayPosition / wideDebug.Width()
             && countPosition - combatPosition == 14U
             && delayPosition - countPosition == 11U,
-        "STATE fills rows in order with a fixed two-cell gap");
+        "VARIABLES fills rows in order with a fixed two-cell gap");
     const std::string veryWideDebugText = CanvasText(controller.Render(360U, 30U));
     Check(
         veryWideDebugText.find(
             "[values[10]=[1, 2, 3, 4, ..., 7, 8, 9, 10]]")
             != std::string::npos,
-        "STATE renders exact length with bounded prefix and suffix for long arrays");
-    const std::size_t stateNumber = FindAscii(wideDebug, "count=2");
-    const std::size_t stateControl = FindAscii(wideDebug, "LCtrl PHY");
+        "VARIABLES renders exact length with bounded prefix and suffix for long arrays");
     Check(
-        stateNumber < stateControl
-            && stateControl < wideDebug.Cells().size(),
-        "STATE keeps user values before pressed controls");
+        BoxText(wideDebug, "VARIABLES").find("count=2") != std::string::npos
+            && BoxText(wideDebug, "INPUT STATE").find("LCtrl PHY") != std::string::npos,
+        "VARIABLES and INPUT STATE retain user values and pressed controls in separate regions");
     TestMouseDebugRendering(controller, platform);
     controller.Handle({Key::Right, 0U});
     const auto stateDebug = controller.Render(80U, 24U);
     Check(
-        stateDebug.Cells()[0U].style.foreground == colors.focusState,
-        "Debug header color follows the selected State region");
+        stateDebug.Cells()[0U].style.foreground == colors.focusMeters,
+        "Debug header color follows the selected Meters region");
     auto faultState = std::make_shared<inputweaver::debug::DebugClientState>();
     faultState->lastFault = inputweaver::debug::DebugClientFault::ConnectionLost;
     platform.debugState = faultState;
@@ -1705,8 +1751,8 @@ void TestSpatialNavigation()
                     ? color
                     : colors.unfocusedBorder);
     };
-    constexpr std::array<std::string_view, 3U> debugTitles{
-        "EVENTS", "STATE", "ACTION EXECUTIONS"};
+    constexpr std::array<std::string_view, 5U> debugTitles{
+        "EVENTS", "VARIABLES", "INPUT STATE", "METERS", "ACTION EXECUTIONS"};
     const auto debugRegionIs = [&](
                                    std::string_view title,
                                    inputweaver::ui::tui::RgbColor color) {
@@ -1720,13 +1766,17 @@ void TestSpatialNavigation()
             && UpperBoxClosesBefore(
                 canvas,
                 "EVENTS",
-                "ACTION EXECUTIONS",
+                "INPUT STATE",
                 title == "EVENTS" ? color : colors.unfocusedBorder)
             && UpperBoxClosesBefore(
                 canvas,
-                "STATE",
+                "VARIABLES",
                 "ACTION EXECUTIONS",
-                title == "STATE" ? color : colors.unfocusedBorder);
+                title == "VARIABLES" ? color : colors.unfocusedBorder)
+            && UpperBoxClosesBefore(canvas, "INPUT STATE", "ACTION EXECUTIONS",
+                title == "INPUT STATE" ? color : colors.unfocusedBorder)
+            && UpperBoxClosesBefore(canvas, "METERS", "VARIABLES",
+                title == "METERS" ? color : colors.unfocusedBorder);
     };
     struct RegionStep final {
         Key key;
@@ -1877,10 +1927,14 @@ void TestSpatialNavigation()
         debugRegionIs("EVENTS", colors.focusEvents),
         "Debug initially selects the Events body region");
     const std::array debugTabSteps{
-        RegionStep{Key::Tab, "STATE", colors.focusState,
-                   "Tab enters State directly from region selection"},
+        RegionStep{Key::Tab, "INPUT STATE", colors.focusInputState,
+                   "Tab enters Input State directly from region selection"},
+        RegionStep{Key::Tab, "METERS", colors.focusMeters,
+                   "Tab switches Input State to Meters"},
+        RegionStep{Key::Tab, "VARIABLES", colors.focusVariables,
+                   "Tab switches Meters to Variables"},
         RegionStep{Key::Tab, "ACTION EXECUTIONS", colors.focusActionExecutions,
-                   "Tab switches an active State region to Executions"},
+                   "Tab switches Variables to Executions"},
         RegionStep{Key::Tab, "EVENTS", colors.focusEvents,
                    "Tab wraps Executions back to active Events"}};
     for (const RegionStep& step : debugTabSteps) {
@@ -1897,37 +1951,46 @@ void TestSpatialNavigation()
                    "Events retains its upper boundary"},
         RegionStep{Key::Left, "EVENTS", colors.focusEvents,
                    "Events retains its left boundary"},
-        RegionStep{Key::Right, "STATE", colors.focusState,
-                   "Events moves right to State"},
-        RegionStep{Key::Up, "STATE", colors.focusState,
-                   "State retains its upper boundary"},
-        RegionStep{Key::Right, "STATE", colors.focusState,
-                   "State retains its right boundary"},
+        RegionStep{Key::Right, "METERS", colors.focusMeters,
+                   "Events moves right to Meters"},
+        RegionStep{Key::Right, "METERS", colors.focusMeters,
+                   "Meters retains its right boundary"},
+        RegionStep{Key::Up, "METERS", colors.focusMeters,
+                   "Meters retains its upper boundary"},
+        RegionStep{Key::Down, "VARIABLES", colors.focusVariables,
+                   "Meters moves down to Variables"},
+        RegionStep{Key::Right, "VARIABLES", colors.focusVariables,
+                   "Variables retains its right boundary"},
+        RegionStep{Key::Left, "INPUT STATE", colors.focusInputState,
+                   "Variables moves left to Input State"},
+        RegionStep{Key::Left, "INPUT STATE", colors.focusInputState,
+                   "Input State retains its left boundary"},
+        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
+                   "Input State moves up to Events"},
+        RegionStep{Key::Down, "INPUT STATE", colors.focusInputState,
+                   "Events moves down to Input State"},
+        RegionStep{Key::Right, "VARIABLES", colors.focusVariables,
+                   "Input State moves right to Variables"},
+        RegionStep{Key::Up, "METERS", colors.focusMeters,
+                   "Variables moves up to Meters"},
         RegionStep{Key::Left, "EVENTS", colors.focusEvents,
-                   "State moves left to Events"},
-        RegionStep{Key::Down, "ACTION EXECUTIONS",
-                   colors.focusActionExecutions,
-                   "Events moves down to Executions"},
-        RegionStep{Key::Down, "ACTION EXECUTIONS",
-                   colors.focusActionExecutions,
+                   "Meters moves left to Events"},
+        RegionStep{Key::Down, "INPUT STATE", colors.focusInputState,
+                   "Events returns to Input State"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS", colors.focusActionExecutions,
+                   "Input State moves down to Executions"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS", colors.focusActionExecutions,
                    "Executions retains its lower boundary"},
-        RegionStep{Key::Left, "ACTION EXECUTIONS",
-                   colors.focusActionExecutions,
-                   "Executions retains its left boundary"},
-        RegionStep{Key::Right, "ACTION EXECUTIONS",
-                   colors.focusActionExecutions,
+        RegionStep{Key::Right, "ACTION EXECUTIONS", colors.focusActionExecutions,
                    "Executions retains its right boundary"},
-        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
-                   "Executions moves up to Events"},
-        RegionStep{Key::Right, "STATE", colors.focusState,
-                   "Events moves right to State again"},
-        RegionStep{Key::Down, "ACTION EXECUTIONS",
-                   colors.focusActionExecutions,
-                   "State moves down to Executions"},
-        RegionStep{Key::Up, "EVENTS", colors.focusEvents,
-                   "Executions moves up to Events again"},
-        RegionStep{Key::Right, "STATE", colors.focusState,
-                   "Events moves right to State for preservation"}};
+        RegionStep{Key::Left, "ACTION EXECUTIONS", colors.focusActionExecutions,
+                   "Executions retains its left boundary"},
+        RegionStep{Key::Up, "VARIABLES", colors.focusVariables,
+                   "Executions moves up to Variables"},
+        RegionStep{Key::Down, "ACTION EXECUTIONS", colors.focusActionExecutions,
+                   "Variables moves down to Executions"},
+        RegionStep{Key::Up, "VARIABLES", colors.focusVariables,
+                   "Executions returns to Variables for preservation"}};
     for (const RegionStep& step : debugSteps) {
         controller.Handle({step.key, 0U});
         Check(debugRegionIs(step.title, step.color), step.assertion);
@@ -1936,20 +1999,20 @@ void TestSpatialNavigation()
     controller.Handle({Key::Character, U']'});
     Check(
         controller.CurrentPage() == Page::Debug
-            && debugRegionIs("STATE", colors.focusState)
+            && debugRegionIs("VARIABLES", colors.focusVariables)
             && CanvasText(controller.Render(100U, 30U))
                     .find("[Arrow Keys] Region")
                 != std::string::npos,
-        "Debug preserves its selected State region across page changes");
+        "Debug preserves its selected Variables region across page changes");
     controller.Handle({Key::Enter, 0U});
     controller.Handle({Key::Character, U'['});
     controller.Handle({Key::Character, U']'});
     Check(
         controller.CurrentPage() == Page::Debug
-            && debugRegionIs("STATE", colors.focusState)
+            && debugRegionIs("VARIABLES", colors.focusVariables)
             && CanvasText(controller.Render(100U, 30U)).find("[Esc] Regions")
                 != std::string::npos,
-        "Debug preserves its active State region across page changes");
+        "Debug preserves its active Variables region across page changes");
     controller.Handle({Key::Escape, 0U});
     Check(
         controller.CurrentPage() == Page::Debug

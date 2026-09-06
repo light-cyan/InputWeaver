@@ -23,7 +23,9 @@ struct ColorScheme final {
     RgbColor focusProgramInformation{};
     RgbColor focusSource{};
     RgbColor focusEvents{};
-    RgbColor focusState{};
+    RgbColor focusVariables{};
+    RgbColor focusInputState{};
+    RgbColor focusMeters{};
     RgbColor focusActionExecutions{};
     RgbColor selectionActiveForeground{};
     RgbColor selectionActiveBackground{};

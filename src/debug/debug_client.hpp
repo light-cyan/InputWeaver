@@ -84,6 +84,7 @@ struct DebugInputEvent final {
     MousePoint position{};
     MouseDelta delta{};
     MouseOccurrence occurrence{};
+    std::uint64_t repeatCount{1U};
 };
 
 struct DebugPressedControl final {

@@ -80,7 +80,8 @@ void TestMouseDebugTransport()
     Check(server.PublishInput(correlation, raw), "parent raw input follows its runtime records");
     Check(WaitUntil([&] {
         const auto state = client.ReadState();
-        return state->captureTrusted && state->recentInputEvents.empty() && state->ruleExecutions.size() == 1
+        return state->captureTrusted && state->recentInputEvents.size() == 1
+            && state->recentInputEvents[0].occurrence.source == MeterId{0} && state->ruleExecutions.size() == 1
             && state->ruleExecutions[0].completedMeters.size() == 3 && state->ruleExecutions[0].result.has_value();
     }), "native pipe transport correlates raw input, tick, and all fixed selections");
     observation.latest.store(19);

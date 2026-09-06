@@ -46,7 +46,9 @@ private:
 
     enum class DebugRegion : std::uint8_t {
         Events,
-        State,
+        InputState,
+        Variables,
+        Meters,
         Executions,
     };
 
@@ -159,7 +161,9 @@ private:
     Viewport programsViewport_;
     Viewport dumpViewport_;
     Viewport eventsViewport_;
-    Viewport stateViewport_;
+    Viewport variablesViewport_;
+    Viewport inputStateViewport_;
+    Viewport metersViewport_;
     Viewport executionsViewport_;
     std::chrono::steady_clock::time_point validationDue_{};
     std::chrono::steady_clock::time_point cursorVisibleSince_{

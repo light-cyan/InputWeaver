@@ -8,7 +8,7 @@
 
 Windows 10 或 Windows 11 x64 用户解压完整的 `InputWeaver-windows-x64.zip`，进入其中的 `InputWeaver` 文件夹并运行 `InputWeaverHost.exe`。不要在 ZIP 内直接运行，也不要拆散同目录中的四个 EXE 和 `res` 文件夹；发行版已静态链接 MinGW 的 GCC 与 C++ 运行库，不要求目标电脑安装 MinGW。源码仓库的维护者可以运行 `script\package_release.bat`，在 `bin\release\` 中重新生成同样的目录和 ZIP。
 
-前端窗口至少保留 `80x24` 个文本单元格。程序启动后进入 Program 页；Program、Console 和 Debug 是三个顶层页面。顶部边框使用 `InputWeaver | ‹[ Console · PROGRAM · Debug ]›` 形式显示固定页面顺序，当前页面使用大写，整段页面轨道使用当前页面或区域颜色突出显示；普通模式下，可用按键说明显示在顶部边框内。
+The frontend opens at 144x44 cells and permits resizing down to 100x32 cells. It starts on Program; Console, Program, and Debug form the page rail shown as `InputWeaver | ‹[ Console · PROGRAM · Debug ]›`. The active page is uppercase and uses the current page or region color. Keyboard hints appear in the header during ordinary interaction.
 
 顶层页面之间的移动如下：
 
@@ -166,33 +166,43 @@ Console 汇总应用、编译器和执行器输出。连续的同程序、同来
 
 ## Debug 页
 
-Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。页面首先处于区域选择状态：EVENTS 的 `[Right]` 进入 STATE、`[Down]` 进入 ACTION EXECUTIONS，STATE 的 `[Left]` 返回 EVENTS、`[Down]` 进入 ACTION EXECUTIONS，ACTION EXECUTIONS 的 `[Up]` 返回 EVENTS。按 `[Enter]` 进入所选区域后，方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动该区域；按 `[Esc]` 返回区域选择。
+Debug uses five independently scrollable regions. EVENTS sits above a compact INPUT STATE on the left; METERS sits above VARIABLES in the wider right column. ACTION EXECUTIONS spans the full width below them, with HEALTH retaining four rows at the bottom. INPUT STATE uses at most seven rows including borders. At the default 144x44 size, the left column is 54 cells wide and the right column is 90; METERS and VARIABLES each receive twelve rows. The three state titles remain distinct even when inactive: METERS is orange, VARIABLES is blue, and INPUT STATE is pink.
 
-The EVENTS/STATE row occupies approximately 60% of the body between the header and HEALTH; ACTION EXECUTIONS occupies the remaining 40%. EVENTS uses at most 60 columns, with STATE taking the remaining width. At the minimum 80-column window, EVENTS uses 53 columns and STATE uses 27 columns. HEALTH retains four rows.
+Region selection follows the columns: EVENTS moves down to INPUT STATE, and METERS moves down to VARIABLES. Left and right move between EVENTS and METERS, or between INPUT STATE and VARIABLES. Both lower regions move down to ACTION EXECUTIONS, whose up key returns to VARIABLES. `[Enter]` activates the selected region; `[Esc]` returns to region selection. Active regions use `[Up]` / `[Down]`, `[PageUp]` / `[PageDown]`, `[Home]`, and `[End]` to scroll.
 
-`[Tab]` cycles through EVENTS, STATE, and ACTION EXECUTIONS, then wraps to EVENTS. Each switch directly activates the destination region, from either region selection or an active region.
+`[Tab]` cycles through EVENTS, INPUT STATE, METERS, VARIABLES, and ACTION EXECUTIONS, then wraps to EVENTS. Each switch directly activates the destination region, from either region selection or an active region.
 
-During an active Debug session, `[C]` stops capture or starts a new capture generation while keeping the executor running. `[X]` requests executor shutdown and immediately clears the Debug session, including EVENTS, STATE, ACTION EXECUTIONS, and HEALTH; the same cleanup applies when stopping that program from the Program page. During delayed startup, `[X]` cancels the pending launch. When the executor terminates independently, its final snapshot remains available for inspection until `[X]` clears it or a new Debug session starts. `[` returns to Program; `[Esc]` also returns to Program from region selection.
+During an active Debug session, `[C]` stops capture or starts a new capture generation while keeping the executor running. `[X]` requests executor shutdown and immediately clears the Debug session, including EVENTS, VARIABLES, INPUT STATE, METERS, ACTION EXECUTIONS, and HEALTH; the same cleanup applies when stopping that program from the Program page. During delayed startup, `[X]` cancels the pending launch. When the executor terminates independently, its final snapshot remains available for inspection until `[X]` clears it or a new Debug session starts. `[` returns to Program; `[Esc]` also returns to Program from region selection.
 
 ### EVENTS
 
-EVENTS 的每一行依次显示捕获时间、控制、转换、来源和处置结果，并可能附加 `AGAIN` 或 `NO-DOWN`：
+Keyboard events, mouse-button events, and meter completions share aligned TIME, SOURCE, EVENT, ORIG, PASS, and COUNT columns. COUNT shows the number of meter ticks represented by the row. Keyboard and mouse-button rows show `_` in this column, including repeated presses. EVENT shows `down`, `up`, `AGAIN`, `NO-DOWN`, or `tick`. Meter rows use the meter name as SOURCE and show `-` in the origin and disposition columns. Completions whose rules do not match also appear.
 
 ```text
-16:28:38.582  A                 down     PHY   PASS
-16:28:38.610  B                 down     SYN   DROP
-16:28:38.700  F22               down     INIT  -
+TIME         SOURCE          EVENT   ORIG PASS COUNT
+16:28:38.582 A               down    PHY  PASS     _
+16:28:38.610 B               down    EXT  DROP     _
+16:28:38.700 F22             down    INIT -        _
+16:28:38.950 path            tick    -    -      128
 ```
 
-来源 `PHY` 表示物理候选输入，`SYN` 表示注入来源，`INIT` 表示开始捕获时取得的已按下控制快照。`INIT` 不是捕获后发生的一次新按下；它只把初始按下状态送入 DebugClient，因此转换固定为 `down`，处置结果固定为 `-`。例如 `F22 down INIT -` 表示 Windows 在捕获开始时报告 F22 已处于按下状态。
+Consecutive ticks from the same meter update one row with the latest capture time and total count. Consecutive `AGAIN` reports for the same control, origin, and disposition also share one row. Other visible events start a new row. The visible history retains at most 512 rows, while exact input and cycle identities remain available in separate bounded histories for action correlation.
 
-`PASS` 表示运行时放行当前输入，`DROP` 表示运行时决定消费当前输入；在 Dry-run 中，界面仍显示正常模式下的逻辑决定，但物理输入最终始终放行。`AGAIN` 表示按下发生在已有按下状态之后，`NO-DOWN` 表示释放前没有对应的已知按下。
+`PHY` identifies physical candidate input, `ECHO` identifies this executor's injected input, `EXT` identifies other injected input, and `INIT` identifies controls sampled as already held when capture starts. `PASS` and `DROP` report the runtime decision; Dry-run displays that decision while allowing physical input through. `AGAIN` means a down report for an already-held control, and `NO-DOWN` means a release without a known matching press.
 
-### STATE
+### VARIABLES
 
-STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值以及全部数组，再显示当前按下的控制；`off`、`0` 和空数组也会显示。数组始终在名称后显示逻辑长度，分别显示为 `[values[0]=[]]`、`[values[3]=[2, 4, 8]]`，长数组显示为 `[values[1000]=[0, 1, 2, 3, ..., 996, 997, 998, 999]]`。项目按顺序使用固定最小间隔填充当前行，剩余宽度不足以容纳下一个完整项目时移到下一行；单个项目超过 STATE 区域宽度时才会换行，并随 STATE viewport 一起滚动。控制项同时标出其当前来源，例如 `[LCtrl PHY]` 或 `[F22 INIT]`。
+VARIABLES shows every user scalar and array, including `off`, zero, and empty arrays. Arrays include their logical length, such as `[values[3]=[2, 4, 8]]`; long arrays show bounded prefix and suffix values. Cells fill each row with a two-column gap and wrap when wider than the region. Capture starts with complete scalar and array snapshots, followed by incremental updates. `PAUSE` appears in HEALTH.
 
-开始捕获时，执行器发送 `PAUSE`、全部用户标量值和全部数组快照；实际运行产生的变化随后以增量方式同步。`PAUSE` 不重复放在 STATE 中，而是固定显示在 HEALTH。
+### INPUT STATE
+
+INPUT STATE starts with currently held keyboard keys and mouse buttons, including their origins, such as `[LCtrl PHY]`, `[Mouse.Left PHY]`, and `[F22 INIT]`. Releases remove the corresponding held state. Live mouse observation follows these controls.
+
+Debug observes mouse position and numeric input even when the running program only declares key rules. INPUT STATE separates `Mouse pos(x,y)`, `d(dx,dy)`, `wheel(x,y)`, movement status, and `idle(time)` into short fields. Wheel pairs list horizontal then vertical amount; the status becomes `idle` when movement stops. Idle time uses seconds with at most one decimal place, such as `idle(0.1s)` or `idle(60s)`. The writer samples live mouse state every 50 ms while capturing. All numeric mouse fields in INPUT STATE and METERS use at most one decimal place: coordinates, displacement, wheel amounts, distance, progress, period, and durations. Integer results omit the decimal point, and values rounded to zero display as `0`. Language evaluation and captured data retain their original precision.
+
+### METERS
+
+Each meter uses one current row such as `[path 3/24 start(100,200) pos(103,200) d(3,0)]`: the fraction is progress/period, coordinate pairs are x/y, and `d` is net dx/dy. Duration meters also show `dist(length)`; wheel meters show signed progress/period and position. The following `@` row independently summarizes the latest completed cycle, or reads `empty`. Each entry occupies exactly one line; long entries are truncated to the available width. METERS scrolls independently.
 
 ### ACTION EXECUTIONS
 
@@ -208,6 +218,8 @@ STATE 先显示全部用户 `state`、`number` 和 `duration` 当前值以及全
 
 普通动作规则的 ACT 显示完整动作管线；完整按键映射虽然不经过普通动作程序，但也会建立执行记录，并把完整映射源码显示在 ACT。规则没有条件时 AS 显示 `always`。
 
+Mouse trigger labels are `Mouse (move)`, `Mouse (wheel)`, `Mouse (horizontalwheel)`, or `name (tick)`. Each execution retains its exact trigger and selected completed cycles while EVENTS groups repeated observations.
+
 ### HEALTH
 
 HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient 故障、运行时问题数量和最近问题。执行器结束后显示 `Terminated` 和退出代码；完整的最终快照显示为 `Complete snapshot`，可能不完整的快照显示为 `Best-effort snapshot`。没有 Debug 会话时使用普通颜色；等待 Debug 启动或恢复捕获时使用恢复颜色，状态可信且没有问题时使用健康颜色，异常退出、best-effort 快照、故障或运行时问题使用故障颜色。
@@ -220,15 +232,6 @@ HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient �
 
 该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
 
-## Mouse observation
-
-Debug observes mouse position and numeric input even when the running program only declares key rules. STATE groups the observation as `Mouse pos(x,y) d(dx,dy) wheel(x,y) moving idle(time)`. Wheel pairs list horizontal then vertical amount; the status becomes `idle` when movement stops. Idle time always uses seconds, such as `idle(0.012s)` or `idle(60s)`. The writer samples live mouse state every 50 ms while capturing. Mouse numbers use six significant digits for display; language evaluation and captured data retain their original precision.
-
-Each meter uses a compact current row such as `[path 3/24 start(100,200) pos(103,200) d(3,0)]`: the fraction is progress/period, coordinate pairs are x/y, and `d` is net dx/dy. Duration meters also show `dist(length)`; wheel meters show signed progress/period and position. The `@` row summarizes the latest completed cycle, or reads `empty`. Groups wrap within the existing scrollable regions.
-
-EVENTS contains keyboard and mouse-button transitions. Numeric mouse reports and meter ticks use a separate internal correlation history, preserving the visible key history during continuous mouse input.
-
-ACTION EXECUTIONS shows the trigger, condition, and action. Mouse trigger labels are `Mouse (move)`, `Mouse (wheel)`, `Mouse (horizontalwheel)`, or `name (tick)`; grouped mouse values belong to STATE. Task snapshots and correlation identities remain internal. A new capture rebuilds the displayed state from the runtime while preserving meter phase and completion identities.
 
 ## 配色
 

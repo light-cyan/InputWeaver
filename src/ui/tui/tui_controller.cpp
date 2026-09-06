@@ -52,6 +52,9 @@ TuiController::TuiController(
       colors_(colors),
       snapshot_(application.ReadSnapshot())
 {
+    variablesViewport_.Home();
+    inputStateViewport_.Home();
+    metersViewport_.Home();
     ReloadDocument();
 }
 
@@ -877,10 +880,14 @@ void TuiController::HandleDebug(const KeyEvent& event)
 {
     if (event.key == Key::Tab && !event.shift) {
         debugRegion_ = debugRegion_ == DebugRegion::Events
-            ? DebugRegion::State
-            : debugRegion_ == DebugRegion::State
-                ? DebugRegion::Executions
-                : DebugRegion::Events;
+            ? DebugRegion::InputState
+            : debugRegion_ == DebugRegion::InputState
+                ? DebugRegion::Meters
+                : debugRegion_ == DebugRegion::Meters
+                    ? DebugRegion::Variables
+                    : debugRegion_ == DebugRegion::Variables
+                        ? DebugRegion::Executions
+                        : DebugRegion::Events;
         debugInteraction_ = RegionInteraction::Active;
         return;
     }
@@ -921,12 +928,22 @@ void TuiController::HandleDebug(const KeyEvent& event)
         }
         return;
     }
-    if (debugRegion_ == DebugRegion::Events) {
+    switch (debugRegion_) {
+    case DebugRegion::Events:
         HandleViewport(eventsViewport_, event);
-    } else if (debugRegion_ == DebugRegion::State) {
-        HandleViewport(stateViewport_, event);
-    } else {
+        break;
+    case DebugRegion::Variables:
+        HandleViewport(variablesViewport_, event);
+        break;
+    case DebugRegion::InputState:
+        HandleViewport(inputStateViewport_, event);
+        break;
+    case DebugRegion::Meters:
+        HandleViewport(metersViewport_, event);
+        break;
+    case DebugRegion::Executions:
         HandleViewport(executionsViewport_, event);
+        break;
     }
 }
 
@@ -935,21 +952,39 @@ void TuiController::SelectDebugRegion(Key key) noexcept
     switch (debugRegion_) {
     case DebugRegion::Events:
         if (key == Key::Right) {
-            debugRegion_ = DebugRegion::State;
+            debugRegion_ = DebugRegion::Meters;
+        } else if (key == Key::Down) {
+            debugRegion_ = DebugRegion::InputState;
+        }
+        break;
+    case DebugRegion::Variables:
+        if (key == Key::Up) {
+            debugRegion_ = DebugRegion::Meters;
+        } else if (key == Key::Left) {
+            debugRegion_ = DebugRegion::InputState;
         } else if (key == Key::Down) {
             debugRegion_ = DebugRegion::Executions;
         }
         break;
-    case DebugRegion::State:
+    case DebugRegion::InputState:
+        if (key == Key::Up) {
+            debugRegion_ = DebugRegion::Events;
+        } else if (key == Key::Right) {
+            debugRegion_ = DebugRegion::Variables;
+        } else if (key == Key::Down) {
+            debugRegion_ = DebugRegion::Executions;
+        }
+        break;
+    case DebugRegion::Meters:
         if (key == Key::Left) {
             debugRegion_ = DebugRegion::Events;
         } else if (key == Key::Down) {
-            debugRegion_ = DebugRegion::Executions;
+            debugRegion_ = DebugRegion::Variables;
         }
         break;
     case DebugRegion::Executions:
         if (key == Key::Up) {
-            debugRegion_ = DebugRegion::Events;
+            debugRegion_ = DebugRegion::Variables;
         }
         break;
     }

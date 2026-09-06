@@ -1,0 +1,196 @@
+// Mouse Arcade: mirror dash, orbital flight, and air scrolling.
+// Select a runtime target when launching this example.
+// Hold either Ctrl to park the pointer and drag to charge; release the last Ctrl to dash.
+// Travel adds charge every 240 pixels; sustained movement adds a bonus every 2 seconds.
+// Charge caps at five. Mirroring starts enabled and reverses horizontal motion and dashes.
+// While holding Ctrl:
+//   Wheel: change power once per four detents, between one and three.
+//   Horizontal wheel: rotate the dash direction by 90 degrees per four detents.
+//   Left drag: scroll vertically and horizontally with mouse movement.
+//   Right click: orbit the saved home point, then return to it.
+//   Middle click: return home. Digit2: save a new home point.
+//   Space: cancel. Digit1: rotate aim. Digit9: toggle mirroring. Digit0: reset.
+// Keep either Ctrl held throughout an orbit; releasing both cancels the flight.
+// Either Shift suspends/resumes. Ctrl+Esc exits.
+// Debug shows charge, power, heading, shots, and the four live meters.
+
+MOUSE_IDLE_TIMEOUT = 250ms;
+
+meter travel = Mouse:move every 240;
+meter streak = Mouse:move every 2s;
+meter throttle = Mouse:wheel every 4;
+meter rudder = Mouse:horizontalwheel every 4;
+
+state charging = off;
+state mirror = on;
+state homeReady = off;
+state orbiting = off;
+state stopOrbit = off;
+number charge = 0;
+number power = 2;
+number heading = 0;
+number shots = 0;
+number pullX = 0;
+number pullY = 0;
+number scale = 0;
+number swap = 0;
+number homeX = 0;
+number homeY = 0;
+number orbitStep = 0;
+number[] orbitX = [1, 0.7, 0, -0.7, -1, -0.7, 0, 0.7];
+number[] orbitY = [0, 0.7, 1, 0.7, 0, -0.7, -1, -0.7];
+
+// The first held Ctrl starts a fresh charge; an overlapping Ctrl shares that session.
+LCtrl:down when RCtrl == idle =>
+    set(stopOrbit, on) set(charging, on)
+    set(charge, 0) set(pullX, 0) set(pullY, 0)
+    if homeReady == off then
+        set(homeX, Mouse.x) set(homeY, Mouse.y) set(homeReady, on)
+    end
+    restart(travel) restart(streak) restart(throttle) restart(rudder);
+RCtrl:down when LCtrl == idle =>
+    set(stopOrbit, on) set(charging, on)
+    set(charge, 0) set(pullX, 0) set(pullY, 0)
+    if homeReady == off then
+        set(homeX, Mouse.x) set(homeY, Mouse.y) set(homeReady, on)
+    end
+    restart(travel) restart(streak) restart(throttle) restart(rudder);
+LCtrl:down =>;
+RCtrl:down =>;
+LCtrl:again =>;
+RCtrl:again =>;
+
+// Air scrolling consumes movement and accumulates fractional wheel output.
+Mouse:move when (LCtrl == held or RCtrl == held) and Mouse.Left == held =>
+    set(charging, off) set(stopOrbit, on)
+    scroll_horizontal(Mouse.dx / 120) scroll(-Mouse.dy / 120);
+Mouse:move when (LCtrl == held or RCtrl == held) =>
+    if charging == on then
+        set(pullX, pullX + Mouse.dx) set(pullY, pullY + Mouse.dy)
+    end;
+Mouse:move when mirror == on => move_by(-Mouse.dx, Mouse.dy);
+Mouse:wheel when (LCtrl == held or RCtrl == held) =>;
+Mouse:horizontalwheel when (LCtrl == held or RCtrl == held) =>;
+Mouse.Left:down when (LCtrl == held or RCtrl == held) => set(charging, off) set(stopOrbit, on);
+Mouse.Left:up when (LCtrl == held or RCtrl == held) =>;
+
+// Two different meter types award charge, including back-and-forth movement.
+travel:tick when (LCtrl == held or RCtrl == held) and charging == on ~>
+    if charge < 5 then set(charge, charge + 1) end;
+streak:tick when (LCtrl == held or RCtrl == held) and charging == on ~>
+    if charge < 5 then set(charge, charge + 1) end;
+
+// Completed wheel snapshots preserve the direction of each dial step.
+throttle:tick when (LCtrl == held or RCtrl == held) ~>
+    if @throttle.wheel_y > 0 and power < 3 then set(power, power + 1) end
+    if @throttle.wheel_y < 0 and power > 1 then set(power, power - 1) end;
+rudder:tick when (LCtrl == held or RCtrl == held) ~>
+    if @rudder.wheel_x > 0 then set(heading, heading + 1) end
+    if @rudder.wheel_x < 0 then set(heading, heading - 1) end
+    if heading > 3 then set(heading, 0) end
+    if heading < 0 then set(heading, 3) end;
+
+// Rotate net drag, then normalize it. The longer axis travels at most 420 pixels.
+// A zero net drag produces no shot; all launch calculations run without yielding.
+LCtrl:up when RCtrl == idle =>
+    set(stopOrbit, on)
+    if charging == on then
+        set(charging, off)
+        if heading == 1 then
+            set(swap, pullX) set(pullX, -pullY) set(pullY, swap)
+        end
+        if heading == 2 then set(pullX, -pullX) set(pullY, -pullY) end
+        if heading == 3 then
+            set(swap, pullX) set(pullX, pullY) set(pullY, -swap)
+        end
+        set(scale, pullX)
+        if scale < 0 then set(scale, -scale) end
+        if pullY > scale then set(scale, pullY) end
+        if -pullY > scale then set(scale, -pullY) end
+        if scale > 0 then
+            set(scale, (40 + charge * 20) * power / scale)
+            if mirror == on then
+                move_by(-pullX * scale, pullY * scale)
+            else
+                move_by(pullX * scale, pullY * scale)
+            end
+            set(shots, shots + 1)
+        end
+    end;
+RCtrl:up when LCtrl == idle =>
+    set(stopOrbit, on)
+    if charging == on then
+        set(charging, off)
+        if heading == 1 then
+            set(swap, pullX) set(pullX, -pullY) set(pullY, swap)
+        end
+        if heading == 2 then set(pullX, -pullX) set(pullY, -pullY) end
+        if heading == 3 then
+            set(swap, pullX) set(pullX, pullY) set(pullY, -swap)
+        end
+        set(scale, pullX)
+        if scale < 0 then set(scale, -scale) end
+        if pullY > scale then set(scale, pullY) end
+        if -pullY > scale then set(scale, -pullY) end
+        if scale > 0 then
+            set(scale, (40 + charge * 20) * power / scale)
+            if mirror == on then
+                move_by(-pullX * scale, pullY * scale)
+            else
+                move_by(pullX * scale, pullY * scale)
+            end
+            set(shots, shots + 1)
+        end
+    end;
+LCtrl:up =>;
+RCtrl:up =>;
+
+// Middle click recalls home; Ctrl+2 stores a new point.
+Mouse.Middle:down when (LCtrl == held or RCtrl == held) =>
+    set(stopOrbit, on) set(charging, off)
+    if homeReady == on then move_to(homeX, homeY) end;
+Mouse.Middle:up when (LCtrl == held or RCtrl == held) =>;
+
+// A single cancellable orbit task owns the animation index. Power sets its radius.
+Mouse.Right:down when (LCtrl == held or RCtrl == held) and homeReady == on and orbiting == off =>
+    set(charging, off) set(orbiting, on) set(stopOrbit, off) set(orbitStep, 0)
+    while orbitStep < orbitX.length and stopOrbit == off and (LCtrl == held or RCtrl == held) do
+        move_to(homeX + orbitX[orbitStep] * power * 40,
+                homeY + orbitY[orbitStep] * power * 40)
+        wait(50ms)
+        set(orbitStep, orbitStep + 1)
+    end
+    if stopOrbit == off and (LCtrl == held or RCtrl == held) then move_to(homeX, homeY) end
+    set(orbiting, off);
+Mouse.Right:down when (LCtrl == held or RCtrl == held) =>;
+Mouse.Right:up when (LCtrl == held or RCtrl == held) =>;
+
+Space:down when (LCtrl == held or RCtrl == held) =>
+    set(stopOrbit, on) set(charging, off) set(charge, 0)
+    set(pullX, 0) set(pullY, 0)
+    restart(travel) restart(streak);
+Space:again when (LCtrl == held or RCtrl == held) =>;
+Space:up when (LCtrl == held or RCtrl == held) =>;
+Digit1:down when (LCtrl == held or RCtrl == held) =>
+    set(heading, heading + 1)
+    if heading > 3 then set(heading, 0) end;
+Digit2:down when (LCtrl == held or RCtrl == held) =>
+    set(stopOrbit, on) set(charging, off)
+    set(homeX, Mouse.x) set(homeY, Mouse.y) set(homeReady, on);
+Digit9:down when (LCtrl == held or RCtrl == held) => toggle(mirror);
+Digit0:down when (LCtrl == held or RCtrl == held) =>
+    set(stopOrbit, on) set(charging, off) set(mirror, on) set(homeReady, off)
+    set(charge, 0) set(power, 2) set(heading, 0) set(shots, 0)
+    set(pullX, 0) set(pullY, 0) set(scale, 0)
+    restart(travel) restart(streak) restart(throttle) restart(rudder);
+
+pause LShift:down when RShift == idle => toggle;
+pause RShift:down when LShift == idle => toggle;
+// Runtime pause cancels animation tasks; the final Shift release clears retained state.
+LShift:up when RShift == idle =>
+    set(charging, off) set(orbiting, off) set(stopOrbit, on)
+    set(charge, 0) set(pullX, 0) set(pullY, 0);
+RShift:up when LShift == idle =>
+    set(charging, off) set(orbiting, off) set(stopOrbit, on)
+    set(charge, 0) set(pullX, 0) set(pullY, 0);
+exit Esc:down when (LCtrl == held or RCtrl == held);

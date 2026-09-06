@@ -12,8 +12,8 @@
 
 namespace inputweaver::win32 {
 
-inline constexpr std::size_t kMinimumTuiColumns = 80U;
-inline constexpr std::size_t kMinimumTuiRows = 24U;
+inline constexpr std::size_t kMinimumTuiColumns = 100U;
+inline constexpr std::size_t kMinimumTuiRows = 32U;
 inline constexpr std::size_t kMaximumTuiColumns = 300U;
 inline constexpr std::size_t kMaximumTuiRows = 120U;
 

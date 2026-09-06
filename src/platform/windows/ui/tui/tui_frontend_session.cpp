@@ -224,8 +224,8 @@ bool TuiFrontendSession::Show(std::string& error)
     channel_.Reset(
         std::move(childToHost.read),
         std::move(hostToChild.write));
-    width_ = 80U;
-    height_ = 24U;
+    width_ = kMinimumTuiColumns;
+    height_ = kMinimumTuiRows;
     window_ = nullptr;
     startedAt_ = GetTickCount64();
     lastHeartbeatAt_ = startedAt_;

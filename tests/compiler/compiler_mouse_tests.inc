@@ -87,9 +87,9 @@ exit F12:down when @travel.valid == on;
             "mouse idle timeout defaults to 80 ms");
     }
 
-    const auto example = compiler::ValidateFile("examples/mouse-meters.weave");
+    const auto example = compiler::ValidateFile("examples/mouse-arcade.weave");
     for (const auto& diagnostic : example.diagnostics) {
         std::cerr << compiler::FormatCompileDiagnostic(diagnostic) << '\n';
     }
-    Check(example.succeeded, "the Code.exe mouse meter example compiles");
+    Check(example.succeeded, "the mouse arcade example compiles");
 }

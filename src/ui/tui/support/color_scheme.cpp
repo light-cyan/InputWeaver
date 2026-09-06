@@ -12,7 +12,7 @@
 namespace inputweaver::ui::tui {
 namespace {
 
-inline constexpr std::size_t kColorCount = 36U;
+inline constexpr std::size_t kColorCount = 38U;
 
 class JsonCursor final {
 public:
@@ -183,7 +183,7 @@ private:
         5U, "focus_program_information", focusProgramInformation)
     INPUTWEAVER_COLOR_FIELD(6U, "focus_source", focusSource)
     INPUTWEAVER_COLOR_FIELD(7U, "focus_events", focusEvents)
-    INPUTWEAVER_COLOR_FIELD(8U, "focus_state", focusState)
+    INPUTWEAVER_COLOR_FIELD(8U, "focus_variables", focusVariables)
     INPUTWEAVER_COLOR_FIELD(
         9U, "focus_action_executions", focusActionExecutions)
     INPUTWEAVER_COLOR_FIELD(
@@ -217,6 +217,8 @@ private:
     INPUTWEAVER_COLOR_FIELD(33U, "health_trusted", healthTrusted)
     INPUTWEAVER_COLOR_FIELD(34U, "health_recovering", healthRecovering)
     INPUTWEAVER_COLOR_FIELD(35U, "health_fault", healthFault)
+    INPUTWEAVER_COLOR_FIELD(36U, "focus_input_state", focusInputState)
+    INPUTWEAVER_COLOR_FIELD(37U, "focus_meters", focusMeters)
 #undef INPUTWEAVER_COLOR_FIELD
     return false;
 }

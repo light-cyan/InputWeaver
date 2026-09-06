@@ -16,8 +16,8 @@ namespace {
 
 inline constexpr wchar_t kWindowClassName[] = L"InputWeaverTuiWindow";
 inline constexpr wchar_t kWindowTitle[] = L"InputWeaver";
-inline constexpr std::size_t kDefaultColumns = 120U;
-inline constexpr std::size_t kDefaultRows = 36U;
+inline constexpr std::size_t kDefaultColumns = 144U;
+inline constexpr std::size_t kDefaultRows = 44U;
 inline constexpr int kBaseFontPixels = 16;
 
 [[nodiscard]] std::string WindowsError(DWORD error)

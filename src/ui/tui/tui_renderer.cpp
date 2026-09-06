@@ -268,20 +268,34 @@ void RenderLineEditor(
 
 #include "debug_mouse_format.inc"
 
-[[nodiscard]] std::string EventText(const debug::DebugInputEvent& event)
+[[nodiscard]] std::string EventColumns(
+    std::string_view time, std::string_view source, std::string_view event,
+    std::string_view origin, std::string_view result, std::string_view count,
+    std::size_t width)
 {
-    std::string text = FormatTime(event.captureUnixTimeMilliseconds) + "  "
-        + FixedField(ControlName(event.control), 16U) + "  "
-        + FixedField(TransitionText(event.transition), 7U) + "  "
-        + FixedField(debug::InputOriginLabel(event.origin), 4U) + "  "
-        + FixedField(DispositionText(event.disposition), 4U);
-    if (event.againDown) {
-        text += " AGAIN";
-    }
-    if (event.unmatchedUp) {
-        text += " NO-DOWN";
-    }
-    return text;
+    const std::size_t sourceWidth = (std::min)(std::size_t{16U}, width > 37U ? width - 37U : 1U);
+    std::string countText = TruncateUtf8(count, 5U);
+    countText.insert(0U, 5U - Utf8DisplayWidth(countText), ' ');
+    return FixedField(time, 12U) + ' ' + FixedField(source, sourceWidth) + ' '
+        + FixedField(event, 7U) + ' ' + FixedField(origin, 4U) + ' '
+        + FixedField(result, 4U) + ' ' + countText;
+}
+
+[[nodiscard]] std::string EventText(
+    const debug::DebugInputEvent& event,
+    const debug::DebugClientState& state,
+    std::size_t width)
+{
+    const bool tick = event.occurrence.source.IsValid();
+    const auto meter = event.occurrence.source.value;
+    const std::string source = tick
+        ? (meter < state.meters.size() ? state.meters[meter].name : "meter")
+        : ControlName(event.control);
+    const auto transition = tick ? "tick" : event.unmatchedUp ? "NO-DOWN"
+        : event.againDown ? "AGAIN" : TransitionText(event.transition);
+    return EventColumns(FormatTime(event.captureUnixTimeMilliseconds), source, transition,
+        tick ? "-" : debug::InputOriginLabel(event.origin),
+        tick ? "-" : DispositionText(event.disposition), tick ? std::to_string(event.repeatCount) : "_", width);
 }
 
 [[nodiscard]] std::string ExecutionEventText(
@@ -559,6 +573,52 @@ void RenderViewportRows(
         }
         renderRow(row, index);
     }
+}
+
+void RenderStateCells(
+    Canvas& canvas,
+    Viewport& viewport,
+    Rectangle box,
+    std::vector<std::string> cells,
+    RgbColor color)
+{
+    const std::size_t width = box.width - 2U;
+    using Row = std::vector<std::pair<std::size_t, std::string>>;
+    std::vector<Row> rows;
+    Row row;
+    std::size_t usedWidth{};
+    const auto finishRow = [&]() {
+        if (!row.empty()) {
+            rows.push_back(std::move(row));
+            row.clear();
+            usedWidth = 0U;
+        }
+    };
+    for (std::string& cell : cells) {
+        const std::size_t cellWidth = Utf8DisplayWidth(cell);
+        if (cellWidth > width) {
+            finishRow();
+            for (std::string& line : WrapUtf8(cell, width, 2U)) {
+                rows.push_back({{0U, std::move(line)}});
+            }
+            continue;
+        }
+        constexpr std::size_t gap = 2U;
+        if (!row.empty() && usedWidth + gap + cellWidth > width) {
+            finishRow();
+        }
+        const std::size_t placedAt = row.empty() ? 0U : usedWidth + gap;
+        row.emplace_back(placedAt, std::move(cell));
+        usedWidth = placedAt + cellWidth;
+    }
+    finishRow();
+    RenderViewportRows(viewport, rows.size(), box.height - 2U,
+        [&](std::size_t visibleRow, std::size_t index) {
+            for (const auto& [offset, text] : rows[index]) {
+                canvas.Text(box.x + 1U + offset, box.y + 1U + visibleRow,
+                    text, width - offset, Foreground(color));
+            }
+        });
 }
 
 [[nodiscard]] std::string DebugFaultText(debug::DebugClientFault fault)
@@ -843,6 +903,16 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
     }
 
     std::string headerTitle;
+    const auto debugRegionColor = [&](DebugRegion region) {
+        switch (region) {
+        case DebugRegion::Events: return colors_.focusEvents;
+        case DebugRegion::InputState: return colors_.focusInputState;
+        case DebugRegion::Meters: return colors_.focusMeters;
+        case DebugRegion::Variables: return colors_.focusVariables;
+        case DebugRegion::Executions: return colors_.focusActionExecutions;
+        }
+        return colors_.text;
+    };
     std::string_view pageRail;
     RgbColor headerColor{};
     std::vector<std::string> headerKeys;
@@ -979,11 +1049,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
     } else {
         pageRail = "‹[ Console · Program · DEBUG ]›";
         headerTitle = "InputWeaver | " + std::string{pageRail};
-        headerColor = debugRegion_ == DebugRegion::Events
-            ? colors_.focusEvents
-            : debugRegion_ == DebugRegion::State
-                ? colors_.focusState
-                : colors_.focusActionExecutions;
+        headerColor = debugRegionColor(debugRegion_);
         const std::string debugProgram = ProgramName(
             snapshot_,
             displayedDebugId);
@@ -1008,9 +1074,9 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         } else {
             std::string focusKey = debugRegion_ == DebugRegion::Events
                 ? "Event"
-                : debugRegion_ == DebugRegion::State
-                    ? "State Row"
-                    : "Execution";
+                : debugRegion_ == DebugRegion::Executions
+                    ? "Execution"
+                    : "State Row";
             headerKeys = {
                 "[↑]/[↓] " + focusKey,
                 "[PgUp]/[PgDn] Page",
@@ -1464,34 +1530,39 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
         const std::size_t healthY = height - healthRows;
         const std::size_t bodyTop = headerHeight;
         const std::size_t bodyHeight = healthY - bodyTop;
-        const std::size_t topHeight = (std::max)(
-            static_cast<std::size_t>(6U),
-            bodyHeight * 3U / 5U);
-        const std::size_t leftWidth = (std::min)(width * 2U / 3U, std::size_t{60U});
+        const std::size_t rowHeight = bodyHeight / 3U;
+        const std::size_t topHeight = rowHeight * 2U;
+        const std::size_t leftWidth = std::clamp(width * 3U / 8U, std::size_t{46U}, std::size_t{60U});
+        const std::size_t inputHeight = (std::min)(std::size_t{7U}, topHeight / 2U);
+        const std::size_t eventsHeight = topHeight - inputHeight;
+        const Rectangle variablesBox{
+            leftWidth, bodyTop + rowHeight, width - leftWidth, rowHeight};
+        const Rectangle inputBox{
+            0U, bodyTop + eventsHeight, leftWidth, inputHeight};
+        const Rectangle metersBox{
+            leftWidth, bodyTop, width - leftWidth, rowHeight};
         const RgbColor eventsBorder = RegionBorder(
             debugRegion_ == DebugRegion::Events,
             colors_.focusEvents,
-            colors_);
-        const RgbColor stateBorder = RegionBorder(
-            debugRegion_ == DebugRegion::State,
-            colors_.focusState,
             colors_);
         const RgbColor executionBorder = RegionBorder(
             debugRegion_ == DebugRegion::Executions,
             colors_.focusActionExecutions,
             colors_);
         canvas.Box(
-            {0U, bodyTop, leftWidth, topHeight},
+            {0U, bodyTop, leftWidth, eventsHeight},
             "EVENTS",
             eventsBorder,
             eventsBorder,
             colors_.text);
-        canvas.Box(
-            {leftWidth, bodyTop, width - leftWidth, topHeight},
-            "STATE",
-            stateBorder,
-            stateBorder,
-            colors_.text);
+        const auto stateBox = [&](Rectangle box, std::string_view title, DebugRegion region) {
+            const auto color = debugRegionColor(region);
+            const auto border = RegionBorder(debugRegion_ == region, color, colors_);
+            canvas.Box(box, title, border, color, colors_.text);
+        };
+        stateBox(variablesBox, "VARIABLES", DebugRegion::Variables);
+        stateBox(inputBox, "INPUT STATE", DebugRegion::InputState);
+        stateBox(metersBox, "METERS", DebugRegion::Meters);
         canvas.Box(
             {0U, bodyTop + topHeight, width, bodyHeight - topHeight},
             "ACTION EXECUTIONS",
@@ -1499,11 +1570,14 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             executionBorder,
             colors_.text);
 
+        canvas.Text(1U, bodyTop + 1U,
+            EventColumns("TIME", "SOURCE", "EVENT", "ORIG", "PASS", "COUNT", leftWidth - 2U),
+            leftWidth - 2U, Foreground(colors_.mutedText));
         if (debugState != nullptr) {
-            const std::size_t eventVisible = topHeight - 2U;
+            const std::size_t eventVisible = eventsHeight - 3U;
             std::vector<std::string> eventLines;
             for (const auto& event : debugState->recentInputEvents) {
-                eventLines.push_back(EventText(event));
+                eventLines.push_back(EventText(event, *debugState, leftWidth - 2U));
             }
             RenderViewportRows(
                 eventsViewport_,
@@ -1512,83 +1586,41 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 [&](std::size_t row, std::size_t index) {
                     canvas.Text(
                         1U,
-                        bodyTop + 1U + row,
+                        bodyTop + 2U + row,
                         eventLines[index],
                         leftWidth - 2U,
                         Foreground(colors_.text));
                 });
 
-            const std::size_t stateWidth = width - leftWidth - 2U;
-            std::vector<std::string> stateCells;
+            std::vector<std::string> variableCells;
             for (const debug::DebugVariableState& value : debugState->values) {
-                if (value.name == "PAUSE") {
-                    continue;
+                if (value.name != "PAUSE") {
+                    variableCells.push_back('[' + value.name + '='
+                        + DebugValueText(value.value) + ']');
                 }
-                std::string cell = '[' + value.name + '='
-                    + DebugValueText(value.value) + ']';
-                stateCells.push_back(std::move(cell));
             }
             for (const debug::DebugArrayState& array : debugState->arrays) {
-                stateCells.push_back(DebugArrayText(array));
+                variableCells.push_back(DebugArrayText(array));
             }
-            for (const debug::DebugPressedControl& pressed
-                 : debugState->pressedControls) {
-                std::string cell = '[' + ControlName(pressed.control) + ' '
-                    + std::string{debug::InputOriginLabel(pressed.origin)} + ']';
-                stateCells.push_back(std::move(cell));
+            RenderStateCells(canvas, variablesViewport_, variablesBox,
+                std::move(variableCells), colors_.text);
+
+            std::vector<std::string> inputCells;
+            for (const debug::DebugPressedControl& pressed : debugState->pressedControls) {
+                inputCells.push_back('[' + ControlName(pressed.control) + ' '
+                    + std::string{debug::InputOriginLabel(pressed.origin)} + ']');
             }
-            AppendMouseStateCells(stateCells, *debugState);
-            using StateLine = std::vector<std::pair<std::size_t, std::string>>;
-            std::vector<StateLine> stateRows;
-            StateLine stateLine;
-            std::size_t usedWidth{};
-            const auto finishStateLine = [&]() {
-                if (!stateLine.empty()) {
-                    stateRows.push_back(std::move(stateLine));
-                    stateLine.clear();
-                    usedWidth = 0U;
-                }
-            };
-            for (std::string& cell : stateCells) {
-                const std::size_t cellWidth = Utf8DisplayWidth(cell);
-                if (cellWidth > stateWidth) {
-                    finishStateLine();
-                    for (std::string& line : WrapUtf8(cell, stateWidth, 2U)) {
-                        StateLine wrapped;
-                        wrapped.emplace_back(0U, std::move(line));
-                        stateRows.push_back(std::move(wrapped));
-                    }
-                    continue;
-                }
-                constexpr std::size_t gap = 2U;
-                const std::size_t offset = stateLine.empty()
-                    ? 0U
-                    : usedWidth + gap;
-                if (!stateLine.empty()
-                    && offset + cellWidth > stateWidth) {
-                    finishStateLine();
-                }
-                const std::size_t placedAt = stateLine.empty()
-                    ? 0U
-                    : usedWidth + gap;
-                stateLine.emplace_back(placedAt, std::move(cell));
-                usedWidth = placedAt + cellWidth;
-            }
-            finishStateLine();
-            const std::size_t stateVisible = topHeight - 2U;
-            RenderViewportRows(
-                stateViewport_,
-                stateRows.size(),
-                stateVisible,
-                [&](std::size_t row, std::size_t sourceRow) {
-                    for (const auto& [offset, text] : stateRows[sourceRow]) {
-                        canvas.Text(
-                            leftWidth + 1U + offset,
-                            bodyTop + 1U + row,
-                            text,
-                            stateWidth - offset,
-                            Foreground(colors_.text));
-                    }
+            AppendMouseInputCells(inputCells, *debugState);
+            RenderStateCells(canvas, inputStateViewport_, inputBox,
+                std::move(inputCells), colors_.text);
+
+            std::vector<std::string> meterCells;
+            AppendMeterCells(meterCells, *debugState);
+            RenderViewportRows(metersViewport_, meterCells.size(), metersBox.height - 2U,
+                [&](std::size_t row, std::size_t index) {
+                    canvas.Text(metersBox.x + 1U, metersBox.y + 1U + row,
+                        TruncateUtf8(meterCells[index], metersBox.width - 2U),
+                        metersBox.width - 2U, Foreground(colors_.text));
                 });
 
             const std::size_t executionWidth = width - 2U;
