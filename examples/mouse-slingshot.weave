@@ -1,0 +1,189 @@
+// Mouse Slingshot: pull the pointer back and launch it around the screen.
+// Tap Space to pin an anchor; tap Space again to remove it.
+// With an anchor pinned, hold a mouse button, drag, and release it to launch.
+// Left launches a straight shot, Middle adds lightning drift, and Right makes a spiral.
+// The wheel always changes resistance by a linear amount.
+// Existing energy is preserved when resistance changes: a four-pixel pull at
+// resistance 1 retracts to two pixels when resistance becomes 2.
+// Energy slowly leaks while the band remains stretched, visibly retracting the pointer.
+// Removing an anchor also cancels its active pull or flight.
+
+MOUSE_IDLE_TIMEOUT = 120ms;
+
+duration frameDelay = 16ms;
+number decayFactor = 0.97;
+number decayFrameCount = 6;
+number launchGain = 0.18;
+number flightDrag = 0.965;
+number bounceFactor = 0.82;
+number collisionSpeed = 1;
+number maxVelocity = 1600;
+number maxFlightFrames = 240;
+number resistanceStep = 1;
+
+state anchorReady = off;
+state pulling = off;
+state pullTaskRunning = off;
+state launchPending = off;
+state flying = off;
+state stopFlight = off;
+state leftCaptured = off;
+state middleCaptured = off;
+state rightCaptured = off;
+
+number resistance = 1;
+number trajectory = 0;
+number anchorX = 0;
+number anchorY = 0;
+number pullX = 0;
+number pullY = 0;
+number energyX = 0;
+number energyY = 0;
+number velocityX = 0;
+number velocityY = 0;
+number previousX = 0;
+number previousY = 0;
+number actualX = 0;
+number actualY = 0;
+number speedX = 0;
+number speedY = 0;
+number speed = 0;
+number swap = 0;
+number frames = 0;
+number decayTicks = 0;
+
+// Space toggles the anchor. Removing it also releases all slingshot interaction.
+Space:down when anchorReady == on and flying == on =>
+    set(anchorReady, off) set(stopFlight, on)
+    set(pulling, off) set(launchPending, off)
+    wait(25ms) set(flying, off)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0);
+Space:down when anchorReady == on =>
+    set(anchorReady, off) set(stopFlight, on)
+    set(pulling, off) set(launchPending, off)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0);
+Space:down when anchorReady == off =>
+    set(anchorReady, on) set(stopFlight, on)
+    set(pulling, off) set(launchPending, off)
+    set(anchorX, Mouse.x) set(anchorY, Mouse.y)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0);
+Space:again =>;
+Space:up =>;
+
+// Pressing a mouse button starts its trajectory at the pinned anchor.
+Mouse.Left:down when anchorReady == on and pulling == off and flying == off =>
+    set(leftCaptured, on) set(trajectory, 0) set(pulling, on)
+    set(launchPending, off) set(stopFlight, on) set(decayTicks, 0)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0)
+    move_to(anchorX, anchorY);
+Mouse.Middle:down when anchorReady == on and pulling == off and flying == off =>
+    set(middleCaptured, on) set(trajectory, 1) set(pulling, on)
+    set(launchPending, off) set(stopFlight, on) set(decayTicks, 0)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0)
+    move_to(anchorX, anchorY);
+Mouse.Right:down when anchorReady == on and pulling == off and flying == off =>
+    set(rightCaptured, on) set(trajectory, 2) set(pulling, on)
+    set(launchPending, off) set(stopFlight, on) set(decayTicks, 0)
+    set(pullX, 0) set(pullY, 0) set(energyX, 0) set(energyY, 0)
+    move_to(anchorX, anchorY);
+
+// Extra clicks during a pull or flight are contained until their matching release.
+Mouse.Left:down when pulling == on or flying == on => set(leftCaptured, on);
+Mouse.Middle:down when pulling == on or flying == on => set(middleCaptured, on);
+Mouse.Right:down when pulling == on or flying == on => set(rightCaptured, on);
+Mouse.Left:again when leftCaptured == on =>;
+Mouse.Middle:again when middleCaptured == on =>;
+Mouse.Right:again when rightCaptured == on =>;
+
+// Releasing the button that started the pull requests one shared flight task.
+Mouse.Left:up when leftCaptured == on and pulling == on and trajectory == 0 =>
+    set(leftCaptured, off) set(pulling, off) set(launchPending, on);
+Mouse.Middle:up when middleCaptured == on and pulling == on and trajectory == 1 =>
+    set(middleCaptured, off) set(pulling, off) set(launchPending, on);
+Mouse.Right:up when rightCaptured == on and pulling == on and trajectory == 2 =>
+    set(rightCaptured, off) set(pulling, off) set(launchPending, on);
+Mouse.Left:up when leftCaptured == on => set(leftCaptured, off);
+Mouse.Middle:up when middleCaptured == on => set(middleCaptured, off);
+Mouse.Right:up when rightCaptured == on => set(rightCaptured, off);
+
+// Wheel input always adds linearly to resistance and otherwise keeps normal scrolling available.
+Mouse:wheel ~>>
+    set(resistance, resistance + Mouse.wheel_y * resistanceStep)
+    if resistance > 1000000 then set(resistance, 1000000) end
+    if resistance < 0.0001 then set(resistance, 0.0001) end;
+// During a pull, consume that wheel report and move the same energy to its new pull distance.
+Mouse:wheel when pulling == on =>
+    set(pullX, energyX / resistance) set(pullY, energyY / resistance)
+    move_to(anchorX + pullX, anchorY + pullY);
+
+// The first drag owns decay, release detection, and the entire flight lifecycle.
+Mouse:move when pulling == on and pullTaskRunning == off ~>>
+    set(pullTaskRunning, on)
+    while pulling == on do
+        wait(frameDelay)
+        if pulling == on then
+            set(decayTicks, decayTicks + 1)
+            if decayTicks >= decayFrameCount then
+                set(decayTicks, 0)
+                set(energyX, energyX * decayFactor)
+                set(energyY, energyY * decayFactor)
+                set(pullX, energyX / resistance)
+                set(pullY, energyY / resistance)
+                move_to(anchorX + pullX, anchorY + pullY)
+            end
+        end
+    end
+    if launchPending == on then
+        set(launchPending, off) set(stopFlight, off) set(flying, on)
+        set(velocityX, -energyX * launchGain)
+        set(velocityY, -energyY * launchGain)
+        if velocityX > maxVelocity then set(velocityX, maxVelocity) end
+        if velocityX < -maxVelocity then set(velocityX, -maxVelocity) end
+        if velocityY > maxVelocity then set(velocityY, maxVelocity) end
+        if velocityY < -maxVelocity then set(velocityY, -maxVelocity) end
+        set(speedX, velocityX) set(speedY, velocityY)
+        if speedX < 0 then set(speedX, -speedX) end
+        if speedY < 0 then set(speedY, -speedY) end
+        set(speed, speedX + speedY) set(frames, 0)
+        while stopFlight == off and frames < maxFlightFrames and speed > 1.5 do
+            set(previousX, Mouse.x) set(previousY, Mouse.y)
+            move_by(velocityX, velocityY) wait(frameDelay)
+            set(actualX, Mouse.x) set(actualY, Mouse.y)
+
+            // A moving axis that produced no pixel displacement has hit a reachable edge.
+            if speedX > collisionSpeed and actualX == previousX then
+                set(velocityX, -velocityX * bounceFactor)
+            end
+            if speedY > collisionSpeed and actualY == previousY then
+                set(velocityY, -velocityY * bounceFactor)
+            end
+
+            if trajectory == 0 then
+                set(velocityX, velocityX * flightDrag)
+                set(velocityY, velocityY * flightDrag)
+            end
+            if trajectory == 1 then
+                set(velocityX, velocityX * 0.93 + (RAND01 - 0.5) * 9)
+                set(velocityY, velocityY * 0.93 + (RAND01 - 0.5) * 9)
+            end
+            if trajectory == 2 then
+                set(swap, velocityX)
+                set(velocityX, velocityX * 0.955 - velocityY * 0.12)
+                set(velocityY, swap * 0.12 + velocityY * 0.955)
+            end
+
+            set(speedX, velocityX) set(speedY, velocityY)
+            if speedX < 0 then set(speedX, -speedX) end
+            if speedY < 0 then set(speedY, -speedY) end
+            set(speed, speedX + speedY)
+            set(frames, frames + 1)
+        end
+        set(flying, off)
+    end
+    set(pullTaskRunning, off);
+
+// Physical motion stretches the band; higher resistance stores more energy per pixel.
+Mouse:move when pulling == on ~>
+    set(pullX, Mouse.x - anchorX) set(pullY, Mouse.y - anchorY)
+    set(energyX, pullX * resistance) set(energyY, pullY * resistance);
+Mouse:move when flying == on =>;
