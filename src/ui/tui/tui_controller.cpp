@@ -708,6 +708,15 @@ void TuiController::HandleProgramPage(const KeyEvent& event)
         HandleSourceEditor(event);
         return;
     }
+    if (event.key == Key::Tab && !event.shift && !DocumentFullscreen()) {
+        programRegion_ = programRegion_ == ProgramRegion::List
+            ? ProgramRegion::Information
+            : programRegion_ == ProgramRegion::Information
+                ? ProgramRegion::Source
+                : ProgramRegion::List;
+        programInteraction_ = RegionInteraction::Active;
+        return;
+    }
     if (event.key == Key::Escape) {
         if (DocumentFullscreen()) {
             programLayout_ = ProgramLayout::Split;
@@ -866,6 +875,15 @@ void TuiController::SelectProgramRegion(Key key) noexcept
 
 void TuiController::HandleDebug(const KeyEvent& event)
 {
+    if (event.key == Key::Tab && !event.shift) {
+        debugRegion_ = debugRegion_ == DebugRegion::Events
+            ? DebugRegion::State
+            : debugRegion_ == DebugRegion::State
+                ? DebugRegion::Executions
+                : DebugRegion::Events;
+        debugInteraction_ = RegionInteraction::Active;
+        return;
+    }
     if (event.key == Key::Escape) {
         if (debugInteraction_ == RegionInteraction::Active) {
             debugInteraction_ = RegionInteraction::Selecting;

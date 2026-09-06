@@ -39,6 +39,8 @@ Program 页的分栏布局由左侧 PROGRAM、右上 PROGRAM INFORMATION、右�
 
 ### Program
 
+In the split Program layout, `[Tab]` cycles through PROGRAM, PROGRAM INFORMATION, and SOURCE or COMPILED DUMP, then wraps to PROGRAM. Each switch directly activates the destination region, from either region selection or an active region.
+
 下列程序管理按键只在进入 PROGRAM 区域后生效：
 
 | 按键 | 功能 |
@@ -167,6 +169,8 @@ Console 汇总应用、编译器和执行器输出。连续的同程序、同来
 Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成。页面首先处于区域选择状态：EVENTS 的 `[Right]` 进入 STATE、`[Down]` 进入 ACTION EXECUTIONS，STATE 的 `[Left]` 返回 EVENTS、`[Down]` 进入 ACTION EXECUTIONS，ACTION EXECUTIONS 的 `[Up]` 返回 EVENTS。按 `[Enter]` 进入所选区域后，方向键、`[PageUp]` / `[PageDown]`、`[Home]` 和 `[End]` 滚动该区域；按 `[Esc]` 返回区域选择。
 
 The EVENTS/STATE row occupies approximately 60% of the body between the header and HEALTH; ACTION EXECUTIONS occupies the remaining 40%. EVENTS uses at most 60 columns, with STATE taking the remaining width. At the minimum 80-column window, EVENTS uses 53 columns and STATE uses 27 columns. HEALTH retains four rows.
+
+`[Tab]` cycles through EVENTS, STATE, and ACTION EXECUTIONS, then wraps to EVENTS. Each switch directly activates the destination region, from either region selection or an active region.
 
 During an active Debug session, `[C]` stops capture or starts a new capture generation while keeping the executor running. `[X]` requests executor shutdown and immediately clears the Debug session, including EVENTS, STATE, ACTION EXECUTIONS, and HEALTH; the same cleanup applies when stopping that program from the Program page. During delayed startup, `[X]` cancels the pending launch. When the executor terminates independently, its final snapshot remains available for inspection until `[X]` clears it or a new Debug session starts. `[` returns to Program; `[Esc]` also returns to Program from region selection.
 

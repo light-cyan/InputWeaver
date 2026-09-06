@@ -925,6 +925,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
             }
             if (programInteraction_ == RegionInteraction::Selecting) {
                 headerKeys = {
+                    "[Tab] Region",
                     "[Arrow Keys] Region",
                     "[Enter] Enter",
                     "[X] Stop",
@@ -970,6 +971,9 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 }
                 break;
             }
+            if (!DocumentFullscreen()) {
+                headerKeys.insert(headerKeys.begin(), "[Tab] Region");
+            }
             break;
         }
     } else {
@@ -1013,6 +1017,7 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 "[Home]/[End] Edge",
                 "[Esc] Regions"};
         }
+        headerKeys.insert(headerKeys.begin(), "[Tab] Region");
         if (displayedDebugExecutor != nullptr) {
             headerKeys.insert(
                 headerKeys.end() - 1,

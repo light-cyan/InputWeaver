@@ -1547,10 +1547,11 @@ void TestSourceEditorPage()
             && fullscreenText.find("[Space] Run") != std::string::npos,
         "fullscreen source shows complete browsing help and NEXT RUN");
     controller.Handle({Key::Character, U'z'});
+    controller.Handle({Key::Tab, 0U});
     Check(
         CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
             != std::string::npos,
-        "Z leaves document fullscreen unchanged");
+        "Z and Tab leave document fullscreen unchanged");
     controller.Handle({Key::Character, U']'});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Debug,
@@ -1631,6 +1632,7 @@ void TestSourceEditorPage()
             && undoRestoredSelection && redoRemovedSelection,
         "Cut, Undo, and Redo share the source editor command history");
     controller.Handle({Key::Home, 0U});
+    controller.Handle({Key::Tab, 0U});
     controller.Handle({Key::Character, U'['});
     controller.Handle({Key::Character, U']'});
     Check(
@@ -1639,11 +1641,11 @@ void TestSourceEditorPage()
     controller.Handle({Key::Character, U'/'});
     controller.Handle({Key::Escape, 0U});
     Check(
-        platform.source.starts_with("[]/TARGET")
+        platform.source.starts_with("    []/TARGET")
             && CanvasText(controller.Render(100U, 30U))
                     .find("DOCUMENT FULLSCREEN")
                 != std::string::npos,
-        "first Escape saves and exits editing while preserving fullscreen");
+        "first Escape saves Tab indentation and exits editing while preserving fullscreen");
     controller.Handle({Key::Escape, 0U});
     Check(
         CanvasText(controller.Render(100U, 30U)).find("DOCUMENT FULLSCREEN")
@@ -1751,6 +1753,7 @@ void TestSpatialNavigation()
             && initial.Cells()[railDebug].style.foreground
                 == colors.focusProgram
             && initialText.find("[Arrow Keys] Region") != std::string::npos
+            && initialText.find("[Tab] Region") != std::string::npos
             && programRegionIs("PROGRAM", colors.focusProgram),
         "Program page rail and initial region-selection state render distinctly");
 
@@ -1761,8 +1764,6 @@ void TestSpatialNavigation()
                    "Program retains its lower boundary"},
         RegionStep{Key::Left, "PROGRAM", colors.focusProgram,
                    "Program retains its left boundary"},
-        RegionStep{Key::Tab, "PROGRAM", colors.focusProgram,
-                   "Program region selection ignores Tab"},
         RegionStep{Key::Right, "PROGRAM INFORMATION",
                    colors.focusProgramInformation,
                    "Program moves right to Information"},
@@ -1801,6 +1802,22 @@ void TestSpatialNavigation()
             && activeProgramText.find("[Arrow Keys] Region")
                 == std::string::npos,
         "Enter activates the selected Program region");
+    controller.Handle({Key::Escape, 0U});
+    const std::array programTabSteps{
+        RegionStep{Key::Tab, "PROGRAM INFORMATION",
+                   colors.focusProgramInformation,
+                   "Tab enters Information directly from region selection"},
+        RegionStep{Key::Tab, "SOURCE", colors.focusSource,
+                   "Tab switches an active Information region to Source"},
+        RegionStep{Key::Tab, "PROGRAM", colors.focusProgram,
+                   "Tab wraps Source back to the active Program list"}};
+    for (const RegionStep& step : programTabSteps) {
+        controller.Handle({step.key, 0U});
+        Check(programRegionIs(step.title, step.color)
+                && CanvasText(controller.Render(100U, 30U))
+                        .find("[Arrow Keys] Region") == std::string::npos,
+            step.assertion);
+    }
     controller.Handle({Key::Character, U'd'});
     Check(
         CanvasText(controller.Render(100U, 30U)).find("DELETE PROGRAM")
@@ -1808,11 +1825,13 @@ void TestSpatialNavigation()
         "D opens the program deletion confirmation");
     controller.Handle({Key::Character, U'['});
     controller.Handle({Key::Character, U']'});
+    controller.Handle({Key::Tab, 0U});
     Check(
         controller.CurrentPage() == Page::Program
+            && programRegionIs("PROGRAM", colors.focusProgram)
             && CanvasText(controller.Render(100U, 30U)).find("DELETE PROGRAM")
                 != std::string::npos,
-        "program deletion confirmation captures bracket page navigation");
+        "program deletion confirmation captures page and region navigation");
     controller.Handle({Key::Escape, 0U});
     controller.Handle({Key::Character, U'['});
     controller.Handle({Key::Character, U']'});
@@ -1857,6 +1876,22 @@ void TestSpatialNavigation()
     Check(
         debugRegionIs("EVENTS", colors.focusEvents),
         "Debug initially selects the Events body region");
+    const std::array debugTabSteps{
+        RegionStep{Key::Tab, "STATE", colors.focusState,
+                   "Tab enters State directly from region selection"},
+        RegionStep{Key::Tab, "ACTION EXECUTIONS", colors.focusActionExecutions,
+                   "Tab switches an active State region to Executions"},
+        RegionStep{Key::Tab, "EVENTS", colors.focusEvents,
+                   "Tab wraps Executions back to active Events"}};
+    for (const RegionStep& step : debugTabSteps) {
+        controller.Handle({step.key, 0U});
+        const std::string text = CanvasText(controller.Render(100U, 30U));
+        Check(debugRegionIs(step.title, step.color)
+                && text.find("[Tab] Region") != std::string::npos
+                && text.find("[Arrow Keys] Region") == std::string::npos,
+            step.assertion);
+    }
+    controller.Handle({Key::Escape, 0U});
     const std::array debugSteps{
         RegionStep{Key::Up, "EVENTS", colors.focusEvents,
                    "Events retains its upper boundary"},
