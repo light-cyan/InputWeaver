@@ -1356,8 +1356,10 @@ void TestController()
         "incomplete terminated sessions disclose best-effort state");
     Check(
         terminatedText.find("Start/Stop Capture") == std::string::npos
-            && terminatedText.find("Stop Executor") == std::string::npos,
-        "terminated debug sessions expose only browsing controls");
+            && terminatedText.find("Stop Executor") == std::string::npos
+            && CanvasText(controller.Render(160U, 24U)).find("[X] Clear Debug")
+                != std::string::npos,
+        "terminated debug sessions expose browsing and explicit cleanup");
     Check(
         terminatedDebug.Cells()[20U * 80U].style.foreground
             == colors.healthFault,
@@ -1381,6 +1383,27 @@ void TestController()
             && completeDebug.Cells()[20U * 80U].style.foreground
                 == colors.healthTrusted,
         "acknowledged terminal streams show a complete healthy snapshot");
+    controller.Handle({Key::Character, U'x'});
+    controller.Tick();
+    Check(!application.ReadSnapshot().debugSession.has_value()
+            && CanvasText(controller.Render(80U, 24U)).find("TERMINATED")
+                == std::string::npos,
+        "X clears the terminated Debug view");
+    platform.executors.push_back({
+        1U, inputweaver::app::ExecutorMode::Debug, false, false, {}});
+    platform.debugId = 1U;
+    platform.debugState = debugState;
+    controller.Tick();
+    controller.Handle({Key::Character, U'x'});
+    controller.Tick();
+    const std::string stoppedText = CanvasText(controller.Render(120U, 40U));
+    Check(platform.executors.empty()
+            && !application.ReadSnapshot().debugSession.has_value()
+            && stoppedText.find("#17") == std::string::npos
+            && stoppedText.find("count=2") == std::string::npos
+            && stoppedText.find("AGAIN") == std::string::npos
+            && stoppedText.find("PAUSE=on") == std::string::npos,
+        "X stops the active executor and clears all Debug regions");
     controller.Handle({Key::Character, U'['});
     Check(
         controller.CurrentPage() == inputweaver::ui::tui::Page::Program,

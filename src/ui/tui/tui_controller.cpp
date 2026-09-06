@@ -887,12 +887,12 @@ void TuiController::HandleDebug(const KeyEvent& event)
             capturing ? application_.StopCapture() : application_.StartCapture());
         return;
     }
-    if (IsCharacter(event, U'x') && active) {
-        ShowOperationError(application_.StopProgram(debugSession->programId));
-        return;
-    }
-    if (IsCharacter(event, U'x') && pendingDebugRun_.has_value()) {
-        pendingDebugRun_.reset();
+    if (IsCharacter(event, U'x')) {
+        if (pendingDebugRun_.has_value()) {
+            pendingDebugRun_.reset();
+        } else if (debugSession != nullptr) {
+            ShowOperationError(application_.StopProgram(debugSession->programId));
+        }
         return;
     }
     if (debugInteraction_ == RegionInteraction::Selecting) {

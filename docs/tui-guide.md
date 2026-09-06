@@ -168,7 +168,7 @@ Debug 页由 EVENTS、STATE、ACTION EXECUTIONS 和固定高度的 HEALTH 组成
 
 The EVENTS/STATE row occupies approximately 60% of the body between the header and HEALTH; ACTION EXECUTIONS occupies the remaining 40%. EVENTS uses at most 60 columns, with STATE taking the remaining width. At the minimum 80-column window, EVENTS uses 53 columns and STATE uses 27 columns. HEALTH retains four rows.
 
-活动 Debug 会话中，`[C]` 停止当前捕获或开始一个新的捕获代次，但不停止 Debug 执行器；`[X]` 停止 Debug 执行器，或者在延迟启动期间取消待启动操作。执行器结束后，这两个操作不再显示，最终捕获快照保留到下一次 Debug 会话开始。`[` 返回 Program；区域选择状态下也可以使用 `[Esc]` 返回 Program。
+During an active Debug session, `[C]` stops capture or starts a new capture generation while keeping the executor running. `[X]` requests executor shutdown and immediately clears the Debug session, including EVENTS, STATE, ACTION EXECUTIONS, and HEALTH; the same cleanup applies when stopping that program from the Program page. During delayed startup, `[X]` cancels the pending launch. When the executor terminates independently, its final snapshot remains available for inspection until `[X]` clears it or a new Debug session starts. `[` returns to Program; `[Esc]` also returns to Program from region selection.
 
 ### EVENTS
 

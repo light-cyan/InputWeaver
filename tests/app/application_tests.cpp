@@ -191,6 +191,9 @@ public:
         bool) override
     {
         stoppedIds.push_back(id);
+        if (!stopResult.succeeded || deferStop) {
+            return stopResult;
+        }
         executors.erase(
             std::remove_if(
                 executors.begin(),
@@ -264,6 +267,9 @@ public:
     std::size_t dumpCount{};
     inputweaver::app::OperationResult launchResult{
         inputweaver::app::OperationResult::Success()};
+    inputweaver::app::OperationResult stopResult{
+        inputweaver::app::OperationResult::Success()};
+    bool deferStop{};
     std::string source{"A:down => tap(B);"};
 };
 
@@ -470,12 +476,74 @@ void TestApplicationFlow()
         "blank programs publish source metadata and join the library");
 }
 
+void TestDebugStopCleanup()
+{
+    using namespace inputweaver::app;
+    FakePlatform platform;
+    Application application(platform);
+    Check(application.Initialize().succeeded
+            && application.StartProgram(1U, {true, false, false}).succeeded,
+        "debug cleanup test starts a session");
+    application.Tick();
+    (void)application.ConsumeAttention();
+    const auto finalState = platform.debugState;
+    finalState->runtimeIssues.push_back({});
+
+    platform.stopResult = OperationResult::Failure("Stop request failed.");
+    Check(!application.StopProgram(1U).succeeded
+            && application.ReadSnapshot().debugSession->state == finalState,
+        "failed stop requests preserve Debug content");
+    (void)application.ConsumeAttention();
+    platform.stopResult = OperationResult::Success();
+    platform.deferStop = true;
+    Check(application.StopProgram(1U).succeeded
+            && !application.ReadSnapshot().debugSession.has_value()
+            && !platform.executors.empty(),
+        "accepted stops immediately clear Debug while the executor shuts down");
+    application.Tick();
+    Check(!application.ReadSnapshot().debugSession.has_value()
+            && application.ConsumeAttention() == ApplicationAttention::None,
+        "capture updates during shutdown leave Debug empty");
+
+    platform.events.push_back(PlatformEvent::Error(
+        1U, "Game", ConsoleSource::Runtime, "Shutdown error.", ExecutorMode::Debug));
+    platform.deferStop = false;
+    (void)platform.StopExecutor(1U, false);
+    platform.events.push_back(PlatformEvent::ExecutorExited(
+        1U, "Game", 8U, ExecutorMode::Debug, finalState));
+    application.Tick();
+    Check(!application.ReadSnapshot().debugSession.has_value()
+            && application.ConsumeAttention() == ApplicationAttention::None
+            && application.ReadSnapshot().consoleLines.back().text
+                == "Executor exited with code 8.",
+        "late stop events keep Debug empty and retain Console diagnostics");
+
+    Check(application.StartProgram(1U, {true, false, false}).succeeded
+            && application.ReadSnapshot().debugSession.has_value(),
+        "the same program can open a new Debug session after stopping");
+    (void)platform.StopExecutor(1U, false);
+    platform.events.push_back(PlatformEvent::ExecutorExited(
+        1U, "Game", 8U, ExecutorMode::Debug, finalState));
+    application.Tick();
+    Check(application.ReadSnapshot().debugSession.has_value()
+            && application.ReadSnapshot().debugSession->state == finalState
+            && application.ConsumeAttention() == ApplicationAttention::Debug,
+        "independent termination still preserves the final Debug snapshot");
+    Check(application.StopProgram(2U).succeeded
+            && application.ReadSnapshot().debugSession.has_value(),
+        "stopping another program preserves the displayed Debug session");
+    Check(application.StopProgram(1U).succeeded
+            && !application.ReadSnapshot().debugSession.has_value(),
+        "explicit stop also clears a terminated Debug session");
+}
+
 } // namespace
 
 int main()
 {
     TestEntryCodec();
     TestApplicationFlow();
+    TestDebugStopCleanup();
     if (gFailureCount != 0) {
         std::cerr << gFailureCount << " application test(s) failed.\n";
         return 1;

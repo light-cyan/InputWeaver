@@ -1019,6 +1019,8 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                 {"[C] Start/Stop Capture", "[X] Stop Executor"});
         } else if (pendingDebugRun_.has_value()) {
             headerKeys.insert(headerKeys.end() - 1, "[X] Cancel Start");
+        } else if (debugTerminated) {
+            headerKeys.insert(headerKeys.end() - 1, "[X] Clear Debug");
         }
     }
     StyledLine headerSegments;
