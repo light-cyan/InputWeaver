@@ -1,4 +1,4 @@
-// Type Snake(8,9) and press Enter.
+// Type `Snake(x,y)` and press Enter.
 // The dimensions describe the playable area inside the border.
 // Arrow keys steer the snake. Space pauses or resumes the game.
 // A collision removes the command and board.

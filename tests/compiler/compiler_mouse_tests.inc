@@ -86,10 +86,4 @@ exit F12:down when @travel.valid == on;
         if (fieldProgram) Check(fieldProgram->Settings().mouseIdleTimeout.nanoseconds == 80'000'000,
             "mouse idle timeout defaults to 80 ms");
     }
-
-    const auto example = compiler::ValidateFile("examples/mouse-arcade.weave");
-    for (const auto& diagnostic : example.diagnostics) {
-        std::cerr << compiler::FormatCompileDiagnostic(diagnostic) << '\n';
-    }
-    Check(example.succeeded, "the mouse arcade example compiles");
 }

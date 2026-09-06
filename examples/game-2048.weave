@@ -1,5 +1,4 @@
-// Open a plain-text editor in Visual Studio Code with word wrap disabled.
-// Type 2048() and press Enter. Arrow keys move tiles; R starts a new board.
+// Type `2048()` and press Enter. Arrow keys move tiles; R starts a new board.
 
 TAP_DURATION = 0ms;
 ACTION_GAP = 1ms;

@@ -1,5 +1,5 @@
-// Type an arithmetic expression in Notepad and press = to append its result.
-// Supported input: non-negative integers, +, -, *, /, and parentheses.
+// Type an arithmetic expression and press `=` to append its result.
+// Supported input: non-negative integers, `+`, `-`, `*`, `/`, and parentheses.
 // Results are rounded to at most six decimal places.
 
 TAP_DURATION = 10ms;
