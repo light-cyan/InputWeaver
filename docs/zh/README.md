@@ -1,10 +1,18 @@
+<a id="section-inputweaver-documentation"></a>
+
 # InputWeaver 使用文档
 
+[English](../en/README.md)
+
 InputWeaver 用来重映射键盘和鼠标输入，并用 Weave 编写按键宏、条件动作和鼠标手势。可以在界面中创建、编辑和运行程序，也可以使用命令行编译和运行 `.weave` 文件。
+
+<a id="section-start-here"></a>
 
 ## 从这里开始
 
 第一次使用，请从[第一个输入映射](getting-started.md)开始：创建程序，让记事本中的 A 键变成 B 键，再学习运行和停止。已经有 `.weave` 文件，可以直接查看[界面操作](tui.md)中的导入步骤。
+
+<a id="section-learn-weave"></a>
 
 ## 学习 Weave
 
@@ -17,6 +25,8 @@ InputWeaver 用来重映射键盘和鼠标输入，并用 Weave 编写按键宏�
 | [动作与流程控制](actions.md) | 怎样组合按键、等待、循环、修改变量和启动程序 |
 | [鼠标与计量器](mouse.md) | 怎样读取鼠标位置、移动指针、处理滚轮和按距离或移动时长触发动作 |
 
+<a id="section-use-and-reference"></a>
+
 ## 使用和查阅
 
 | 文档 | 解决的问题 |
@@ -26,6 +36,8 @@ InputWeaver 用来重映射键盘和鼠标输入，并用 Weave 编写按键宏�
 | [调试与排错](debugging.md) | 看懂输入、变量、计量器和动作记录，定位程序没有生效的原因 |
 | [运行行为与限制](running.md) | 目标切换、暂停、停止、并行动作和资源限制怎样影响程序 |
 | [Windows 执行器](windows.md) | Windows 控制编码和输入输出能力，以及外部进程的查找和工作目录 |
+
+<a id="section-files-and-program-names"></a>
 
 ## 文件与程序名称
 

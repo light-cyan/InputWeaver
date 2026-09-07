@@ -1,8 +1,14 @@
+<a id="section-your-first-input-mapping"></a>
+
 # 第一个输入映射
+
+[English](../en/getting-started.md)
 
 [文档首页](README.md)
 
 这篇教程会创建一个小程序：在 Windows 记事本中，把 A 键映射为 B 键。完成后，你会知道如何编辑、运行和停止 Weave 程序。
+
+<a id="section-1-open-inputweaver"></a>
 
 ## 1. 打开 InputWeaver
 
@@ -11,6 +17,8 @@
 界面打开后位于 Program 页。左侧 PROGRAM 是程序列表，右上角 PROGRAM INFORMATION 是名称和运行配置，右下角 SOURCE 是源码。
 
 用 `Tab` 在这三个区域之间切换。也可以先用方向键选择区域，再按 `Enter` 进入；`Esc` 返回上一层。
+
+<a id="section-2-create-a-program"></a>
 
 ## 2. 创建程序
 
@@ -29,6 +37,8 @@ A -> B;
 
 按 `Esc` 保存并退出编辑。编辑时停顿约 400 毫秒也会自动保存和校验；出现红色标记时，先检查名称、引号和分号，必要时到 Console 页查看输出。
 
+<a id="section-3-run-and-observe"></a>
+
 ## 3. 运行并观察效果
 
 打开记事本。在 InputWeaver 的 Program 页确认选中了刚创建的程序，底部 NEXT RUN 的三个选项均为 `OFF`，然后按空格运行。
@@ -36,6 +46,8 @@ A -> B;
 切回记事本，使其处于前台。在普通英文输入状态下按 A，应输入 `b`；最终字符仍由键盘布局、输入法、Shift 和 Caps Lock 状态决定。切到其他应用后，A 按原来的用途工作。
 
 运行中的程序在列表中显示 `[RUN]`。InputWeaver 界面本身受到输入排除保护，可以继续正常操作。[目标与排除的具体行为](running.md)
+
+<a id="section-4-stop-the-program"></a>
 
 ## 4. 停止程序
 
@@ -46,6 +58,8 @@ A -> B;
 - 右击系统托盘中的 InputWeaver 图标，选择 `Exit InputWeaver`，退出 InputWeaver 并停止界面管理的所有 Weave 程序。
 
 关闭界面窗口会让程序继续在托盘中运行。再次单击托盘图标可以打开界面。
+
+<a id="section-5-add-a-key-macro"></a>
 
 ## 5. 再加入一个按键宏
 

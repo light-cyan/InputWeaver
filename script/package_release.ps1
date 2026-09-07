@@ -61,7 +61,7 @@ foreach ($name in $executables) {
 
 $colorScheme = Join-Path $repositoryRoot 'res\InputWeaverTUI.colors.json'
 $documentationRoot = Join-Path $repositoryRoot 'docs'
-foreach ($entryPoint in @('README.md', 'zh\README.md')) {
+foreach ($entryPoint in @('README.md', 'zh\README.md', 'en\README.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $documentationRoot $entryPoint) -PathType Leaf)) {
         throw "Required documentation entry point is missing: docs\$entryPoint"
     }

@@ -1,8 +1,14 @@
+<a id="section-actions-and-control-flow"></a>
+
 # 动作与流程控制
+
+[English](../en/actions.md)
 
 [文档首页](README.md) · [上一篇：输入映射与规则](rules.md) · [下一篇：鼠标与计量器](mouse.md)
 
 规则箭头后面是一串动作。动作按书写顺序执行，用来按键、等待、修改变量、移动鼠标或启动程序。
+
+<a id="section-sequence-actions"></a>
 
 ## 依次执行动作
 
@@ -13,6 +19,8 @@ F6:down => tap(H) wait(200ms) tap(I);
 ```
 
 按 F6 后先按一下 H，松开 H 后等待 200 毫秒，再按一下 I。相邻动作可以写在一行，也可以换行；动作之间的实际间隔由 `tap`、`wait`、`gap()` 和 `|` 决定。
+
+<a id="section-press-release-and-tap"></a>
 
 ## 按下、松开和点击
 
@@ -37,6 +45,8 @@ F6:down =>
 
 这些动作也接受鼠标按钮，例如 `tap(Mouse.Left)`。
 
+<a id="section-waits-and-default-gaps"></a>
+
 ## 等待和默认间隔
 
 ```weave
@@ -55,6 +65,8 @@ F6:down => tap(A) wait(delay * 2) tap(B);
 ```
 
 等待可以被暂停、目标切换或停止打断。`0ms` 会立即继续；需要周期性执行时，在循环中加入一个正的等待时间。
+
+<a id="section-change-variables-and-arrays"></a>
 
 ## 修改变量和数组
 
@@ -85,6 +97,8 @@ F7:down =>
 
 数组索引需要位于当前长度内，`pop` 时数组需要有元素。每个修改动作单独完成自己的读写；其他任务可以在等待或循环让出执行机会之后改变共享变量。
 
+<a id="section-choose-actions-with-a-condition"></a>
+
 ## 按条件选择动作
 
 `if` 在动作执行到这里时判断条件，满足条件执行 `then` 后面的部分，否则执行 `else` 后面的部分。最后用 `end` 结束这个选择。
@@ -104,6 +118,8 @@ F6:down =>
 
 这个程序每按三次 F6，依次输出 B、B、C。这里的 `if` 能读到前一个 `set` 刚写入的值。只需要满足条件时执行动作，可以省略 `else`。
 
+<a id="section-repeat-a-fixed-number-of-times"></a>
+
 ## 重复固定次数
 
 ```weave
@@ -115,6 +131,8 @@ F6:down =>
 ```
 
 `repeat` 在进入循环时读取一次次数。正的小数向下取整，例如 `3.8` 执行三次；零和负数执行零次。循环次数也可以来自 `number` 变量或表达式。
+
+<a id="section-continue-while-a-condition-holds"></a>
 
 ## 满足条件时持续执行
 
@@ -131,6 +149,8 @@ F6:down =>
 `while` 在每一轮开始时重新判断条件。松开 F6 后，当前这一轮可以先完成，下一轮检查时退出循环；暂停、目标失效或停止会直接取消当前任务。
 
 `if`、`repeat` 和 `while` 都可以嵌套，也可以和普通动作交替书写。内层结构使用自己的 `end`，整条事件规则最后用一个分号收尾。
+
+<a id="section-repeated-triggers-and-concurrent-tasks"></a>
 
 ## 多次触发和并行任务
 
@@ -151,6 +171,8 @@ F7:down => set(busy, off);
 
 这里的 `busy` 是用户变量。任务被取消时，尚未执行的 `set(busy, off)` 会一起取消，所以例子提供 F7 手动复位。特别密集的输入也可能在前一个任务写入 `busy` 前完成匹配；需要了解严格执行顺序时，参阅[运行行为与限制](running.md)。
 
+<a id="section-launch-an-external-program"></a>
+
 ## 启动外部程序
 
 ```weave
@@ -161,9 +183,11 @@ F6:down => exec("notepad.exe");
 
 命令可以包含参数和带空格的路径，例如 `exec("\"C:\\Tools\\My Helper.exe\" --mode quick")`。字符串的转义方式见[语言基础](language.md)。
 
-进程启动成功后继续后面的动作，已启动的外部程序有自己的生命周期。Windows 执行器直接解析并启动可执行文件；使用命令解释器的管道、重定向等功能时，应明确启动相应解释器。可执行文件的查找顺序、相对路径和子进程工作目录见 [Windows 执行器](windows.md#外部进程的查找和工作目录)。
+进程启动成功后继续后面的动作，已启动的外部程序有自己的生命周期。Windows 执行器直接解析并启动可执行文件；使用命令解释器的管道、重定向等功能时，应明确启动相应解释器。可执行文件的查找顺序、相对路径和子进程工作目录见 [Windows 执行器](windows.md#section-executable-lookup-and-working-directories)。
 
 在模拟运行中，`exec` 仍需要授权，但只模拟启动成功。[命令行选项](command-line.md)
+
+<a id="section-mouse-actions"></a>
 
 ## 鼠标动作
 

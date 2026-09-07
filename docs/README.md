@@ -1,3 +1,4 @@
 # InputWeaver Documentation
 
-- [Chinese documentation](zh/README.md): getting started, Weave language, interface operation, command-line usage, and troubleshooting.
+- [简体中文](zh/README.md)
+- [English](en/README.md)

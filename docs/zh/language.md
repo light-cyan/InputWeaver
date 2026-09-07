@@ -1,4 +1,8 @@
+<a id="section-language-basics"></a>
+
 # 语言基础
+
+[English](../en/language.md)
 
 [文档首页](README.md) · [下一篇：输入映射与规则](rules.md)
 
@@ -17,6 +21,8 @@ A:down when enabled == on => tap(B) set(count, count + 1);
 这个程序用 F6 切换 `enabled`。它为 `on` 时，每次按下 A 都会按一下 B，并把 `count` 加一。`state` 和 `number` 是变量类型，`when` 后面是触发条件，箭头后面是动作。
 
 后面的功能小例子可以放进已设置 `TARGET` 的程序中，也可以在界面的 Target 中指定应用后单独运行。每次修改后，先停止再运行程序，观察新源码的效果。
+
+<a id="section-source-format"></a>
 
 ## 源文件的写法
 
@@ -38,9 +44,11 @@ F6:down =>
     tap(I);
 ```
 
+<a id="section-reserved-words-and-names"></a>
+
 ### 保留字和名称速查
 
-变量、数组和计量器共用名称空间，声明名按大小写区分并保持唯一。下面的单词和固定拼写由语言使用；声明用户名称时避开它们以及[命名控制](rules.md#按键名称速查)。
+变量、数组和计量器共用名称空间，声明名按大小写区分并保持唯一。下面的单词和固定拼写由语言使用；声明用户名称时避开它们以及[命名控制](rules.md#section-key-name-reference)。
 
 | 类别 | 保留字或固定拼写 |
 | --- | --- |
@@ -59,6 +67,8 @@ F6:down =>
 
 限定控制名由命名空间和成员组成，例如 `Keyboard.A`。选择按键表示时，还需确认运行平台支持它的用途；Windows 支持的输入和输出见 [Windows 执行器](windows.md)。
 
+<a id="section-properties-and-fields"></a>
+
 ### 属性与字段速查
 
 属性和字段通过点号读取，例如 `values.length`、`Mouse.x`、`path.progress`；计量器的已完成周期使用 `@path.dx` 这样的写法。
@@ -69,7 +79,9 @@ F6:down =>
 | `Mouse` 当前状态 | `x`、`y`、`dx`、`dy`、`wheel_x`、`wheel_y`、`moving`、`idle_time` |
 | 计量器（按类型和周期视图选择） | `x`、`y`、`dx`、`dy`、`wheel_x`、`wheel_y`、`moving`、`start_x`、`start_y`、`distance`、`period`、`progress`、`remaining`、`valid` |
 
-属性和字段名按所属对象识别，也可用于用户声明，例如 `number length = 0;`、`number dx = 0;`。`values.length` 读取数组长度，单独的 `length` 读取同名用户变量；名为 `length` 的数组通过 `length.length` 读取长度。字段的类型和可用范围见[当前鼠标状态](mouse.md#读取当前鼠标状态)与[计量器字段](mouse.md#字段速查)。
+属性和字段名按所属对象识别，也可用于用户声明，例如 `number length = 0;`、`number dx = 0;`。`values.length` 读取数组长度，单独的 `length` 读取同名用户变量；名为 `length` 的数组通过 `length.length` 读取长度。字段的类型和可用范围见[当前鼠标状态](mouse.md#section-reading-current-mouse-state)与[计量器字段](mouse.md#section-field-reference)。
+
+<a id="section-configure-a-program"></a>
 
 ## 配置程序
 
@@ -79,7 +91,7 @@ F6:down =>
 | --- | --- | --- |
 | `TARGET` | 运行时需要指定目标 | `"notepad.exe"` 选择应用，`GLOBAL` 选择全局；界面和命令行可以覆盖 |
 | `TAP_DURATION` | `30ms` | 一次 `tap` 的按住时间，取值范围为 `0ms` 到 `1min` |
-| `ACTION_GAP` | `10ms` | `|` 和 `gap()` 的等待时间，取值范围为 `0ms` 到 `1min` |
+| `ACTION_GAP` | `10ms` | `\|` 和 `gap()` 的等待时间，取值范围为 `0ms` 到 `1min` |
 | `MOUSE_IDLE_TIMEOUT` | `80ms` | 多久没有物理移动后认为鼠标停止移动，设置为正的时间值 |
 | `RAND_SEED` | `0` | 随机数种子，使用 `0` 到 `18446744073709551615` 之间的十进制整数 |
 
@@ -94,6 +106,8 @@ F6:down => tap(H) | tap(I);
 这个例子中，H 和 I 分别按住 40 毫秒，H 松开后再等待 100 毫秒，才开始按 I。
 
 `TARGET` 也可以写成可执行文件的绝对路径，例如 `TARGET = "C:\\Tools\\Editor.exe";`。目标选择和窗口切换见[运行行为与限制](running.md)。
+
+<a id="section-three-variable-types"></a>
 
 ## 三种变量
 
@@ -119,6 +133,8 @@ F3:down => toggle(enabled);
 
 时间由数字和单位紧接组成：`ms` 是毫秒，`s` 是秒，`min` 是分钟，例如 `30ms`、`1.5s`、`2min`。时间最细可表示到纳秒。
 
+<a id="section-comparisons-and-conditions"></a>
+
 ## 比较与条件
 
 `when` 和 `if` 后面需要一个判断结果。用比较运算把变量或按键状态变成条件：
@@ -143,6 +159,8 @@ F6:down when enabled == on and (LCtrl == held or RCtrl == held) => tap(B);
 
 `and` 和 `or` 从左向右判断，并在结果已经确定时跳过右侧。这可以用来保护数组索引或计量器的已完成数据。
 
+<a id="section-number-and-time-operations"></a>
+
 ## 数字和时间运算
 
 数字支持 `+`、`-`、`*`、`/`、`%`，其中 `%` 求余数。数字大小使用 `<`、`<=`、`>`、`>=` 比较；`state`、`number`、`duration` 和按键状态各自支持同类型值的相等比较。
@@ -160,6 +178,8 @@ F6:down =>
 ```
 
 时间相减的结果最低为 `0ms`；时间缩放的负结果也按 `0ms` 处理，小数纳秒向零截断。除以零、求余的除数为零、数值变成无穷大或时间溢出都属于表达式错误。
+
+<a id="section-type-and-operator-reference"></a>
 
 ### 类型与运算组合速查
 
@@ -183,6 +203,8 @@ F6:down =>
 赋值使用与目标相同类型的表达式：例如 `set(delay, 100ms)` 设置时间，`set(count, 100)` 设置数字。时间的相等比较使用 `==`、`!=`；需要按大小设置阈值时，用 `number` 变量保存采用同一单位的数值。
 
 运算顺序从高到低为：括号；一元 `+`、`-`、`not`；`*`、`/`、`%`；`+`、`-`；大小比较；相等比较；`and`；`or`。同一优先级的二元运算从左向右计算。较长的条件建议主动加括号。
+
+<a id="section-arrays"></a>
 
 ## 数组
 
@@ -220,6 +242,8 @@ F3:down => clear(values);
 
 数组的长度随内容变化。写入一个已有元素使用 `set(values[index], value)`，追加新元素使用 `append`。[数组动作的具体行为](actions.md)
 
+<a id="section-readable-builtin-values"></a>
+
 ## 可以读取的内置值
 
 | 名称 | 类型 | 用途 |
@@ -240,6 +264,8 @@ F6:down => set(sample, RAND01) wait(50ms + 100ms * sample) tap(B);
 ```
 
 每次读取 `RAND01` 都会推进随机序列。需要在几个地方复用同一个随机值时，先像上面这样保存到变量。重新启动程序会从种子的序列起点开始；暂停和取消动作保留随机序列的位置。多个动作并行取样时，实际执行顺序会影响各自取得的值。
+
+<a id="section-strings"></a>
 
 ## 字符串
 

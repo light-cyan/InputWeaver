@@ -1,8 +1,14 @@
+<a id="section-mouse-and-meters"></a>
+
 # 鼠标与计量器
+
+[English](../en/mouse.md)
 
 [文档首页](README.md) · [上一篇：动作与流程控制](actions.md)
 
 鼠标按钮使用和键盘相同的规则。鼠标移动和滚轮另外提供位置、位移、滚动量以及计量器，可以用来编写按距离或连续移动时长触发的动作。
+
+<a id="section-mouse-buttons"></a>
 
 ## 鼠标按钮
 
@@ -12,6 +18,8 @@ Mouse.X2:down => tap(Mouse.Left);
 ```
 
 第一条把侧键 X1 映射成左 Ctrl，第二条在按下侧键 X2 时点击左键。按钮名称为 `Mouse.Left`、`Mouse.Right`、`Mouse.Middle`、`Mouse.X1` 和 `Mouse.X2`。每次物理按钮按下报告触发 `down`，释放报告触发 `up`；键盘在已经按住时再次收到按下报告才产生 `again`。[完整规则说明](rules.md)
+
+<a id="section-moving-the-pointer-and-scrolling"></a>
 
 ## 移动指针和滚动
 
@@ -35,6 +43,8 @@ F9:down => scroll_horizontal(-1);
 
 应用限定运行还会检查输出位置是否属于目标：移动检查起点和终点，滚轮检查输出时的指针位置。实际输入结果也会受到目标应用自身的滚动和鼠标处理方式影响。
 
+<a id="section-responding-to-physical-movement-and-scrolling"></a>
+
 ## 响应物理移动和滚轮
 
 ```weave
@@ -53,6 +63,8 @@ Mouse:wheel ~> set(last_wheel, Mouse.wheel_y);
 
 这些事件支持 `=>`、`=>>`、`~>`、`~>>` 四种箭头。选用接管型箭头时，对应的原始鼠标报告由程序处理；选用放行型箭头时，应用也会收到原始报告。
 
+<a id="section-reading-current-mouse-state"></a>
+
 ## 读取当前鼠标状态
 
 | 字段 | 类型 | 含义 |
@@ -66,6 +78,8 @@ Mouse:wheel ~> set(last_wheel, Mouse.wheel_y);
 每次移动或滚轮报告会一起更新位移和滚轮字段，并把与这次报告无关的分量设为零。键盘和鼠标按钮事件保留这些字段。
 
 `MOUSE_IDLE_TIMEOUT` 默认为 `80ms`。达到这段时间仍没有物理移动时，`Mouse.moving` 变成 `off`，`Mouse.idle_time` 继续增长。可以在程序顶层设置为其他正时间值，例如 `MOUSE_IDLE_TIMEOUT = 120ms;`。
+
+<a id="section-acting-after-each-distance-interval"></a>
 
 ## 每移动一段距离执行一次
 
@@ -84,6 +98,8 @@ path:tick ~> set(steps, steps + 1);
 
 一次符合条件的物理鼠标报告先更新所有计量器，再匹配原始鼠标事件规则，随后按计量器声明顺序、各周期完成顺序匹配 tick 规则。完成这些匹配后，命中规则的动作才开始执行；任务之间仍可能因等待或循环而穿插执行。
 
+<a id="section-measuring-continuous-movement-time"></a>
+
 ## 按连续移动时长计量
 
 ```weave
@@ -98,6 +114,8 @@ pulse:tick ~> set(pulses, pulses + 1);
 
 停顿达到 `MOUSE_IDLE_TIMEOUT` 后，尚未完成的时间周期清空，下一次移动开启新的一段。因此它适合统计持续移动，普通的定时重复动作则使用 `repeat` 或 `while` 配合 `wait`。
 
+<a id="section-measuring-scroll-amounts"></a>
+
 ## 按滚动量计量
 
 ```weave
@@ -110,6 +128,8 @@ horizontal:tick ~> tap(ArrowRight);
 ```
 
 滚轮计量器的周期是正数字，以滚轮格数为单位。进度保留方向：先向上滚动半格，再向下滚动半格，会互相抵消。达到任一方向的完整周期时产生 tick，可以通过已完成周期的滚动量判断方向。
+
+<a id="section-current-and-completed-intervals"></a>
 
 ## 当前周期与已完成周期
 
@@ -133,6 +153,8 @@ meter path = Mouse:move every 24;
 F6:down when @path.valid == on => move_to(@path.start_x, @path.start_y);
 ```
 
+<a id="section-field-reference"></a>
+
 ### 字段速查
 
 | 计量器视图 | 可读取的字段 |
@@ -145,6 +167,8 @@ F6:down when @path.valid == on => move_to(@path.start_x, @path.start_y);
 所有当前周期还有 `period`、`progress` 和 `remaining`，分别表示本周期阈值、已完成进度和剩余量；已完成周期有 `period`。距离和滚轮计量器的这些量是 `number`，时间计量器的是 `duration`。`moving`、`valid` 是 `state`，坐标、位移和距离是 `number`。
 
 移动周期中的 `distance` 是路程，`dx`、`dy` 是累计物理位移，起点和终点是对应的屏幕坐标。接管移动或输出动作改变指针位置时，坐标差可能与累计物理位移不同。
+
+<a id="section-changing-interval-length"></a>
 
 ## 改变周期长度
 
@@ -160,6 +184,8 @@ F7:down => set(stride, 12);
 
 周期必须大于零。动态表达式出错时会报告计量器问题，清理未完成进度，在下一次符合条件的输入到来时重新尝试；最近一次完成记录保留。
 
+<a id="section-resetting-a-meter"></a>
+
 ## 重置计量器
 
 ```weave
@@ -171,6 +197,8 @@ F6:down => restart(path);
 `restart(path)` 清理这个计量器的当前周期和最近完成记录。已经创建的任务仍保留各自选中的 `@path`。
 
 程序重新启动、暂停切换或失去目标资格时，计量器统计也会清理。Debug 捕获的开始和停止只改变观察视图，运行中的统计继续保持。
+
+<a id="section-observing-meters-in-debug"></a>
 
 ## 在 Debug 中观察
 

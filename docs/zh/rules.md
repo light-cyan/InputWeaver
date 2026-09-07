@@ -1,8 +1,14 @@
+<a id="section-input-mappings-and-rules"></a>
+
 # 输入映射与规则
+
+[English](../en/rules.md)
 
 [文档首页](README.md) · [上一篇：语言基础](language.md) · [下一篇：动作与流程控制](actions.md)
 
 重映射一个键使用 `->`；在某个输入发生时执行一段动作，使用带 `:down` 等事件后缀的规则。
+
+<a id="section-replace-one-key-with-another"></a>
 
 ## 把一个键换成另一个键
 
@@ -23,6 +29,8 @@ A -> B;
 
 条件在来源键首次按下时判断。选中的映射保持到来源键松开；中途松开 Ctrl，目标也仍然是当初选中的 C。多个映射从上往下检查，使用第一个满足条件的映射。
 
+<a id="section-act-when-input-occurs"></a>
+
 ## 在输入发生时执行动作
 
 ```weave
@@ -38,6 +46,8 @@ F6:down => tap(B);
 | `up` | 来源从按下变为松开 | 松开时执行动作 |
 
 判断条件时，当前输入的物理状态已经更新：`down` 时该键为 `held`，`up` 时为 `idle`。程序生成的模拟输入可以在 Debug 中看到，但规则匹配使用物理输入。
+
+<a id="section-what-the-arrows-control"></a>
 
 ## 箭头决定什么
 
@@ -71,6 +81,8 @@ F6:again =>;
 F6:up =>;
 ```
 
+<a id="section-key-combination-conditions"></a>
+
 ## 组合键条件
 
 组合键由一个触发事件和其他键的物理状态组成。例如，按住任意侧 Ctrl 再按 F6：
@@ -80,6 +92,8 @@ F6:down when LCtrl == held or RCtrl == held => tap(B);
 ```
 
 `when` 只读取修饰键状态。这个例子中，物理 Ctrl 仍然处于按住状态，因此目标应用可能把输出 B 解释为 Ctrl+B。设计组合键时，要同时考虑触发条件和目标应用接收到的修饰键状态。
+
+<a id="section-matching-order-for-one-input"></a>
 
 ## 同一输入的判断顺序
 
@@ -98,6 +112,8 @@ F6:down when count >= 3 => tap(B);
 
 从 `count = 0` 开始，第四次按 F6 才会满足第二条规则：这次输入开始时，前三次已经把 `count` 加到了 3。要根据刚修改的值立即作决定，把修改和 `if` 写在同一条规则的动作中。[动作与流程控制](actions.md)
 
+<a id="section-pause-and-resume"></a>
+
 ## 暂停与恢复
 
 ```weave
@@ -112,6 +128,8 @@ A -> B;
 
 `PAUSE` 改变时，正在执行或等待的动作会取消，活动映射会清理，程序按住的输出会释放。恢复后由新输入触发新的工作，用户变量和数组保留。[运行行为与限制](running.md)
 
+<a id="section-exit-the-executor"></a>
+
 ## 退出执行器
 
 默认退出组合键为 `Ctrl+Shift+F12`，Ctrl 和 Shift 各自可以使用任意一侧。要设置自己的退出方式，在顶层写 `exit`：
@@ -121,6 +139,8 @@ exit F12:down when LCtrl == held and LShift == held;
 ```
 
 显式退出规则组成这个程序自己的退出快捷键列表，替换默认组合键。可以写多条，第一条匹配的规则会接管输入并停止执行器。退出规则优先于目标资格和普通规则，暂停时也可以使用。
+
+<a id="section-key-name-reference"></a>
 
 ## 按键名称速查
 
@@ -142,6 +162,8 @@ exit F12:down when LCtrl == held and LShift == held;
 
 鼠标按钮支持完整映射、`down` 和 `up` 事件，以及 `held`、`idle` 状态判断。例如 `Mouse.X1 -> LCtrl;`，或者 `Mouse.Left:down when LShift == held => tap(B);`。鼠标移动和滚轮使用[专门的事件](mouse.md)。
 
+<a id="section-select-keys-by-raw-encoding"></a>
+
 ### 按原始编码选键
 
 原始控制使用带命名空间的编码。`HID.Usage(page, usage)` 使用 USB HID 的 Usage Page 和 Usage ID，其中 page 为 `1` 到 `0xFFFF`，usage 为 `0` 到 `0xFFFF`。例如，下面的来源和命名控制 `A` 使用同一个控制身份：
@@ -150,4 +172,4 @@ exit F12:down when LCtrl == held and LShift == held;
 HID.Usage(0x07, 0x04) -> B;
 ```
 
-编码可以使用十进制或小写 `0x` 开头的十六进制。编码在允许范围内时，还需确认运行平台支持它在规则中的用途：接收输入、判断 `held` 或 `idle`，或输出按键。Windows 的虚拟键、扫描码及能力对照见 [Windows 执行器](windows.md#控制编码与能力)。选择编码前可以先在 [Debug](debugging.md) 中观察实际输入。
+编码可以使用十进制或小写 `0x` 开头的十六进制。编码在允许范围内时，还需确认运行平台支持它在规则中的用途：接收输入、判断 `held` 或 `idle`，或输出按键。Windows 的虚拟键、扫描码及能力对照见 [Windows 执行器](windows.md#section-control-encodings-and-support)。选择编码前可以先在 [Debug](debugging.md) 中观察实际输入。

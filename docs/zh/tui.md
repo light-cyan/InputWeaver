@@ -1,8 +1,14 @@
+<a id="section-using-the-interface"></a>
+
 # 界面操作
+
+[English](../en/tui.md)
 
 [文档首页](README.md) · [第一次使用](getting-started.md)
 
 运行 `InputWeaverHost.exe` 打开界面。Program 页管理程序和源码，Console 页查看输出，Debug 页观察输入和动作。
+
+<a id="section-navigating-pages-and-areas"></a>
 
 ## 页面与区域导航
 
@@ -16,6 +22,8 @@
 Program 和 Debug 页面包含多个区域。方向键选择区域，`Enter` 进入后操作该区域的内容，`Esc` 退回区域选择。`Tab` 会直接进入下一个区域，并在末尾返回第一个。
 
 `Esc` 按层次返回：先退出编辑，再退出文档全屏或当前区域，最后从 Program 的区域选择状态返回托盘。切换页面会保留各页的选择、滚动和文档显示状态。输入框和弹窗有自己的按键操作；源码编辑中的方括号作为文本输入。
+
+<a id="section-creating-and-importing-programs"></a>
 
 ## 新建和导入
 
@@ -36,6 +44,8 @@ Add Program 用左右方向键选择 `New Blank`、`Import .weave` 或 `Cancel`�
 
 调整顺序时用上下方向键移动，`Enter` 保存，`Esc` 放弃。
 
+<a id="section-name-target-and-logging"></a>
+
 ## 名称、目标和日志
 
 Program 页右上方的 PROGRAM INFORMATION 有三个字段。进入区域后用上下方向键选字段，按 `Enter` 编辑。
@@ -49,6 +59,8 @@ Program 页右上方的 PROGRAM INFORMATION 有三个字段。进入区域后用
 Target 的 `Compiled` 使用源码中的 `TARGET`；`Executable` 使用输入的可执行文件名或绝对路径；`Global` 在全局范围运行。选择 `Executable` 后，在同行输入框填写目标，`Enter` 保存，`Esc` 返回目标类型选择。[目标行为](running.md)
 
 Logging 的三个选项为 `Off`、`Operational` 和 `Input Trace`。后两项分别记录运行日志，以及包含输入和输出轨迹的日志。文件保存在 `programs\logs\`，每次运行的日志路径会显示在 Console。[日志说明](debugging.md)
+
+<a id="section-browsing-and-editing-source"></a>
 
 ## 浏览和编辑源码
 
@@ -66,6 +78,8 @@ Logging 的三个选项为 `Off`、`Operational` 和 `Input Trace`。后两项�
 
 在 Compiled Dump 中按 `E` 会切回 Source 并进入编辑。文档全屏保留当前窗口大小；按 `Esc` 返回分栏。
 
+<a id="section-editing-keys"></a>
+
 ### 编辑按键
 
 | 按键 | 操作 |
@@ -82,6 +96,8 @@ Logging 的三个选项为 `Off`、`Operational` 和 `Input Trace`。后两项�
 
 全屏编辑时，第一次 `Esc` 退出编辑，第二次才返回分栏。源码大小最多为 16 MiB。
 
+<a id="section-automatic-saving-and-validation"></a>
+
 ### 自动保存和校验
 
 停止输入约 400 毫秒后，源码会自动保存并校验。离开编辑、切换程序、生成 Dump、运行和删除之前，也会先保存。
@@ -89,6 +105,8 @@ Logging 的三个选项为 `Off`、`Operational` 和 `Input Trace`。后两项�
 错误行使用暗红底色，具体错误位置用亮红色和下划线标出。自动校验保留当前编辑页面；保存、正式编译或启动失败时，会转到 Console 显示输出。
 
 按空格运行时，界面会检查编译文件是否对应当前源码，需要时先重新编译。修改源码后，正在运行的执行器继续使用启动时的程序；停止并重新运行后才使用修改后的内容。
+
+<a id="section-running-and-stopping"></a>
 
 ## 运行与停止
 
@@ -108,11 +126,15 @@ NEXT RUN 表示下一次运行的选项。在 Program 页的非编辑状态下�
 
 整个应用同时管理一个 Debug 执行器。启动另一个程序的 Debug 会先停止原来的 Debug 执行器。调试启动前有约 500 毫秒的延迟，方便松开启动按键；等待时显示 `STARTING`，可按 `X` 取消。[调试操作](debugging.md)
 
+<a id="section-reading-console"></a>
+
 ## 查看 Console
 
 Console 汇总应用、编译器和执行器的输出，保留最近 2048 条原始输出行。行首的程序和来源标签帮助区分多个程序的消息。
 
 用上下方向键逐行滚动，`PageUp`、`PageDown` 翻页，`Home`、`End` 跳到最早或最新内容。普通程序启动失败、标准错误输出或异常退出时，界面会转到这里；Debug 的异常退出会留在 Debug 查看最终状态，相关输出仍可在 Console 找到。
+
+<a id="section-window-and-tray"></a>
 
 ## 窗口和托盘
 
@@ -120,16 +142,20 @@ Console 汇总应用、编译器和执行器的输出，保留最近 2048 条原
 
 单击或双击托盘图标恢复界面。右击图标可以选择 `Show TUI`、`Hide TUI` 或 `Exit InputWeaver`。`Exit InputWeaver` 退出 InputWeaver，并停止界面管理的所有 Weave 程序。
 
-通过界面启动的程序会自动排除 `InputWeaverTUI.exe`，普通规则和映射不响应操作界面的输入。这也适用于全局程序；[退出规则仍优先处理](running.md#排除应用)。Debug 仍可显示这些原始输入，普通规则是否触发应在目标应用前台时验证。
+通过界面启动的程序会自动排除 `InputWeaverTUI.exe`，普通规则和映射不响应操作界面的输入。这也适用于全局程序；[退出规则仍优先处理](running.md#section-excluding-an-application)。Debug 仍可显示这些原始输入，普通规则是否触发应在目标应用前台时验证。
+
+<a id="section-backing-up-and-moving-the-program-library"></a>
 
 ## 备份和迁移程序库
 
 程序库位于 `InputWeaverHost.exe` 同目录的 `programs` 文件夹。退出 InputWeaver 后复制整个文件夹，恢复时把它放到新安装位置的 `InputWeaverHost.exe` 旁，即可保留程序源码、名称、顺序和运行配置。
 
-其中的 `.weave` 文件保存源码，`logs` 子文件夹保存已启用的运行日志。只导入单个源码文件时，按[新建和导入](#新建和导入)操作。
+其中的 `.weave` 文件保存源码，`logs` 子文件夹保存已启用的运行日志。只导入单个源码文件时，按[新建和导入](#section-creating-and-importing-programs)操作。
+
+<a id="section-changing-colors"></a>
 
 ## 修改配色
 
 配色文件是 `InputWeaverHost.exe` 同目录下的 `res\InputWeaverTUI.colors.json`，颜色使用 `#RRGGBB`。保留现有字段和结构，修改颜色后从托盘退出并重新启动 InputWeaver。文件格式或字段出错时，启动会报告具体问题。
 
-源码中的数组属性、当前鼠标状态和计量器字段都使用变量配色 `syntax_variable`，例如 `values.length`、`Mouse.x`、`path.progress` 和 `@path.dx`；点号使用正文配色 `text`。鼠标按钮 `Mouse.Left` 和事件源 `Mouse:move` 中的 `Mouse` 使用控制配色 `syntax_control`。属性和字段的命名规则见[语言基础](language.md#属性与字段速查)。
+源码中的数组属性、当前鼠标状态和计量器字段都使用变量配色 `syntax_variable`，例如 `values.length`、`Mouse.x`、`path.progress` 和 `@path.dx`；点号使用正文配色 `text`。鼠标按钮 `Mouse.Left` 和事件源 `Mouse:move` 中的 `Mouse` 使用控制配色 `syntax_control`。属性和字段的命名规则见[语言基础](language.md#section-properties-and-fields)。
