@@ -1,8 +1,10 @@
 #include "source_highlighter.hpp"
 
+#include "language/mouse_field_catalog.hpp"
 #include "language/word_catalog.hpp"
 #include "source_editor.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string_view>
 #include <utility>
@@ -24,83 +26,200 @@ namespace {
     }
 }
 
-[[nodiscard]] std::size_t NextSyntaxLexeme(
-    const std::vector<language::Lexeme>& lexemes,
-    std::size_t index) noexcept
+[[nodiscard]] bool StartsUpper(std::string_view word) noexcept
 {
-    do {
-        ++index;
-    } while (index < lexemes.size()
-        && language::IsTrivia(lexemes[index].kind));
-    return index;
+    return !word.empty() && word.front() >= 'A' && word.front() <= 'Z';
 }
 
-[[nodiscard]] std::size_t PreviousSyntaxLexeme(
-    const std::vector<language::Lexeme>& lexemes,
-    std::size_t index) noexcept
-{
-    while (index != 0U) {
-        --index;
-        if (!language::IsTrivia(lexemes[index].kind)) return index;
+using HighlightLines = std::vector<std::vector<SourceTokenSpan>>;
+
+// Only an unfinished dotted reference survives a line scan. Its span indices
+// let classification cross comments and newlines without retaining all lexemes.
+class HighlightStream final {
+public:
+    HighlightStream(SourceHighlightState& state, HighlightLines& lines)
+        : state_(state), lines_(lines)
+    {
     }
-    return lexemes.size();
-}
 
-struct DottedRun final {
-    std::size_t end{};
-    std::size_t wordCount{1U};
-    bool controlSpelling{};
-};
+    void ScanLine(std::string_view line, std::size_t lineIndex)
+    {
+        lineIndex_ = lineIndex;
+        language::ScanOptions options{};
+        options.initialState = state_.lexer;
+        options.finalInput = false;
+        options.maximumIssues = 0U;
+        const auto scan = language::ScanWeave(line, options);
+        state_.lexer = scan.finalState;
+        for (const auto& lexeme : scan.lexemes) {
+            if (lexeme.kind == language::LexemeKind::EndOfInput) break;
+            Accept(lexeme);
+        }
+    }
 
-[[nodiscard]] bool IsDottedRunStart(
-    const std::vector<language::Lexeme>& lexemes,
-    std::size_t index) noexcept
-{
-    const std::size_t dot = PreviousSyntaxLexeme(lexemes, index);
-    if (dot >= lexemes.size()
-        || lexemes[dot].kind != language::LexemeKind::Dot) return true;
-    const std::size_t word = PreviousSyntaxLexeme(lexemes, dot);
-    return word >= lexemes.size()
-        || lexemes[word].kind != language::LexemeKind::Word;
-}
+    void Finish()
+    {
+        FlushReference(language::LexemeKind::EndOfInput);
+        for (auto& line : lines_) {
+            std::erase_if(line, [](const auto& span) {
+                return span.kind == SourceTokenKind::Plain;
+            });
+        }
+    }
 
-[[nodiscard]] DottedRun ScanDottedRun(
-    const std::vector<language::Lexeme>& lexemes,
-    std::size_t begin) noexcept
-{
-    const auto startsUpper = [&lexemes](std::size_t word) {
-        const std::string_view text = lexemes[word].text;
-        return !text.empty() && text.front() >= 'A' && text.front() <= 'Z';
+private:
+    struct ReferenceWord final {
+        std::string_view text;
+        std::size_t line{};
+        std::size_t span{};
     };
-    DottedRun run{begin, 1U, startsUpper(begin)};
-    for (;;) {
-        const std::size_t dot = NextSyntaxLexeme(lexemes, run.end);
-        const std::size_t word = dot < lexemes.size()
-            && lexemes[dot].kind == language::LexemeKind::Dot
-            ? NextSyntaxLexeme(lexemes, dot) : lexemes.size();
-        if (word >= lexemes.size()
-            || lexemes[word].kind != language::LexemeKind::Word) break;
-        run.end = word;
-        ++run.wordCount;
-        run.controlSpelling = run.controlSpelling && startsUpper(word);
-    }
-    return run;
-}
 
-[[nodiscard]] bool IsArrayLengthWord(
-    const std::vector<language::Lexeme>& lexemes,
-    std::size_t index,
-    const SourceHighlightState& state)
-{
-    if (lexemes[index].text != "length") return false;
-    const std::size_t dot = PreviousSyntaxLexeme(lexemes, index);
-    const std::size_t array = dot < lexemes.size()
-        ? PreviousSyntaxLexeme(lexemes, dot) : lexemes.size();
-    return array < lexemes.size()
-        && lexemes[dot].kind == language::LexemeKind::Dot
-        && lexemes[array].kind == language::LexemeKind::Word
-        && state.arrayNames.contains(lexemes[array].text);
-}
+    void Add(const language::Lexeme& lexeme, SourceTokenKind kind)
+    {
+        lines_[lineIndex_].push_back(
+            {lexeme.span.beginByte, lexeme.span.EndByte(), kind});
+    }
+
+    void AddWord(const language::Lexeme& lexeme)
+    {
+        words_.push_back({lexeme.text, lineIndex_, lines_[lineIndex_].size()});
+        Add(lexeme, SourceTokenKind::Plain);
+        afterDot_ = false;
+    }
+
+    void Color(const ReferenceWord& word, SourceTokenKind kind)
+    {
+        lines_[word.line][word.span].kind = kind;
+    }
+
+    void ResetDeclaration()
+    {
+        state_.expectsDeclarationName = false;
+        state_.declarationIsArray = false;
+        state_.declarationIsMeter = false;
+    }
+
+    void ClassifyRoot(const ReferenceWord& word, bool dotted,
+        language::LexemeKind following)
+    {
+        const auto role = language::LookupWordRole(word.text);
+        if (role == language::WordRole::Type) {
+            Color(word, SourceTokenKind::Type);
+            state_.expectsDeclarationName = true;
+            state_.declarationIsArray = false;
+            state_.declarationIsMeter = word.text == "meter";
+        } else if (state_.expectsDeclarationName) {
+            Color(word, SourceTokenKind::Variable);
+            auto& names = state_.declarationIsMeter ? state_.meterNames
+                : state_.declarationIsArray ? state_.arrayNames : state_.scalarNames;
+            names.emplace(word.text);
+            ResetDeclaration();
+        } else if (word.text == "Mouse") {
+            Color(word, following == language::LexemeKind::Colon && !dotted
+                ? SourceTokenKind::Control : SourceTokenKind::Variable);
+        } else if (state_.scalarNames.contains(word.text)
+            || state_.arrayNames.contains(word.text)
+            || state_.meterNames.contains(word.text)
+            || role == language::WordRole::IntrinsicValue) {
+            Color(word, SourceTokenKind::Variable);
+        } else if (role == language::WordRole::Constant
+            || role == language::WordRole::Transition
+            || role == language::WordRole::ScanPrefix) {
+            Color(word, SourceTokenKind::Constant);
+        } else if (role == language::WordRole::Action) {
+            Color(word, SourceTokenKind::Action);
+        } else if (role == language::WordRole::Keyword) {
+            Color(word, SourceTokenKind::Keyword);
+        } else if (!dotted && StartsUpper(word.text)) {
+            Color(word, SourceTokenKind::Control);
+        }
+    }
+
+    void FlushReference(language::LexemeKind following)
+    {
+        if (words_.empty()) return;
+        const bool dotted = words_.size() > 1U || afterDot_;
+        const bool control = words_.size() > 1U
+            && std::all_of(words_.begin(), words_.end(), [](const auto& word) {
+                return StartsUpper(word.text);
+            });
+        if (control) {
+            for (const auto& word : words_) Color(word, SourceTokenKind::Control);
+            ResetDeclaration();
+        } else {
+            const auto& root = words_.front();
+            ClassifyRoot(root, dotted, following);
+            if (words_.size() == 2U) {
+                const auto& member = words_[1];
+                const auto* field = language::FindMouseFieldWord(member.text);
+                const bool mouseField = root.text == "Mouse" && field != nullptr && field->mouseState;
+                const bool meterField = state_.meterNames.contains(root.text)
+                    && field != nullptr && field->meter;
+                const bool arrayLength = state_.arrayNames.contains(root.text) && member.text == "length";
+                if (mouseField || meterField || arrayLength) {
+                    Color(member, SourceTokenKind::Variable);
+                }
+            }
+        }
+        words_.clear();
+        afterDot_ = false;
+    }
+
+    void Accept(const language::Lexeme& lexeme)
+    {
+        using language::LexemeKind;
+        if (lexeme.kind == LexemeKind::LineComment
+            || lexeme.kind == LexemeKind::BlockComment) {
+            Add(lexeme, SourceTokenKind::Comment);
+            return;
+        }
+        if (lexeme.kind == LexemeKind::Whitespace) return;
+
+        if (!words_.empty()) {
+            if (!afterDot_ && lexeme.kind == LexemeKind::Dot) {
+                afterDot_ = true;
+                return;
+            }
+            if (afterDot_ && lexeme.kind == LexemeKind::Word) {
+                AddWord(lexeme);
+                return;
+            }
+            FlushReference(lexeme.kind);
+        }
+        if (lexeme.kind == LexemeKind::Word) {
+            AddWord(lexeme);
+            return;
+        }
+        if (state_.expectsDeclarationName) {
+            if (lexeme.kind == LexemeKind::LeftBracket) {
+                state_.declarationIsArray = true;
+            } else if (lexeme.kind != LexemeKind::RightBracket
+                || !state_.declarationIsArray) {
+                ResetDeclaration();
+            }
+        }
+        if (lexeme.kind == LexemeKind::String
+            || lexeme.kind == LexemeKind::IncompleteString) {
+            Add(lexeme, SourceTokenKind::String);
+        } else if (lexeme.kind == LexemeKind::Number
+            || lexeme.kind == LexemeKind::Duration
+            || lexeme.kind == LexemeKind::HexInteger) {
+            Add(lexeme, SourceTokenKind::Constant);
+        } else if (lexeme.kind == LexemeKind::At) {
+            Add(lexeme, SourceTokenKind::Variable);
+        } else if (lexeme.kind == LexemeKind::Pipe) {
+            Add(lexeme, SourceTokenKind::Action);
+        } else if (IsArrow(lexeme.kind)) {
+            Add(lexeme, SourceTokenKind::Operator);
+        }
+    }
+
+    SourceHighlightState& state_;
+    HighlightLines& lines_;
+    std::size_t lineIndex_{};
+    std::vector<ReferenceWord> words_;
+    bool afterDot_{};
+};
 
 } // namespace
 
@@ -108,115 +227,11 @@ std::vector<SourceTokenSpan> HighlightWeaveLine(
     std::string_view line,
     SourceHighlightState& state)
 {
-    language::ScanOptions options{};
-    options.initialState = state.lexer;
-    options.finalInput = false;
-    options.maximumIssues = 0U;
-    language::ScanResult scan = language::ScanWeave(line, options);
-    state.lexer = scan.finalState;
-
-    std::vector<SourceTokenSpan> spans;
-    const auto add = [&spans](const language::Lexeme& lexeme,
-                             SourceTokenKind kind) {
-        spans.push_back({lexeme.span.beginByte, lexeme.span.EndByte(), kind});
-    };
-    for (std::size_t index = 0U; index < scan.lexemes.size(); ++index) {
-        const language::Lexeme& lexeme = scan.lexemes[index];
-        if (lexeme.kind == language::LexemeKind::EndOfInput) break;
-        if (lexeme.kind == language::LexemeKind::LineComment
-            || lexeme.kind == language::LexemeKind::BlockComment) {
-            add(lexeme, SourceTokenKind::Comment);
-            continue;
-        }
-        if (lexeme.kind == language::LexemeKind::Whitespace) continue;
-
-        if (state.expectsDeclarationName
-            && lexeme.kind != language::LexemeKind::Word) {
-            if (lexeme.kind == language::LexemeKind::LeftBracket) {
-                state.declarationIsArray = true;
-            } else if (lexeme.kind != language::LexemeKind::RightBracket
-                || !state.declarationIsArray) {
-                state.expectsDeclarationName = false;
-                state.declarationIsArray = false;
-            }
-        }
-        if (lexeme.kind == language::LexemeKind::String
-            || lexeme.kind == language::LexemeKind::IncompleteString) {
-            add(lexeme, SourceTokenKind::String);
-            continue;
-        }
-        if (lexeme.kind == language::LexemeKind::Number
-            || lexeme.kind == language::LexemeKind::Duration
-            || lexeme.kind == language::LexemeKind::HexInteger) {
-            add(lexeme, SourceTokenKind::Constant);
-            continue;
-        }
-        if (lexeme.kind == language::LexemeKind::Pipe) {
-            add(lexeme, SourceTokenKind::Action);
-            continue;
-        }
-        if (IsArrow(lexeme.kind)) {
-            add(lexeme, SourceTokenKind::Operator);
-            continue;
-        }
-        if (lexeme.kind != language::LexemeKind::Word) continue;
-
-        const language::WordRole role = language::LookupWordRole(lexeme.text);
-        if (role == language::WordRole::Type) {
-            add(lexeme, SourceTokenKind::Type);
-            state.expectsDeclarationName = true;
-            state.declarationIsArray = false;
-            continue;
-        }
-        if (state.expectsDeclarationName) {
-            add(lexeme, SourceTokenKind::Variable);
-            auto& names = state.declarationIsArray
-                ? state.arrayNames : state.scalarNames;
-            names.emplace(lexeme.text);
-            state.expectsDeclarationName = false;
-            state.declarationIsArray = false;
-            continue;
-        }
-
-        const bool isArray = state.arrayNames.contains(lexeme.text);
-        const bool runStart = IsDottedRunStart(scan.lexemes, index);
-        const DottedRun run = runStart
-            ? ScanDottedRun(scan.lexemes, index)
-            : DottedRun{index};
-        const bool dottedMember = !runStart || run.wordCount > 1U;
-        const bool arrayLength = run.wordCount == 2U
-            && scan.lexemes[run.end].text == "length"
-            && isArray;
-        if (run.controlSpelling && run.wordCount > 1U && !arrayLength) {
-            for (std::size_t cursor = index; cursor <= run.end; ++cursor) {
-                const language::Lexeme& part = scan.lexemes[cursor];
-                if (part.kind == language::LexemeKind::Word) {
-                    add(part, SourceTokenKind::Control);
-                } else if (part.kind == language::LexemeKind::BlockComment
-                    || part.kind == language::LexemeKind::LineComment) {
-                    add(part, SourceTokenKind::Comment);
-                }
-            }
-            index = run.end;
-        } else if (isArray || state.scalarNames.contains(lexeme.text)
-            || IsArrayLengthWord(scan.lexemes, index, state)) {
-            add(lexeme, SourceTokenKind::Variable);
-        } else if (role == language::WordRole::IntrinsicValue) {
-            add(lexeme, SourceTokenKind::Variable);
-        } else if (role == language::WordRole::Constant
-            || role == language::WordRole::Transition
-            || role == language::WordRole::ScanPrefix) {
-            add(lexeme, SourceTokenKind::Constant);
-        } else if (role == language::WordRole::Action) {
-            add(lexeme, SourceTokenKind::Action);
-        } else if (role == language::WordRole::Keyword) {
-            add(lexeme, SourceTokenKind::Keyword);
-        } else if (!dottedMember
-            && lexeme.text.front() >= 'A' && lexeme.text.front() <= 'Z') {
-            add(lexeme, SourceTokenKind::Control);
-        }
-    }
-    return spans;
+    HighlightLines lines(1U);
+    HighlightStream stream(state, lines);
+    stream.ScanLine(line, 0U);
+    stream.Finish();
+    return std::move(lines.front());
 }
 
 bool SourceHighlightDocument::Update(const SourceEditor& editor)
@@ -226,10 +241,12 @@ bool SourceHighlightDocument::Update(const SourceEditor& editor)
         return false;
     }
     SourceHighlightState state{};
-    std::vector<std::vector<SourceTokenSpan>> lines(editor.LineCount());
+    HighlightLines lines(editor.LineCount());
+    HighlightStream stream(state, lines);
     for (std::size_t index = 0U; index < lines.size(); ++index) {
-        lines[index] = HighlightWeaveLine(editor.Line(index), state);
+        stream.ScanLine(editor.Line(index), index);
     }
+    stream.Finish();
     lines_ = std::move(lines);
     revision_ = editor.Revision();
     return true;

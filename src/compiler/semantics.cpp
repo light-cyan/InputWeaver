@@ -2,9 +2,11 @@
 
 #include "control_catalog.hpp"
 
+#include "language/mouse_field_catalog.hpp"
 #include "language/word_catalog.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>

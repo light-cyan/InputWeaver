@@ -1,4 +1,5 @@
 #include "language/lexer.hpp"
+#include "language/mouse_field_catalog.hpp"
 #include "language/word_catalog.hpp"
 
 #include <algorithm>
@@ -205,9 +206,21 @@ void TestLimitsAndCatalog()
         && significantOnly.lexemes.front().kind == LexemeKind::Word
         && significantOnly.lexemes.front().text == "value",
         "callers can discard trivia without a second scanner");
-    Check(LookupWordRole("state") == WordRole::Type && LookupWordRole("held") == WordRole::Constant && LookupWordRole("append") == WordRole::Action && LookupWordRole("length") == WordRole::Property, "the word catalog exposes V4 lexical roles");
+    Check(LookupWordRole("state") == WordRole::Type && LookupWordRole("held") == WordRole::Constant && LookupWordRole("append") == WordRole::Action, "the word catalog exposes shared lexical roles");
+    Check(FindWordEntry("length") == nullptr && LookupWordRole("length") == WordRole::None
+        && !IsReservedLanguageWord("length"),
+        "array length is contextual and does not reserve a user declaration name");
     Check(LookupWordRole("meter") == WordRole::Type && LookupWordRole("every") == WordRole::Keyword,
         "meter declarations expose shared compiler and highlighter roles");
+    for (const auto& field : kMouseFieldWords) {
+        Check(FindMouseFieldWord(field.name) == &field && !IsReservedLanguageWord(field.name),
+            "contextual mouse fields are shared without reserving user variable names");
+    }
+    Check(FindMouseFieldWord("unknown") == nullptr && FindMouseFieldWord("DX") == nullptr
+        && FindMouseFieldWord("dx")->mouseState && FindMouseFieldWord("dx")->meter
+        && !FindMouseFieldWord("start_x")->mouseState && FindMouseFieldWord("start_x")->meter
+        && FindMouseFieldWord("idle_time")->mouseState && !FindMouseFieldWord("idle_time")->meter,
+        "mouse field vocabulary is case sensitive and owner scoped");
     Check(LookupWordRole("RAND_SEED") == WordRole::IntrinsicValue
             && LookupWordRole("RAND01") == WordRole::IntrinsicValue
             && IsReservedLanguageWord("RAND_SEED")

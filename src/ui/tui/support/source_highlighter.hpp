@@ -16,6 +16,7 @@ namespace inputweaver::ui::tui {
 class SourceEditor;
 
 enum class SourceTokenKind {
+    Plain,
     Keyword,
     Type,
     Variable,
@@ -37,8 +38,10 @@ struct SourceHighlightState final {
     language::LexerState lexer{};
     std::set<std::string, std::less<>> scalarNames;
     std::set<std::string, std::less<>> arrayNames;
+    std::set<std::string, std::less<>> meterNames;
     bool expectsDeclarationName{};
     bool declarationIsArray{};
+    bool declarationIsMeter{};
 };
 
 [[nodiscard]] std::vector<SourceTokenSpan> HighlightWeaveLine(

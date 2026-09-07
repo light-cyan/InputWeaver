@@ -65,12 +65,21 @@
         const auto dot = name.find('.');
         const auto subject = name.substr(0, dot);
         const auto field = dot == std::string_view::npos ? std::string_view{} : name.substr(dot + 1);
-        const auto found = std::find(kMouseFieldNames.begin(), kMouseFieldNames.end(), field);
-        if (found == kMouseFieldNames.end()) {
+        const auto* found = language::FindMouseFieldWord(field);
+        if (found == nullptr) {
             ReportType(syntax.span, "unknown mouse or meter field '" + std::string(field) + "'");
             return MakeErrorExpression(syntax.span);
         }
-        MouseFieldReference reference{{}, static_cast<MouseField>(found - kMouseFieldNames.begin()), syntax.completed};
+        // Source vocabulary and artifact field identifiers have separate owners.
+        static constexpr std::array fields{
+            MouseField::X, MouseField::Y, MouseField::Dx, MouseField::Dy,
+            MouseField::WheelX, MouseField::WheelY, MouseField::Moving, MouseField::IdleTime,
+            MouseField::StartX, MouseField::StartY, MouseField::Distance,
+            MouseField::Period, MouseField::Progress, MouseField::Remaining, MouseField::Valid,
+        };
+        static_assert(fields.size() == language::kMouseFieldWords.size());
+        const auto fieldIndex = static_cast<std::size_t>(found - language::kMouseFieldWords.data());
+        MouseFieldReference reference{{}, fields[fieldIndex], syntax.completed};
         auto transition = EventTransition::Move;
         auto periodType = ExpressionType::Number;
         if (subject != "Mouse") {

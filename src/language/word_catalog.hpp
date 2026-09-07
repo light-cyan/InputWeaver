@@ -15,7 +15,6 @@ enum class WordRole {
     IntrinsicValue,
     RawControl,
     ScanPrefix,
-    Property,
 };
 
 struct WordEntry final {
@@ -71,7 +70,6 @@ inline constexpr std::array kWordCatalog{
     WordEntry{"append", WordRole::Action},
     WordEntry{"pop", WordRole::Action},
     WordEntry{"clear", WordRole::Action},
-    WordEntry{"length", WordRole::Property},
     WordEntry{"exec", WordRole::Action},
     WordEntry{"if", WordRole::Keyword},
     WordEntry{"then", WordRole::Keyword},

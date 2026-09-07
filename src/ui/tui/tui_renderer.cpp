@@ -677,6 +677,8 @@ void RenderStateCells(
     const ColorScheme& colors) noexcept
 {
     switch (kind) {
+    case SourceTokenKind::Plain:
+        return colors.text;
     case SourceTokenKind::Keyword:
         return colors.syntaxKeyword;
     case SourceTokenKind::Type:

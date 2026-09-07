@@ -646,6 +646,36 @@ void TestControlCatalogAndRawControls()
     }
 }
 
+void TestArrayLengthNames()
+{
+    using namespace inputweaver;
+    const auto output = CompileGood("length-variable.weave",
+        "number length = 0; number[] values = [1, 2]; "
+        "Mouse.Left:down ~> set(length, values.length + length);",
+        "a length variable coexists with the array length property");
+    const auto program = DecodeGood(output, "length variable and property");
+    if (program != nullptr) {
+        const auto code = program->ExpressionCode();
+        Check(std::any_of(code.begin(), code.end(), [](const auto& instruction) {
+            return instruction.opcode == ExpressionOpcode::LoadValue;
+        }) && std::any_of(code.begin(), code.end(), [](const auto& instruction) {
+            return instruction.opcode == ExpressionOpcode::LoadArrayLength;
+        }), "length variables and properties retain their distinct compiled operations");
+    }
+    for (const std::string_view source : {
+            "state length = off; Mouse.Left:down ~> toggle(length);",
+            "duration length = 1ms; Mouse.Left:down ~> wait(length);",
+            "number[] length = [1, 2]; Mouse.Left:down when length.length > 0 ~> set(length[0], length.length);",
+            "state[] length = [off]; Mouse.Left:down when length.length > 0 ~> toggle(length[0]);",
+            "meter length = Mouse:move every 24; number result = 0; "
+                "length:tick ~> set(result, @length.dx) restart(length);"}) {
+        const auto named = CompileGood("length-declaration.weave", std::string(source),
+            "all declaration kinds accept length as a user name");
+        Check(DecodeGood(named, "length declaration artifact") != nullptr,
+            "length declarations produce valid artifacts");
+    }
+}
+
 void TestLoweringCoverage()
 {
     using namespace inputweaver;
@@ -1024,6 +1054,7 @@ int main()
     TestRandomIntrinsics();
     TestControlCatalogAndRawControls();
     TestLoweringCoverage();
+    TestArrayLengthNames();
     TestArrayDiagnostics();
     TestGapAndEmptyActionSemantics();
     TestGoldenFixtureSemantics();

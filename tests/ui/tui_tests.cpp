@@ -664,8 +664,9 @@ void TestSupport()
             && isOrdinary(logicalSpans, logicalExpression.find("not"))
             && isOrdinary(logicalSpans, logicalExpression.find("and"))
             && isOrdinary(logicalSpans, logicalExpression.find("or"))
-            && isOrdinary(logicalSpans, logicalExpression.find('@')),
-        "invalid tokens and logical operators remain ordinary source text");
+            && hasSpan(logicalExpression, logicalSpans, "@",
+                inputweaver::ui::tui::SourceTokenKind::Variable),
+        "snapshot markers use variable color while logical operators remain ordinary");
     constexpr std::string_view action =
         "A:down => tap(B) | wait(20ms);";
     const auto actionSpans = inputweaver::ui::tui::HighlightWeaveLine(
@@ -853,6 +854,29 @@ void TestSupport()
             && bareLengthSpans.empty(),
         "only array length properties use variable coloring");
 
+    constexpr std::string_view lengthVariable = "number length = 0;";
+    const auto lengthDeclarationSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        lengthVariable, contextualState);
+    Check(hasSpan(lengthVariable, lengthDeclarationSpans, "length",
+        inputweaver::ui::tui::SourceTokenKind::Variable),
+        "length declarations use ordinary variable highlighting");
+    constexpr std::string_view lengthExpression = "length + values.length";
+    const auto lengthExpressionSpans = inputweaver::ui::tui::HighlightWeaveLine(
+        lengthExpression, contextualState);
+    Check(lengthExpressionSpans.size() == 3U
+        && std::all_of(lengthExpressionSpans.begin(), lengthExpressionSpans.end(), [](const auto& span) {
+            return span.kind == inputweaver::ui::tui::SourceTokenKind::Variable;
+        }), "length variables and array properties coexist without changing their colors");
+    inputweaver::ui::tui::SourceEditor lengthEditor;
+    lengthEditor.Set("number[] length = [1];\nlength /* array */\n. length");
+    inputweaver::ui::tui::SourceHighlightDocument lengthHighlights;
+    Check(lengthHighlights.Update(lengthEditor)
+        && hasSpan(lengthEditor.Line(1U), lengthHighlights.Line(1U), "length",
+            inputweaver::ui::tui::SourceTokenKind::Variable)
+        && hasSpan(lengthEditor.Line(2U), lengthHighlights.Line(2U), "length",
+            inputweaver::ui::tui::SourceTokenKind::Variable),
+        "an array named length keeps contextual member highlighting across trivia and newlines");
+
     (void)inputweaver::ui::tui::HighlightWeaveLine(
         "state Windows = off;",
         contextualState);
@@ -947,6 +971,7 @@ void TestSupport()
 }
 
 #include "tui_mouse_tests.inc"
+#include "source_highlighter_tests.inc"
 
 void TestController()
 {
@@ -2134,6 +2159,7 @@ void TestBackgroundAndExitNavigation()
 int main()
 {
     TestSupport();
+    TestMouseHighlighting();
     TestController();
     TestSourceEditorPage();
     TestSpatialNavigation();

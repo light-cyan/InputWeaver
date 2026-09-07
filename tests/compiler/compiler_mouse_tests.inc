@@ -86,4 +86,34 @@ exit F12:down when @travel.valid == on;
         if (fieldProgram) Check(fieldProgram->Settings().mouseIdleTimeout.nanoseconds == 80'000'000,
             "mouse idle timeout defaults to 80 ms");
     }
+
+    // The contextual vocabulary must retain the persisted field selectors.
+    const std::vector<std::pair<std::string_view, std::uint32_t>> selectors{
+        {"Mouse.x", 0U}, {"Mouse.y", 1U}, {"Mouse.dx", 2U}, {"Mouse.dy", 3U},
+        {"Mouse.wheel_x", 4U}, {"Mouse.wheel_y", 5U}, {"Mouse.moving", 6U},
+        {"Mouse.idle_time", 7U}, {"path.start_x", 8U}, {"path.start_y", 9U},
+        {"path.distance", 10U}, {"path.period", 11U}, {"path.progress", 12U},
+        {"path.remaining", 13U}, {"@path.valid", 0x10eU},
+    };
+    for (const auto& [field, selector] : selectors) {
+        const std::string target = selector == 6U || selector == 0x10eU ? "s"
+            : selector == 7U ? "d" : "n";
+        const auto compiled = CompileGood("field-selector.weave",
+            declarations + "Mouse.Left:down ~> set(" + target + ", " + std::string(field) + ");",
+            "contextual field selector");
+        if (!compiled.Succeeded()) continue;
+        const auto decoded = DecodeGood(compiled, "contextual field selector artifact");
+        if (!decoded) continue;
+        const auto instructions = decoded->ExpressionCode();
+        Check(std::count_if(instructions.begin(), instructions.end(), [&](const auto& instruction) {
+            return instruction.opcode == ExpressionOpcode::LoadField && instruction.operand1 == selector;
+        }) == 1, "field spelling retains its exact artifact selector");
+    }
+    (void)CompileGood("field-names.weave",
+        "number x = 0; number y = 0; number dx = 0; number dy = 0; number wheel_x = 0; "
+        "number wheel_y = 0; state moving = off; duration idle_time = 0ms; "
+        "number start_x = 0; number start_y = 0; number distance = 0; number period = 0; "
+        "number progress = 0; number remaining = 0; state valid = off; "
+        "Mouse:move ~> set(dx, Mouse.dx);",
+        "mouse field spellings remain legal standalone variable names");
 }

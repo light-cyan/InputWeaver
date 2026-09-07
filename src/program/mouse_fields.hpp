@@ -2,19 +2,11 @@
 
 #include "compiled_program.hpp"
 
-#include <array>
-#include <string_view>
-
 namespace inputweaver {
 
 enum class MouseField : std::uint8_t {
     X, Y, Dx, Dy, WheelX, WheelY, Moving, IdleTime,
     StartX, StartY, Distance, Period, Progress, Remaining, Valid,
-};
-
-inline constexpr std::array<std::string_view, 15> kMouseFieldNames{
-    "x", "y", "dx", "dy", "wheel_x", "wheel_y", "moving", "idle_time",
-    "start_x", "start_y", "distance", "period", "progress", "remaining", "valid",
 };
 
 struct MouseFieldReference final {
@@ -48,7 +40,7 @@ struct MouseFieldReference final {
     ExpressionType periodType = ExpressionType::Number) noexcept
 {
     const auto field = reference.field;
-    if (static_cast<std::size_t>(field) >= kMouseFieldNames.size()) {
+    if (field > MouseField::Valid) {
         return ExpressionType::None;
     }
     if (!reference.source.IsValid()) {
