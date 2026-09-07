@@ -133,12 +133,18 @@ HEALTH 中的 `Complete snapshot` 表示停止时的最终状态已完整取得�
 
 在 PROGRAM INFORMATION 中选择 Logging，或使用命令行的 `--log`；需要输入与输出轨迹时，选择 `Input Trace` 或加入 `--trace-input`。[命令行例子](command-line.md)
 
-JSONL 文件每行是一条记录。输入轨迹可能包含按键和鼠标位置；分享日志前按排查需要检查内容。
+JSONL 文件每行是一条记录。每条记录都有 `schema`、`schema_version`、`session_id` 和 Unix 毫秒 `time_unix_ms`；同一次执行的记录共享会话 ID。日志可能包含程序路径、目标与排除进程选择器、目标映像路径和进程 ID。输入轨迹还可能包含按键和鼠标位置；分享日志前按排查需要检查内容。
 
 常见运行问题包括：
 
 | 记录或指标 | 含义和排查方向 |
 | --- | --- |
+| `SessionStart`、`ConfigurationResolved` | 启动参数摘要和解析后的有效目标配置 |
+| `StartupFailure` | `.weavec` 加载、目标解析或执行器组件启动失败；结合 `stage`、`code`、`win32_error` 和 `detail` 检查 |
+| `TargetSearchStarted`、`TargetSearchWaiting`、`TargetSearchAmbiguous` | 目标搜索已经开始、尚未找到或存在多个候选进程 |
+| `TargetSearchFailure` | 目标发现或验证失败，结合 `code` 和 `win32_error` 检查 |
+| `TargetFound`、`TargetAttached`、`TargetLost`、`TargetAttachFailure` | 目标进程发现、附加、退出或附加失败；记录可用的 PID 和映像路径 |
+| `SessionStop` | 会话停止原因和执行器退出码 |
 | `TargetEligibilityChange` | 目标资格变化，检查窗口前台切换 |
 | `PhysicalStateSynchronization` | 输入来源建立初始松开基线 |
 | `PredicateFault` | 条件或计量周期求值错误，按出错位置检查[影响范围](running.md#section-expression-and-action-errors) |

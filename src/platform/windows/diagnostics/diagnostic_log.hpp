@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -24,6 +25,49 @@ inline constexpr std::size_t kHookDiagnosticCapacity = 4096;
 inline constexpr std::size_t kInjectionDiagnosticCapacity = 512;
 inline constexpr std::size_t kRuntimeDiagnosticCapacity = 512;
 inline constexpr std::uint64_t kMaximumJsonlBytes = 8ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint32_t kDiagnosticSchemaVersion = 1U;
+
+enum class ExecutorDiagnosticKind : std::uint8_t {
+    SessionStart,
+    ConfigurationResolved,
+    StartupFailure,
+    TargetSearchStarted,
+    TargetSearchWaiting,
+    TargetSearchAmbiguous,
+    TargetSearchFailure,
+    TargetFound,
+    TargetAttached,
+    TargetAttachFailure,
+    TargetLost,
+    SessionStop
+};
+
+struct ExecutorDiagnosticRecord final {
+    ExecutorDiagnosticKind kind{ExecutorDiagnosticKind::SessionStart};
+    std::string stage;
+    std::string reason;
+    std::string targetMode;
+    std::wstring detail;
+    std::wstring programPath;
+    std::wstring targetSelector;
+    std::wstring excludedProcessSelector;
+    std::wstring imagePath;
+    std::uint32_t pid{};
+    std::uint32_t code{};
+    std::uint32_t win32Error{};
+    std::uint32_t exitCode{};
+    std::uint32_t matchCount{};
+    bool traceInput{};
+    bool dryRun{};
+    bool allowExec{};
+    bool debug{};
+};
+
+template <typename Record>
+struct TimestampedDiagnosticRecord final {
+    Record record{};
+    std::uint64_t timeUnixMilliseconds{};
+};
 
 enum class DiagnosticControl : std::uint8_t {
     OtherKeyboard,
@@ -109,6 +153,7 @@ void ApplyPrivacyRedaction(HookDiagnosticRecord& record) noexcept;
 std::string FormatHookDiagnosticJson(const HookDiagnosticRecord& record);
 std::string FormatInjectionDiagnosticJson(const InjectionDiagnosticRecord& record);
 std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record);
+std::string FormatExecutorDiagnosticJson(const ExecutorDiagnosticRecord& record);
 
 [[nodiscard]] constexpr bool JsonlAppendFits(
     std::uint64_t currentBytes,
@@ -120,7 +165,8 @@ std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record);
 
 class RuntimeDiagnosticRing final {
 public:
-    bool TryPush(const RuntimeDiagnosticRecord& value) noexcept {
+    bool TryPush(
+        const TimestampedDiagnosticRecord<RuntimeDiagnosticRecord>& value) noexcept {
         if (producerAdmission_.test_and_set(std::memory_order_acquire)) {
             rejectedPushCount_.fetch_add(1U, std::memory_order_relaxed);
             return false;
@@ -133,7 +179,8 @@ public:
         return accepted;
     }
 
-    bool TryPop(RuntimeDiagnosticRecord& value) noexcept {
+    bool TryPop(
+        TimestampedDiagnosticRecord<RuntimeDiagnosticRecord>& value) noexcept {
         return ring_.TryPop(value);
     }
 
@@ -147,7 +194,9 @@ public:
 
 private:
     std::atomic_flag producerAdmission_ = ATOMIC_FLAG_INIT;
-    support::FixedSpscRing<RuntimeDiagnosticRecord, kRuntimeDiagnosticCapacity> ring_;
+    support::FixedSpscRing<
+        TimestampedDiagnosticRecord<RuntimeDiagnosticRecord>,
+        kRuntimeDiagnosticCapacity> ring_;
     std::atomic<std::uint64_t> rejectedPushCount_{0U};
 };
 
@@ -164,9 +213,11 @@ public:
         std::wstring& errorMessage,
         std::uint64_t maximumJsonlBytes = kMaximumJsonlBytes);
     void Stop() noexcept;
+    void Stop(const ExecutorDiagnosticRecord& finalRecord) noexcept;
     bool TryPushHook(HookDiagnosticRecord record) noexcept;
     bool TryPushInjection(const InjectionDiagnosticRecord& record) noexcept;
     bool TryPushRuntime(const RuntimeDiagnosticRecord& record) noexcept;
+    bool WriteExecutor(const ExecutorDiagnosticRecord& record) noexcept;
 
     bool Enabled() const noexcept;
     std::uint64_t DroppedHookRecords() const noexcept;
@@ -178,19 +229,28 @@ public:
 private:
     void WorkerMain() noexcept;
     void DrainRecords() noexcept;
-    void EmitLine(const std::string& line);
+    void EmitLine(
+        const std::string& line,
+        std::uint64_t timeUnixMilliseconds);
+    void StopImpl(const ExecutorDiagnosticRecord* finalRecord) noexcept;
 
     // The hook and injection rings each have one owning producer thread.
-    support::FixedSpscRing<HookDiagnosticRecord, kHookDiagnosticCapacity> hookRing_;
-    support::FixedSpscRing<InjectionDiagnosticRecord, kInjectionDiagnosticCapacity> injectionRing_;
+    support::FixedSpscRing<
+        TimestampedDiagnosticRecord<HookDiagnosticRecord>,
+        kHookDiagnosticCapacity> hookRing_;
+    support::FixedSpscRing<
+        TimestampedDiagnosticRecord<InjectionDiagnosticRecord>,
+        kInjectionDiagnosticCapacity> injectionRing_;
     // Hook and output paths can both drain runtime records; producer admission is nonblocking.
     RuntimeDiagnosticRing runtimeRing_;
+    std::mutex writeMutex_;
     std::atomic<std::uint64_t> droppedHookRecords_{0};
     std::atomic<std::uint64_t> droppedInjectionRecords_{0};
     std::atomic<std::uint64_t> jsonlBytesWritten_{0};
     std::atomic<bool> jsonlTruncated_{false};
     std::atomic<bool> enabled_{false};
     std::uint64_t maximumJsonlBytes_{kMaximumJsonlBytes};
+    std::string sessionId_;
     HANDLE wakeEvent_{nullptr};
     HANDLE stopEvent_{nullptr};
     HANDLE readyEvent_{nullptr};

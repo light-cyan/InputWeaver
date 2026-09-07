@@ -40,6 +40,7 @@ struct WindowsProgramRuntimeSessionMetrics final {
     std::uint64_t maximumHookMicroseconds{};
     std::uint64_t forwardedOutsideTarget{};
     bool circuitBreakerOpen{};
+    bool exitRequested{};
     bool fatalShutdown{};
 };
 

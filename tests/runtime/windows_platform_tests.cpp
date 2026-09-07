@@ -4,6 +4,7 @@
 #include "platform/windows/runtime/low_level_hooks.hpp"
 #include "platform/windows/runtime/process_context.hpp"
 #include "platform/windows/runtime/process_locator.hpp"
+#include "platform/windows/support/file_identity.hpp"
 #include "platform/windows/runtime/windows_output_queue.hpp"
 #include "support/bounded_mpmc_queue.hpp"
 #include "support/callback_ref.hpp"
@@ -13,6 +14,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -424,6 +427,42 @@ void TestDiagnosticPrivacyAndBounds() {
                 != std::string::npos,
         "array activation JSON preserves its capacity dimension and values");
 
+    inputweaver::ExecutorDiagnosticRecord sessionStart{};
+    sessionStart.kind = inputweaver::ExecutorDiagnosticKind::SessionStart;
+    sessionStart.targetMode = "Executable";
+    sessionStart.detail = L"line\n\"quoted\"";
+    sessionStart.programPath = LR"(C:\Tools\demo.weavec)";
+    sessionStart.traceInput = true;
+    sessionStart.allowExec = true;
+    const std::string sessionJson = inputweaver::FormatExecutorDiagnosticJson(sessionStart);
+    Check(
+        sessionJson.find("\"event\":\"SessionStart\"") != std::string::npos
+            && sessionJson.find("\"target_mode\":\"Executable\"") != std::string::npos
+            && sessionJson.find("\"detail\":\"line\\n\\\"quoted\\\"\"") != std::string::npos
+            && sessionJson.find("\"trace_input\":true") != std::string::npos
+            && sessionJson.find("\"allow_exec\":true") != std::string::npos,
+        "executor diagnostic JSON contains configuration and escaped text");
+
+    inputweaver::ExecutorDiagnosticRecord sessionStop{};
+    sessionStop.kind = inputweaver::ExecutorDiagnosticKind::SessionStop;
+    sessionStop.reason = "exit_rule";
+    const std::string stopJson = inputweaver::FormatExecutorDiagnosticJson(sessionStop);
+    Check(
+        stopJson.find("\"reason\":\"exit_rule\"") != std::string::npos
+            && stopJson.find("\"exit_code\":0") != std::string::npos,
+        "session stop JSON retains successful exit status and reason");
+
+    inputweaver::ExecutorDiagnosticRecord targetSearch{};
+    targetSearch.kind = inputweaver::ExecutorDiagnosticKind::TargetSearchAmbiguous;
+    targetSearch.targetSelector = L"game.exe";
+    targetSearch.matchCount = 2U;
+    const std::string targetJson = inputweaver::FormatExecutorDiagnosticJson(targetSearch);
+    Check(
+        targetJson.find("\"event\":\"TargetSearchAmbiguous\"") != std::string::npos
+            && targetJson.find("\"target_selector\":\"game.exe\"") != std::string::npos
+            && targetJson.find("\"match_count\":2") != std::string::npos,
+        "target-search diagnostics retain selector and match count");
+
     inputweaver::DiagnosticLog disabledLog;
     std::wstring errorMessage;
     Check(
@@ -433,6 +472,7 @@ void TestDiagnosticPrivacyAndBounds() {
         disabledLog.TryPushHook({})
             && disabledLog.TryPushInjection({})
             && disabledLog.TryPushRuntime({})
+            && disabledLog.WriteExecutor({})
             && disabledLog.DroppedHookRecords() == 0U
             && disabledLog.DroppedInjectionRecords() == 0U
             && disabledLog.DroppedRuntimeRecords() == 0U,
@@ -475,6 +515,27 @@ void TestDiagnosticPrivacyAndBounds() {
                 && boundedLog.JsonlBytesWritten() <= 1024U
                 && fileSize == boundedLog.JsonlBytesWritten(),
             "JSONL writer never exceeds its configured byte limit");
+        std::ifstream input{std::filesystem::path{temporaryFile}};
+        std::string firstLine;
+        (void)std::getline(input, firstLine);
+        Check(
+            firstLine.find("\"schema\":\"inputweaver.diagnostic\"") != std::string::npos
+                && firstLine.find("\"schema_version\":1") != std::string::npos
+                && firstLine.find("\"session_id\":\"") != std::string::npos
+                && firstLine.find("\"session_id\":\"\"") == std::string::npos
+                && firstLine.find("\"time_unix_ms\":") != std::string::npos,
+            "each JSONL record has the common schema, session, and time envelope");
+        const std::filesystem::path diagnosticPath{temporaryFile};
+        Check(
+            inputweaver::win32::PathsReferToSameFile(
+                diagnosticPath,
+                diagnosticPath.parent_path() / L"." / diagnosticPath.filename()),
+            "file identity recognizes normalized aliases of one diagnostic path");
+        Check(
+            !inputweaver::win32::PathsReferToSameFile(
+                diagnosticPath,
+                diagnosticPath.parent_path() / L"different-diagnostic-file.jsonl"),
+            "file identity distinguishes separate diagnostic paths");
     }
     (void)DeleteFileW(temporaryFile);
 }
@@ -497,9 +558,11 @@ void TestConcurrentRuntimeDiagnosticPublication() {
             }
             const std::uint64_t base = producer * attemptsPerProducer;
             for (std::uint64_t index = 1U; index <= attemptsPerProducer; ++index) {
-                inputweaver::RuntimeDiagnosticRecord record{};
-                record.kind = inputweaver::RuntimeDiagnosticKind::OwnershipChange;
-                record.sequence = base + index;
+                inputweaver::TimestampedDiagnosticRecord<
+                    inputweaver::RuntimeDiagnosticRecord> record{};
+                record.record.kind = inputweaver::RuntimeDiagnosticKind::OwnershipChange;
+                record.record.sequence = base + index;
+                record.timeUnixMilliseconds = base + index;
                 if (ring.TryPush(record)) {
                     accepted.fetch_add(1U, std::memory_order_relaxed);
                 }
@@ -516,17 +579,20 @@ void TestConcurrentRuntimeDiagnosticPublication() {
     bool duplicateOrInvalid = false;
     while (finished.load(std::memory_order_acquire) != producerCount
         || !ring.Empty()) {
-        inputweaver::RuntimeDiagnosticRecord record{};
+        inputweaver::TimestampedDiagnosticRecord<
+            inputweaver::RuntimeDiagnosticRecord> record{};
         if (!ring.TryPop(record)) {
             std::this_thread::yield();
             continue;
         }
-        if (record.sequence == 0U || record.sequence > attemptCount
-            || observed[record.sequence - 1U] != 0U) {
+        if (record.record.sequence == 0U
+            || record.record.sequence > attemptCount
+            || record.timeUnixMilliseconds != record.record.sequence
+            || observed[record.record.sequence - 1U] != 0U) {
             duplicateOrInvalid = true;
             continue;
         }
-        observed[record.sequence - 1U] = 1U;
+        observed[record.record.sequence - 1U] = 1U;
         ++observedCount;
     }
     for (auto& producer : producers) {

@@ -133,12 +133,18 @@ The target application and InputWeaver normally both run as a regular user; diff
 
 Choose Logging in PROGRAM INFORMATION or use `--log` on the command line. For input and output traces, choose `Input Trace` or add `--trace-input`. [Command-line examples](command-line.md)
 
-Each line of a JSONL file is one record. Input traces may contain keys and mouse positions; review the relevant content before sharing logs.
+Each line of a JSONL file is one record. Every record has `schema`, `schema_version`, `session_id`, and Unix-millisecond `time_unix_ms` fields; records from one execution share a session ID. Logs may contain program paths, target and excluded-process selectors, target image paths, and process IDs. Input traces may additionally contain keys and mouse positions; review the relevant content before sharing logs.
 
 Common runtime issues include:
 
 | Record or metric | Meaning and troubleshooting direction |
 | --- | --- |
+| `SessionStart`, `ConfigurationResolved` | Startup option summary and the resolved effective target configuration |
+| `StartupFailure` | `.weavec` loading, target resolution, or executor-component startup failed; inspect `stage`, `code`, `win32_error`, and `detail` |
+| `TargetSearchStarted`, `TargetSearchWaiting`, `TargetSearchAmbiguous` | Target search started, has not found a process, or found multiple candidates |
+| `TargetSearchFailure` | Target discovery or validation failed; inspect `code` and `win32_error` |
+| `TargetFound`, `TargetAttached`, `TargetLost`, `TargetAttachFailure` | Target discovery, attachment, exit, or attachment failure with the available PID and image path |
+| `SessionStop` | Session stop reason and executor exit code |
 | `TargetEligibilityChange` | Target eligibility changed; check foreground window switching |
 | `PhysicalStateSynchronization` | An input source established its initial released baseline |
 | `PredicateFault` | Condition or meter interval evaluation failed; check the [scope of the error](running.md#section-expression-and-action-errors) at its location |

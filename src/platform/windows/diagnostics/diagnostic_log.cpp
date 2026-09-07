@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <iomanip>
+#include <string_view>
 #include <utility>
 
 namespace inputweaver {
@@ -109,6 +110,87 @@ const char* RuntimeLaunchResultName(RuntimeLaunchResult value) noexcept {
             return "CreationFailed";
     }
     return "Unknown";
+}
+
+const char* ExecutorEventName(ExecutorDiagnosticKind value) noexcept {
+    switch (value) {
+    case ExecutorDiagnosticKind::SessionStart: return "SessionStart";
+    case ExecutorDiagnosticKind::ConfigurationResolved: return "ConfigurationResolved";
+    case ExecutorDiagnosticKind::StartupFailure: return "StartupFailure";
+    case ExecutorDiagnosticKind::TargetSearchStarted: return "TargetSearchStarted";
+    case ExecutorDiagnosticKind::TargetSearchWaiting: return "TargetSearchWaiting";
+    case ExecutorDiagnosticKind::TargetSearchAmbiguous: return "TargetSearchAmbiguous";
+    case ExecutorDiagnosticKind::TargetSearchFailure: return "TargetSearchFailure";
+    case ExecutorDiagnosticKind::TargetFound: return "TargetFound";
+    case ExecutorDiagnosticKind::TargetAttached: return "TargetAttached";
+    case ExecutorDiagnosticKind::TargetAttachFailure: return "TargetAttachFailure";
+    case ExecutorDiagnosticKind::TargetLost: return "TargetLost";
+    case ExecutorDiagnosticKind::SessionStop: return "SessionStop";
+    }
+    return "Unknown";
+}
+
+std::string Utf8(std::wstring_view value) {
+    if (value.empty()) return {};
+    const int size = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return {};
+    std::string result(static_cast<std::size_t>(size), '\0');
+    (void)WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+void AppendJsonString(std::ostringstream& stream, std::string_view value) {
+    static constexpr char hex[] = "0123456789abcdef";
+    stream << '"';
+    for (const char valueCharacter : value) {
+        const auto character = static_cast<unsigned char>(valueCharacter);
+        switch (character) {
+        case '"': stream << "\\\""; break;
+        case '\\': stream << "\\\\"; break;
+        case '\b': stream << "\\b"; break;
+        case '\f': stream << "\\f"; break;
+        case '\n': stream << "\\n"; break;
+        case '\r': stream << "\\r"; break;
+        case '\t': stream << "\\t"; break;
+        default:
+            if (character < 0x20U) {
+                stream << "\\u00" << hex[character >> 4U] << hex[character & 0x0fU];
+            } else {
+                stream << static_cast<char>(character);
+            }
+        }
+    }
+    stream << '"';
+}
+
+void AppendJsonField(std::ostringstream& stream, std::string_view name, std::string_view value) {
+    stream << ",\"" << name << "\":";
+    AppendJsonString(stream, value);
+}
+
+std::uint64_t UnixMilliseconds() noexcept {
+    FILETIME fileTime{};
+    GetSystemTimePreciseAsFileTime(&fileTime);
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = fileTime.dwLowDateTime;
+    ticks.HighPart = fileTime.dwHighDateTime;
+    constexpr std::uint64_t kWindowsEpochTicks = 116'444'736'000'000'000ULL;
+    return ticks.QuadPart >= kWindowsEpochTicks
+        ? (ticks.QuadPart - kWindowsEpochTicks) / 10'000ULL
+        : 0U;
+}
+
+std::string MakeSessionId() {
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0')
+           << std::setw(8) << GetCurrentProcessId()
+           << '-' << std::setw(16) << UnixMilliseconds()
+           << '-' << std::setw(16) << static_cast<std::uint64_t>(counter.QuadPart);
+    return stream.str();
 }
 
 bool IsExactControl(DiagnosticControl value) noexcept {
@@ -270,6 +352,36 @@ std::string FormatRuntimeDiagnosticJson(const RuntimeDiagnosticRecord& record) {
     return stream.str();
 }
 
+std::string FormatExecutorDiagnosticJson(const ExecutorDiagnosticRecord& record) {
+    std::ostringstream stream;
+    stream << "{\"kind\":\"executor\",\"event\":\"" << ExecutorEventName(record.kind) << '"';
+    if (!record.stage.empty()) AppendJsonField(stream, "stage", record.stage);
+    if (!record.reason.empty()) AppendJsonField(stream, "reason", record.reason);
+    if (!record.targetMode.empty()) AppendJsonField(stream, "target_mode", record.targetMode);
+    if (!record.detail.empty()) AppendJsonField(stream, "detail", Utf8(record.detail));
+    if (!record.programPath.empty()) AppendJsonField(stream, "program_path", Utf8(record.programPath));
+    if (!record.targetSelector.empty()) AppendJsonField(stream, "target_selector", Utf8(record.targetSelector));
+    if (!record.excludedProcessSelector.empty()) {
+        AppendJsonField(stream, "excluded_process", Utf8(record.excludedProcessSelector));
+    }
+    if (!record.imagePath.empty()) AppendJsonField(stream, "image_path", Utf8(record.imagePath));
+    if (record.pid != 0U) stream << ",\"pid\":" << record.pid;
+    if (record.code != 0U) stream << ",\"code\":" << record.code;
+    if (record.win32Error != 0U) stream << ",\"win32_error\":" << record.win32Error;
+    if (record.kind == ExecutorDiagnosticKind::SessionStop) stream << ",\"exit_code\":" << record.exitCode;
+    if (record.kind == ExecutorDiagnosticKind::TargetSearchAmbiguous) {
+        stream << ",\"match_count\":" << record.matchCount;
+    }
+    if (record.kind == ExecutorDiagnosticKind::SessionStart) {
+        stream << ",\"trace_input\":" << (record.traceInput ? "true" : "false")
+               << ",\"dry_run\":" << (record.dryRun ? "true" : "false")
+               << ",\"allow_exec\":" << (record.allowExec ? "true" : "false")
+               << ",\"debug\":" << (record.debug ? "true" : "false");
+    }
+    stream << '}';
+    return stream.str();
+}
+
 DiagnosticLog::~DiagnosticLog() {
     Stop();
 }
@@ -287,6 +399,11 @@ bool DiagnosticLog::Start(
     if (jsonlPath.empty()) {
         return true;
     }
+    droppedHookRecords_.store(0U, std::memory_order_relaxed);
+    droppedInjectionRecords_.store(0U, std::memory_order_relaxed);
+    jsonlBytesWritten_.store(0U, std::memory_order_relaxed);
+    jsonlTruncated_.store(false, std::memory_order_relaxed);
+    sessionId_ = MakeSessionId();
 
     wakeEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -324,6 +441,14 @@ bool DiagnosticLog::Start(
 }
 
 void DiagnosticLog::Stop() noexcept {
+    StopImpl(nullptr);
+}
+
+void DiagnosticLog::Stop(const ExecutorDiagnosticRecord& finalRecord) noexcept {
+    StopImpl(&finalRecord);
+}
+
+void DiagnosticLog::StopImpl(const ExecutorDiagnosticRecord* finalRecord) noexcept {
     enabled_.store(false, std::memory_order_release);
     if (stopEvent_ != nullptr) {
         SetEvent(stopEvent_);
@@ -333,6 +458,15 @@ void DiagnosticLog::Stop() noexcept {
     }
     if (worker_.joinable()) {
         worker_.join();
+    }
+    if (finalRecord != nullptr && jsonlFile_ != INVALID_HANDLE_VALUE) {
+        try {
+            EmitLine(
+                FormatExecutorDiagnosticJson(*finalRecord),
+                UnixMilliseconds());
+        } catch (...) {
+            OutputDebugStringA("InputWeaver final diagnostic formatting failed.\n");
+        }
     }
     if (jsonlFile_ != INVALID_HANDLE_VALUE) {
         CloseHandle(jsonlFile_);
@@ -357,7 +491,10 @@ bool DiagnosticLog::TryPushHook(HookDiagnosticRecord record) noexcept {
         return true;
     }
     ApplyPrivacyRedaction(record);
-    if (!hookRing_.TryPush(record)) {
+    const TimestampedDiagnosticRecord<HookDiagnosticRecord> timestamped{
+        record,
+        UnixMilliseconds()};
+    if (!hookRing_.TryPush(timestamped)) {
         droppedHookRecords_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -369,7 +506,10 @@ bool DiagnosticLog::TryPushInjection(const InjectionDiagnosticRecord& record) no
     if (!enabled_.load(std::memory_order_acquire)) {
         return true;
     }
-    if (!injectionRing_.TryPush(record)) {
+    const TimestampedDiagnosticRecord<InjectionDiagnosticRecord> timestamped{
+        record,
+        UnixMilliseconds()};
+    if (!injectionRing_.TryPush(timestamped)) {
         droppedInjectionRecords_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -381,10 +521,24 @@ bool DiagnosticLog::TryPushRuntime(const RuntimeDiagnosticRecord& record) noexce
     if (!enabled_.load(std::memory_order_acquire)) {
         return true;
     }
-    if (!runtimeRing_.TryPush(record)) {
+    const TimestampedDiagnosticRecord<RuntimeDiagnosticRecord> timestamped{
+        record,
+        UnixMilliseconds()};
+    if (!runtimeRing_.TryPush(timestamped)) {
         return false;
     }
     SetEvent(wakeEvent_);
+    return true;
+}
+
+bool DiagnosticLog::WriteExecutor(const ExecutorDiagnosticRecord& record) noexcept {
+    if (!enabled_.load(std::memory_order_acquire)) return true;
+    try {
+        EmitLine(FormatExecutorDiagnosticJson(record), UnixMilliseconds());
+    } catch (...) {
+        OutputDebugStringA("InputWeaver executor diagnostic formatting failed.\n");
+        return false;
+    }
     return true;
 }
 
@@ -426,37 +580,57 @@ void DiagnosticLog::WorkerMain() noexcept {
 }
 
 void DiagnosticLog::DrainRecords() noexcept {
-    HookDiagnosticRecord hookRecord;
+    TimestampedDiagnosticRecord<HookDiagnosticRecord> hookRecord;
     while (hookRing_.TryPop(hookRecord)) {
         try {
-            EmitLine(FormatHookDiagnosticJson(hookRecord));
+            EmitLine(
+                FormatHookDiagnosticJson(hookRecord.record),
+                hookRecord.timeUnixMilliseconds);
         } catch (...) {
             OutputDebugStringA("InputWeaver diagnostic formatting failed.\n");
         }
     }
 
-    InjectionDiagnosticRecord injectionRecord;
+    TimestampedDiagnosticRecord<InjectionDiagnosticRecord> injectionRecord;
     while (injectionRing_.TryPop(injectionRecord)) {
         try {
-            EmitLine(FormatInjectionDiagnosticJson(injectionRecord));
+            EmitLine(
+                FormatInjectionDiagnosticJson(injectionRecord.record),
+                injectionRecord.timeUnixMilliseconds);
         } catch (...) {
             OutputDebugStringA("InputWeaver injection diagnostic formatting failed.\n");
         }
     }
 
 
-    RuntimeDiagnosticRecord runtimeRecord;
+    TimestampedDiagnosticRecord<RuntimeDiagnosticRecord> runtimeRecord;
     while (runtimeRing_.TryPop(runtimeRecord)) {
         try {
-            EmitLine(FormatRuntimeDiagnosticJson(runtimeRecord));
+            EmitLine(
+                FormatRuntimeDiagnosticJson(runtimeRecord.record),
+                runtimeRecord.timeUnixMilliseconds);
         } catch (...) {
             OutputDebugStringA("InputWeaver runtime diagnostic formatting failed.\n");
         }
     }
+
 }
 
-void DiagnosticLog::EmitLine(const std::string& line) {
-    std::string terminated = line;
+void DiagnosticLog::EmitLine(
+    const std::string& line,
+    std::uint64_t timeUnixMilliseconds) {
+    const std::lock_guard lock(writeMutex_);
+    std::ostringstream envelope;
+    envelope << "{\"schema\":\"inputweaver.diagnostic\",\"schema_version\":"
+             << kDiagnosticSchemaVersion << ",\"session_id\":";
+    AppendJsonString(envelope, sessionId_);
+    envelope << ",\"time_unix_ms\":" << timeUnixMilliseconds;
+    if (line.size() >= 2U && line.front() == '{' && line.back() == '}') {
+        envelope << ',' << std::string_view{line}.substr(1U);
+    } else {
+        envelope << ",\"kind\":\"invalid\"}";
+    }
+    std::string terminated = envelope.str();
     terminated.push_back('\n');
     OutputDebugStringA(terminated.c_str());
 

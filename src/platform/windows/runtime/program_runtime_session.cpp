@@ -252,6 +252,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
                     (void)runtime->Pump(1024U);
                 }
                 metricsSnapshot.runtime = runtime->Metrics();
+                metricsSnapshot.exitRequested = runtime->ExitRequested();
                 metricsSnapshot.fatalShutdown =
                     fatalShutdownObserved.load(std::memory_order_acquire)
                     || runtime->FatalShutdownRequested();
@@ -292,6 +293,7 @@ struct WindowsProgramRuntimeSession::Impl final : LowLevelInputSink {
         WindowsProgramRuntimeSessionMetrics result = metricsSnapshot;
         if (!waitCompleted && runtime != nullptr) {
             result.runtime = runtime->Metrics();
+            result.exitRequested = runtime->ExitRequested();
             result.fatalShutdown =
                 fatalShutdownObserved.load(std::memory_order_acquire)
                 || runtime->FatalShutdownRequested();
