@@ -54,15 +54,15 @@ std::string MouseEventText(const debug::DebugInputEvent& event, const debug::Deb
     return "Mouse (" + std::string{transition} + ')';
 }
 
-void AppendMouseInputCells(std::vector<std::string>& cells, const debug::DebugClientState& state)
+void AppendMouseInputCells(StyledLine& cells, const debug::DebugClientState& state, TextStyle style)
 {
     if (state.captureEpoch == 0) return;
     const auto& mouse = state.mouse.mouse;
-    cells.push_back("Mouse pos" + MousePointText(mouse.position));
-    cells.push_back("d" + MousePointText({mouse.delta.dx, mouse.delta.dy}));
-    cells.push_back("wheel" + MousePointText({mouse.delta.wheelX, mouse.delta.wheelY}));
-    cells.push_back(mouse.moving ? "moving" : "idle");
-    cells.push_back("idle(" + MouseNumberText(static_cast<double>(mouse.idleTime.nanoseconds) / 1'000'000'000.0) + "s)");
+    cells.push_back({"Mouse pos" + MousePointText(mouse.position), style});
+    cells.push_back({"d" + MousePointText({mouse.delta.dx, mouse.delta.dy}), style});
+    cells.push_back({"wheel" + MousePointText({mouse.delta.wheelX, mouse.delta.wheelY}), style});
+    cells.push_back({mouse.moving ? "moving" : "idle", style});
+    cells.push_back({"idle(" + MouseNumberText(static_cast<double>(mouse.idleTime.nanoseconds) / 1'000'000'000.0) + "s)", style});
 }
 
 void AppendMeterCells(std::vector<std::string>& cells, const debug::DebugClientState& state)

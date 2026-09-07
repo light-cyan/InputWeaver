@@ -209,7 +209,7 @@ struct ProducerRecord final {
         || program.DebugInfo().arrays.size() > debug::kMaximumDebugArrays) {
         return false;
     }
-    std::uint64_t captureBytes = 8U + 4U + 4U + 5U + 2U + 4U;
+    std::uint64_t captureBytes = 8U + 4U + 4U + 5U + 2U + 4U + 4U * 8U;
     for (const VariableDebugRecord& variable : program.DebugInfo().variables) {
         const std::uint64_t nameBytes = textBytes(variable.name);
         if (nameBytes > debug::kMaximumDebugTextBytes) {
@@ -908,6 +908,12 @@ struct WindowsDebugServer::Impl final {
                 protocolSequence);
             message.captureStarted.captureUnixTimeMilliseconds =
                 record.captureUnixTimeMilliseconds;
+            const ProgramSettings& settings = program->Settings();
+            message.captureStarted.settings = {
+                settings.tapDuration,
+                settings.actionGap,
+                settings.mouseIdleTimeout,
+                settings.randomSeed};
             if (!PopulateStateSnapshot(message.captureStarted.values)
                 || !PopulateArraySnapshot(message.captureStarted.arrays)
                 || !PopulateMouseCapture(message.captureStarted)) {

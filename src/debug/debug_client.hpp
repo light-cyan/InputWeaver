@@ -137,6 +137,7 @@ struct DebugClientState final {
     std::vector<DebugRuntimeIssue> runtimeIssues;
     std::vector<DebugMeter> meters;
     RuntimeMouseSnapshot mouse;
+    std::optional<DebugProgramSettings> settings;
 };
 
 struct DebugClientCapacities final {

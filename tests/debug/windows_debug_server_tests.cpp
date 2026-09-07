@@ -474,6 +474,12 @@ void TestPipeSession()
                         && received.message.captureStarted.values[0].value
                             .stateValue,
                     "capture start includes wall-clock and PAUSE snapshots");
+                const auto& settings = received.message.captureStarted.settings;
+                Check(settings.tapDuration.nanoseconds == 30'000'000
+                        && settings.actionGap.nanoseconds == 10'000'000
+                        && settings.mouseIdleTimeout.nanoseconds == 80'000'000
+                        && settings.randomSeed == 0U,
+                    "server publishes effective defaults without explicit source settings");
             }
             if (index == 1U) {
                 Check(
@@ -572,8 +578,13 @@ void TestPipeSession()
 
 void TestDebugClientIntegration()
 {
+    auto storage = MakeReadableMappingStorage();
+    storage.settings.tapDuration = {45'000'000};
+    storage.settings.actionGap = {0};
+    storage.settings.mouseIdleTimeout = {123'456'789};
+    storage.settings.randomSeed = UINT64_MAX;
     inputweaver::FinalizeResult finalized = inputweaver::FinalizeCompiledProgram(
-        MakeReadableMappingStorage());
+        std::move(storage));
     Check(
         finalized.program != nullptr && finalized.errors.empty(),
         "debug client integration fixture finalizes");
@@ -646,6 +657,13 @@ void TestDebugClientIntegration()
                 && state->arrays[1].value.elements[7].numberValue == 9.0;
         }),
         "DebugClient derives scalar and bounded array INIT state from the server");
+    const auto settingsState = client.ReadState();
+    Check(settingsState->settings.has_value()
+            && settingsState->settings->tapDuration.nanoseconds == 45'000'000
+            && settingsState->settings->actionGap.nanoseconds == 0
+            && settingsState->settings->mouseIdleTimeout.nanoseconds == 123'456'789
+            && settingsState->settings->randomSeed == UINT64_MAX,
+        "custom executor settings reach the client through the Windows pipe without precision loss");
 
     inputweaver::RuntimeDebugEvent changed{};
     changed.kind = inputweaver::RuntimeDebugEventKind::StateChanged;

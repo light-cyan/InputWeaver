@@ -336,6 +336,34 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
 
 #include "debug_mouse_codec.inc"
 
+[[nodiscard]] bool ValidSettings(const DebugProgramSettings& settings) noexcept
+{
+    return settings.tapDuration.nanoseconds >= 0
+        && settings.actionGap.nanoseconds >= 0
+        && settings.mouseIdleTimeout.nanoseconds >= 0;
+}
+
+[[nodiscard]] bool WriteSettings(ByteWriter& writer, const DebugProgramSettings& settings)
+{
+    if (!ValidSettings(settings)) {
+        return false;
+    }
+    writer.I64(settings.tapDuration.nanoseconds);
+    writer.I64(settings.actionGap.nanoseconds);
+    writer.I64(settings.mouseIdleTimeout.nanoseconds);
+    writer.U64(settings.randomSeed);
+    return true;
+}
+
+[[nodiscard]] bool ReadSettings(ByteReader& reader, DebugProgramSettings& settings)
+{
+    return reader.I64(settings.tapDuration.nanoseconds)
+        && reader.I64(settings.actionGap.nanoseconds)
+        && reader.I64(settings.mouseIdleTimeout.nanoseconds)
+        && reader.U64(settings.randomSeed)
+        && ValidSettings(settings);
+}
+
 [[nodiscard]] bool EncodePayload(
     const Message& message,
     std::vector<std::uint8_t>& payload)
@@ -384,7 +412,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
                 return false;
             }
         }
-        return WriteMouseCapture(writer, message.captureStarted);
+        return WriteMouseCapture(writer, message.captureStarted)
+            && WriteSettings(writer, message.captureStarted.settings);
     case MessageKind::InputEvent: {
         const InputEventPayload& input = message.inputEvent;
         writer.U64(input.inputSequence);
@@ -493,7 +522,8 @@ void WriteControl(ByteWriter& writer, const ControlRef& control)
                 return false;
             }
         }
-        return ReadMouseCapture(reader, message.captureStarted);
+        return ReadMouseCapture(reader, message.captureStarted)
+            && ReadSettings(reader, message.captureStarted.settings);
     }
     case MessageKind::InputEvent: {
         InputEventPayload& input = message.inputEvent;

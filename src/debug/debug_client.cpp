@@ -94,6 +94,7 @@ struct DebugStateReducer::Impl final {
         state.runtimeIssues.clear();
         state.meters.clear();
         state.mouse = {};
+        state.settings.reset();
         controlInputs.clear();
         mouseInputs.clear();
         pendingCycles.clear();
@@ -328,6 +329,7 @@ struct DebugStateReducer::Impl final {
         state.captureEpoch = message.header.captureEpoch;
         state.meters = message.captureStarted.meters;
         state.mouse = message.captureStarted.mouse;
+        state.settings = message.captureStarted.settings;
         state.values.reserve(message.captureStarted.values.size());
         for (const DebugNamedValue& value : message.captureStarted.values) {
             state.values.push_back({value.name, value.value});

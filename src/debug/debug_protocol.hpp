@@ -13,7 +13,7 @@
 namespace inputweaver::debug {
 
 inline constexpr std::uint32_t kProtocolMagic = 0x42445749U;
-inline constexpr std::uint16_t kProtocolVersion = 6U;
+inline constexpr std::uint16_t kProtocolVersion = 7U;
 inline constexpr std::size_t kWireHeaderBytes = 44U;
 inline constexpr std::uint32_t kMaximumFramePayloadBytes = 16U * 1024U * 1024U;
 inline constexpr std::uint32_t kMaximumDebugValues = 12'289U;
@@ -106,12 +106,20 @@ struct DebugMeter final {
     ExpressionType periodType{ExpressionType::Number};
 };
 
+struct DebugProgramSettings final {
+    DurationValue tapDuration{};
+    DurationValue actionGap{};
+    DurationValue mouseIdleTimeout{};
+    std::uint64_t randomSeed{};
+};
+
 struct CaptureStartedPayload final {
     std::int64_t captureUnixTimeMilliseconds{};
     std::vector<DebugNamedValue> values;
     std::vector<DebugNamedArray> arrays;
     std::vector<DebugMeter> meters;
     RuntimeMouseSnapshot mouse;
+    DebugProgramSettings settings;
 };
 
 struct InputEventPayload final {

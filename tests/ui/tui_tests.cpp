@@ -1356,6 +1356,62 @@ void TestController()
         BoxText(wideDebug, "VARIABLES").find("count=2") != std::string::npos
             && BoxText(wideDebug, "INPUT STATE").find("LCtrl PHY") != std::string::npos,
         "VARIABLES and INPUT STATE retain user values and pressed controls in separate regions");
+    Check(wideDebugText.find("TAP_DURATION=") == std::string::npos,
+        "VARIABLES does not invent settings before a capture snapshot arrives");
+    debugState->settings = inputweaver::debug::DebugProgramSettings{
+        {30'000'000}, {10'000'000}, {80'000'000}, 0U};
+    controller.Tick();
+    const std::string defaultsText = BoxText(controller.Render(144U, 44U), "VARIABLES");
+    Check(defaultsText.find("[TAP_DURATION=30ms]") != std::string::npos
+            && defaultsText.find("[ACTION_GAP=10ms]") != std::string::npos
+            && defaultsText.find("[MOUSE_IDLE_TIMEOUT=80ms]") != std::string::npos
+            && defaultsText.find("[RAND_SEED=0]") != std::string::npos,
+        "VARIABLES displays all effective defaults including the zero seed");
+    debugState->settings = inputweaver::debug::DebugProgramSettings{
+        {45'000'000}, {0}, {123'456'789}, UINT64_MAX};
+    controller.Tick();
+    for (const std::size_t settingsWidth : {80U, 100U, 144U}) {
+        const auto settingsCanvas = controller.Render(settingsWidth, 60U);
+        const std::string variablesText = BoxText(settingsCanvas, "VARIABLES");
+        std::size_t previousPosition{};
+        for (const std::string_view cell : {
+                 "[TAP_DURATION=45ms]", "[ACTION_GAP=0ms]",
+                 "[MOUSE_IDLE_TIMEOUT=123456789ns]",
+                 "[RAND_SEED=18446744073709551615]"}) {
+            const auto position = FindAscii(settingsCanvas, cell);
+            Check(position > previousPosition && position < settingsCanvas.Cells().size()
+                    && settingsCanvas.Cells()[position].style.foreground == colors.mutedText,
+                "readonly settings retain their order, precision, and muted color at every width");
+            previousPosition = position;
+        }
+        const auto userPosition = FindAscii(settingsCanvas, "[combat=off]");
+        Check(userPosition > previousPosition && userPosition < settingsCanvas.Cells().size()
+                && settingsCanvas.Cells()[userPosition].style.foreground == colors.text
+                && variablesText.find("PAUSE=") == std::string::npos
+                && variablesText.find("RAND01=") == std::string::npos,
+            "user values follow readonly settings with their original color");
+    }
+    debugState->settings->mouseIdleTimeout.nanoseconds = INT64_MAX;
+    controller.Tick();
+    const auto wrappedSettings = controller.Render(80U, 60U);
+    auto wrappedText = BoxText(wrappedSettings, "VARIABLES");
+    std::erase_if(wrappedText, [](char character) {
+        return character == ' ' || character == '\n';
+    });
+    Check(wrappedText.find("[MOUSE_IDLE_TIMEOUT=9223372036854775807ns]") != std::string::npos,
+        "long builtin durations wrap without losing digits or units");
+    controller.Handle({Key::Right, 0U});
+    controller.Handle({Key::Down, 0U});
+    controller.Handle({Key::Enter, 0U});
+    static_cast<void>(controller.Render(80U, 24U));
+    controller.Handle({Key::End, 0U});
+    const auto scrolledSettings = controller.Render(80U, 24U);
+    Check(BoxText(scrolledSettings, "VARIABLES").find("10]]") != std::string::npos,
+        "user arrays remain reachable by scrolling past readonly settings");
+    controller.Handle({Key::Home, 0U});
+    controller.Handle({Key::Escape, 0U});
+    controller.Handle({Key::Up, 0U});
+    controller.Handle({Key::Left, 0U});
     TestMouseDebugRendering(controller, platform);
     controller.Handle({Key::Right, 0U});
     const auto stateDebug = controller.Render(80U, 24U);

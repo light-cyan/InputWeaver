@@ -69,6 +69,8 @@ void TestCaptureStarted()
     message.header.kind = inputweaver::debug::MessageKind::CaptureStarted;
     message.header.captureTimeNanoseconds = 123'456'789;
     message.captureStarted.captureUnixTimeMilliseconds = 1'725'000'000'123LL;
+    message.captureStarted.settings = {
+        {45'000'000}, {0}, {123'456'789}, UINT64_MAX};
     message.captureStarted.values = {
         {"PAUSE", {inputweaver::ValueType::State, true, 0.0, {}}},
         {"count", {inputweaver::ValueType::Number, false, 2.5, {}}},
@@ -81,7 +83,7 @@ void TestCaptureStarted()
 
     const auto decoded = RoundTrip(message);
     Check(
-        inputweaver::debug::kProtocolVersion == 6U
+        inputweaver::debug::kProtocolVersion == 7U
             && decoded.Succeeded()
             && decoded.message.captureStarted.captureUnixTimeMilliseconds
                 == 1'725'000'000'123LL
@@ -90,7 +92,37 @@ void TestCaptureStarted()
             && decoded.message.captureStarted.values[1].value.numberValue == 2.5
             && decoded.message.captureStarted.values[2].value.durationValue
                     .nanoseconds == 80'000'000,
-        "capture wall-clock anchor and values round trip in protocol version 6");
+        "capture wall-clock anchor and values round trip in protocol version 7");
+    const auto& settings = decoded.message.captureStarted.settings;
+    Check(settings.tapDuration.nanoseconds == 45'000'000
+            && settings.actionGap.nanoseconds == 0
+            && settings.mouseIdleTimeout.nanoseconds == 123'456'789
+            && settings.randomSeed == UINT64_MAX,
+        "capture preserves duration precision, zero gap, and the full unsigned seed");
+
+    std::vector<std::uint8_t> encoded;
+    Check(inputweaver::debug::EncodeMessage(message, encoded),
+        "settings capture encodes for corruption checks");
+    if (encoded.size() < 32U) return;
+    for (std::size_t index = 0U; index < 3U; ++index) {
+        auto corrupt = encoded;
+        corrupt[corrupt.size() - 32U + index * 8U + 7U] |= 0x80U;
+        Check(!inputweaver::debug::DecodeMessage(corrupt).Succeeded(),
+            "negative builtin durations are rejected by the decoder");
+    }
+    encoded.pop_back();
+    Check(!inputweaver::debug::DecodeMessage(encoded).Succeeded(),
+        "truncated random seed is rejected");
+    for (auto* duration : {
+             &message.captureStarted.settings.tapDuration,
+             &message.captureStarted.settings.actionGap,
+             &message.captureStarted.settings.mouseIdleTimeout}) {
+        const auto saved = *duration;
+        duration->nanoseconds = -1;
+        Check(!inputweaver::debug::EncodeMessage(message, encoded),
+            "negative builtin durations are rejected by the encoder");
+        *duration = saved;
+    }
 }
 
 void TestRuleMatched()

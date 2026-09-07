@@ -571,6 +571,53 @@ void TestValueState()
         "value type drift requests a fresh capture");
 }
 
+void TestProgramSettings()
+{
+    using namespace inputweaver::debug;
+    DebugStateReducer reducer;
+    reducer.Connected(17U);
+    reducer.CaptureRequested();
+    Check(!reducer.ReadState()->settings.has_value(),
+        "settings remain absent until the executor publishes a capture");
+    auto started = MakeMessage(MessageKind::CaptureStarted, 1U);
+    started.captureStarted.settings = {{30'000'000}, {10'000'000}, {80'000'000}, 0U};
+    Check(reducer.Accept(started) == DebugReductionAction::None,
+        "capture accepts effective default settings");
+    auto state = reducer.ReadState();
+    Check(state->settings.has_value()
+            && state->settings->tapDuration.nanoseconds == 30'000'000
+            && state->settings->actionGap.nanoseconds == 10'000'000
+            && state->settings->mouseIdleTimeout.nanoseconds == 80'000'000
+            && state->settings->randomSeed == 0U,
+        "default settings enter the published state even without user variables");
+    reducer.CaptureStopped();
+    Check(reducer.ReadState()->settings.has_value(),
+        "stopping capture retains the settings snapshot for inspection");
+    reducer.CaptureRequested();
+    started.header.protocolSequence = 2U;
+    started.header.captureEpoch = 2U;
+    started.captureStarted.settings = {{45'000'000}, {0}, {123'456'789}, UINT64_MAX};
+    Check(reducer.Accept(started) == DebugReductionAction::None,
+        "a fresh capture replaces the settings snapshot");
+    state = reducer.ReadState();
+    Check(state->settings.has_value()
+            && state->settings->tapDuration.nanoseconds == 45'000'000
+            && state->settings->actionGap.nanoseconds == 0
+            && state->settings->mouseIdleTimeout.nanoseconds == 123'456'789
+            && state->settings->randomSeed == UINT64_MAX,
+        "custom settings preserve zero durations and the full unsigned seed");
+    Check(reducer.Accept(MakeMessage(MessageKind::StreamCompleted, 3U, 2U))
+            == DebugReductionAction::None,
+        "settings capture completes");
+    reducer.Disconnected();
+    Check(reducer.ReadState()->settings.has_value()
+            && reducer.ReadState()->settings->randomSeed == UINT64_MAX,
+        "final settings remain available after executor exit");
+    reducer.Connected(18U);
+    Check(!reducer.ReadState()->settings.has_value(),
+        "a new executor session cannot inherit stale settings");
+}
+
 void TestArrayState()
 {
     using namespace inputweaver;
@@ -650,6 +697,7 @@ int main()
     TestIssuesAndRecovery();
     TestStrictValidationAndCapacity();
     TestValueState();
+    TestProgramSettings();
     TestArrayState();
     TestStreamCompletion();
     if (gFailureCount != 0) {

@@ -405,6 +405,29 @@ void AppendExecutionField(
     return output.str();
 }
 
+[[nodiscard]] std::string DebugDurationText(DurationValue value)
+{
+    constexpr std::int64_t nanosecondsPerMillisecond = 1'000'000LL;
+    constexpr std::int64_t nanosecondsPerSecond = 1'000LL
+        * nanosecondsPerMillisecond;
+    constexpr std::int64_t nanosecondsPerMinute = 60LL
+        * nanosecondsPerSecond;
+    const std::int64_t nanoseconds = value.nanoseconds;
+    if (nanoseconds == 0) {
+        return "0ms";
+    }
+    if (nanoseconds % nanosecondsPerMinute == 0) {
+        return std::to_string(nanoseconds / nanosecondsPerMinute) + "min";
+    }
+    if (nanoseconds % nanosecondsPerSecond == 0) {
+        return std::to_string(nanoseconds / nanosecondsPerSecond) + 's';
+    }
+    if (nanoseconds % nanosecondsPerMillisecond == 0) {
+        return std::to_string(nanoseconds / nanosecondsPerMillisecond) + "ms";
+    }
+    return std::to_string(nanoseconds) + "ns";
+}
+
 [[nodiscard]] std::string DebugValueText(const debug::DebugValue& value)
 {
     switch (value.type) {
@@ -412,27 +435,8 @@ void AppendExecutionField(
         return value.stateValue ? "on" : "off";
     case ValueType::Number:
         return DebugNumberText(value.numberValue);
-    case ValueType::Duration: {
-        constexpr std::int64_t nanosecondsPerMillisecond = 1'000'000LL;
-        constexpr std::int64_t nanosecondsPerSecond = 1'000LL
-            * nanosecondsPerMillisecond;
-        constexpr std::int64_t nanosecondsPerMinute = 60LL
-            * nanosecondsPerSecond;
-        const std::int64_t nanoseconds = value.durationValue.nanoseconds;
-        if (nanoseconds == 0) {
-            return "0ms";
-        }
-        if (nanoseconds % nanosecondsPerMinute == 0) {
-            return std::to_string(nanoseconds / nanosecondsPerMinute) + "min";
-        }
-        if (nanoseconds % nanosecondsPerSecond == 0) {
-            return std::to_string(nanoseconds / nanosecondsPerSecond) + 's';
-        }
-        if (nanoseconds % nanosecondsPerMillisecond == 0) {
-            return std::to_string(nanoseconds / nanosecondsPerMillisecond) + "ms";
-        }
-        return std::to_string(nanoseconds) + "ns";
-    }
+    case ValueType::Duration:
+        return DebugDurationText(value.durationValue);
     }
     return "?";
 }
@@ -579,11 +583,10 @@ void RenderStateCells(
     Canvas& canvas,
     Viewport& viewport,
     Rectangle box,
-    std::vector<std::string> cells,
-    RgbColor color)
+    StyledLine cells)
 {
     const std::size_t width = box.width - 2U;
-    using Row = std::vector<std::pair<std::size_t, std::string>>;
+    using Row = std::vector<std::pair<std::size_t, StyledSegment>>;
     std::vector<Row> rows;
     Row row;
     std::size_t usedWidth{};
@@ -594,12 +597,12 @@ void RenderStateCells(
             usedWidth = 0U;
         }
     };
-    for (std::string& cell : cells) {
-        const std::size_t cellWidth = Utf8DisplayWidth(cell);
+    for (StyledSegment& cell : cells) {
+        const std::size_t cellWidth = Utf8DisplayWidth(cell.text);
         if (cellWidth > width) {
             finishRow();
-            for (std::string& line : WrapUtf8(cell, width, 2U)) {
-                rows.push_back({{0U, std::move(line)}});
+            for (std::string& line : WrapUtf8(cell.text, width, 2U)) {
+                rows.push_back({{0U, {std::move(line), cell.style}}});
             }
             continue;
         }
@@ -614,9 +617,9 @@ void RenderStateCells(
     finishRow();
     RenderViewportRows(viewport, rows.size(), box.height - 2U,
         [&](std::size_t visibleRow, std::size_t index) {
-            for (const auto& [offset, text] : rows[index]) {
+            for (const auto& [offset, cell] : rows[index]) {
                 canvas.Text(box.x + 1U + offset, box.y + 1U + visibleRow,
-                    text, width - offset, Foreground(color));
+                    cell.text, width - offset, cell.style);
             }
         });
 }
@@ -1592,27 +1595,40 @@ Canvas TuiController::Render(std::size_t width, std::size_t height)
                         Foreground(colors_.text));
                 });
 
-            std::vector<std::string> variableCells;
+            StyledLine variableCells;
+            if (debugState->settings.has_value()) {
+                const auto& settings = *debugState->settings;
+                const TextStyle style = Foreground(colors_.mutedText);
+                variableCells.push_back({"[TAP_DURATION="
+                    + DebugDurationText(settings.tapDuration) + ']', style});
+                variableCells.push_back({"[ACTION_GAP="
+                    + DebugDurationText(settings.actionGap) + ']', style});
+                variableCells.push_back({"[MOUSE_IDLE_TIMEOUT="
+                    + DebugDurationText(settings.mouseIdleTimeout) + ']', style});
+                variableCells.push_back({"[RAND_SEED="
+                    + std::to_string(settings.randomSeed) + ']', style});
+            }
             for (const debug::DebugVariableState& value : debugState->values) {
                 if (value.name != "PAUSE") {
-                    variableCells.push_back('[' + value.name + '='
-                        + DebugValueText(value.value) + ']');
+                    variableCells.push_back({'[' + value.name + '='
+                        + DebugValueText(value.value) + ']', Foreground(colors_.text)});
                 }
             }
             for (const debug::DebugArrayState& array : debugState->arrays) {
-                variableCells.push_back(DebugArrayText(array));
+                variableCells.push_back({DebugArrayText(array), Foreground(colors_.text)});
             }
             RenderStateCells(canvas, variablesViewport_, variablesBox,
-                std::move(variableCells), colors_.text);
+                std::move(variableCells));
 
-            std::vector<std::string> inputCells;
+            StyledLine inputCells;
             for (const debug::DebugPressedControl& pressed : debugState->pressedControls) {
-                inputCells.push_back('[' + ControlName(pressed.control) + ' '
-                    + std::string{debug::InputOriginLabel(pressed.origin)} + ']');
+                inputCells.push_back({'[' + ControlName(pressed.control) + ' '
+                    + std::string{debug::InputOriginLabel(pressed.origin)} + ']',
+                    Foreground(colors_.text)});
             }
-            AppendMouseInputCells(inputCells, *debugState);
+            AppendMouseInputCells(inputCells, *debugState, Foreground(colors_.text));
             RenderStateCells(canvas, inputStateViewport_, inputBox,
-                std::move(inputCells), colors_.text);
+                std::move(inputCells));
 
             std::vector<std::string> meterCells;
             AppendMeterCells(meterCells, *debugState);
