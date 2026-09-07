@@ -40,8 +40,8 @@ The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and i
 - `docs/README.md` is the language entry point. `docs/zh/README.md` and `docs/en/README.md` index the Chinese and English documentation. Their `language.md`, `rules.md`, `actions.md`, and `mouse.md` pages own the current Weave language explanations and examples.
 - `windows.md` in each language owns Windows control capabilities and external-process path behavior; keep platform-specific details separate from shared language and runtime semantics.
 - Chinese and English tutorials and product references live under `docs/zh/` and `docs/en/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
-- `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
-- Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
+- `legacy/development/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
+- Move completed phase directories into `legacy/development/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
 - `validation/` is the tracked location for validation assets.
 - Read the relevant language specification, shared program contract in `src/program/`, and current operational documentation before changing an owned subsystem.
 - Record a new decision in its owning current document instead of duplicating archived phase history in `AGENTS.md`.
@@ -119,7 +119,7 @@ all modules except language -> support only for domain-independent primitives
 - `src/platform/windows/ui/tui/` owns the tray-host and native-frontend entry points, their inherited-pipe IPC, the Win32 TUI window, GDI cell rendering, keyboard and clipboard input, resize handling, notification icon, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/README.md` is the language entry point; `docs/zh/` and `docs/en/` contain matching Chinese and English tutorials and references, each organized by its `README.md`; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
+- `docs/README.md` is the language entry point; `docs/zh/` and `docs/en/` contain matching Chinese and English tutorials and references, each organized by its `README.md`; `validation/` is the tracked location for validation assets; `legacy/development/` contains archived engineering material; `legacy/docs/` contains archived documentation.
 - `script/` contains canonical build, test, analysis, and release-packaging commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Repository Practices
