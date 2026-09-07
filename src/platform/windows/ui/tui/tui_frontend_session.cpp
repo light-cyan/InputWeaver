@@ -133,6 +133,22 @@ private:
     return std::to_wstring(reinterpret_cast<std::uintptr_t>(handle));
 }
 
+[[nodiscard]] bool IsResponsiveModalWindow(HWND window) noexcept
+{
+    GUITHREADINFO info{};
+    info.cbSize = sizeof(info);
+    const DWORD thread = GetWindowThreadProcessId(window, nullptr);
+    if (thread == 0U || GetGUIThreadInfo(thread, &info) == FALSE
+        || (info.flags & (GUI_INMOVESIZE | GUI_INMENUMODE)) == 0U) {
+        return false;
+    }
+    // System modal loops pump window messages while frontend IPC is paused.
+    return SendMessageTimeoutW(
+        window, WM_NULL, 0U, 0,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT,
+        100U, nullptr) != 0;
+}
+
 } // namespace
 
 TuiFrontendSession::TuiFrontendSession(
@@ -149,6 +165,9 @@ TuiFrontendSession::~TuiFrontendSession()
 bool TuiFrontendSession::Show(std::string& error)
 {
     if (Visible()) {
+        if (IsResponsiveModalWindow(window_)) {
+            lastHeartbeatAt_ = GetTickCount64();
+        }
         const ULONGLONG now = GetTickCount64();
         const bool starting = (!ready_ || window_ == nullptr)
             && now - startedAt_ < kFrontendStartupTimeoutMilliseconds;
@@ -321,6 +340,9 @@ bool TuiFrontendSession::Poll(
             return false;
         }
     }
+    if (IsResponsiveModalWindow(window_)) {
+        lastHeartbeatAt_ = GetTickCount64();
+    }
     if (disconnected) {
         Hide();
     } else if (WaitForSingleObject(process_.Get(), 0U) == WAIT_OBJECT_0) {
@@ -345,7 +367,8 @@ bool TuiFrontendSession::SendFrame(
     const ui::tui::Canvas& canvas,
     std::string& error) noexcept
 {
-    if (!Visible() || !ready_ || window_ == nullptr) {
+    if (!Visible() || !ready_ || window_ == nullptr
+        || IsResponsiveModalWindow(window_)) {
         return true;
     }
     try {
