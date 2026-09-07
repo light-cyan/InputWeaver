@@ -60,12 +60,15 @@ foreach ($name in $executables) {
 }
 
 $colorScheme = Join-Path $repositoryRoot 'res\InputWeaverTUI.colors.json'
-$documents = @(
-    'docs\grammar.md',
-    'docs\tui-guide.md',
-    'docs\safety-guide.md',
-    'docs\runtime-boundaries.md'
-)
+$documentationRoot = Join-Path $repositoryRoot 'docs'
+foreach ($entryPoint in @('README.md', 'zh\README.md')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $documentationRoot $entryPoint) -PathType Leaf)) {
+        throw "Required documentation entry point is missing: docs\$entryPoint"
+    }
+}
+$documents = @(Get-ChildItem -LiteralPath $documentationRoot -File -Recurse |
+    Sort-Object FullName |
+    ForEach-Object { Join-Path 'docs' $_.FullName.Substring($documentationRoot.Length + 1) })
 if (-not (Test-Path -LiteralPath $colorScheme -PathType Leaf)) {
     throw "Required release color scheme is missing: $colorScheme"
 }
@@ -93,7 +96,9 @@ foreach ($name in $executables) {
 }
 Copy-Item -LiteralPath $colorScheme -Destination $resourceRoot
 foreach ($relativePath in $documents) {
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot $relativePath) -Destination $documentRoot
+    $destination = Join-Path $packageRoot $relativePath
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot $relativePath) -Destination $destination
 }
 
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $archivePath -CompressionLevel Optimal

@@ -2,7 +2,7 @@
 
 `InputWeaverHost.exe` 是程序库、源码编辑、运行配置、执行器控制和输入调试的统一入口。它仍然通过独立的 `InputWeaverCompiler.exe` 生成 `.weavec`，再启动独立的 `InputWeaver.exe`；TUI 不把源码直接交给运行时，也不在内存中把编译程序传给执行器。无控制台托盘宿主持有应用状态，随附的 `InputWeaverTUI.exe` 只提供可关闭和重新创建的原生 Windows 界面。
 
-当前 Weave 语法、类型、规则匹配和动作语义统一定义在发行包的 `docs\grammar.md`。
+Weave 语法、类型、规则匹配和动作语义见[正式语法说明](grammar.md)；发行包中的教程与产品使用说明从[中文文档首页](../docs/zh/README.md)开始。
 
 ## 启动与页面
 
@@ -83,15 +83,18 @@ SOURCE 显示程序库中的 `.weave` 源码副本，包含行号、弱化的竖
 | 类别 | 示例 | 默认颜色 |
 | --- | --- | --- |
 | 结构关键字 | `when`、`repeat`、`if`、`else` | 紫色 |
-| 类型名 | `state`、`number`、`duration` | 青绿色 |
-| 变量、数组和内蕴值 | 用户变量、用户数组、`TARGET`、`PAUSE`、`TAP_DURATION`、`ACTION_GAP` | 浅蓝色 |
-| 常量 | `GLOBAL`、`on`、`off`、`held`、`idle`、`down`、`again`、`up`、数字、时长 | 浅绿色 |
-| 控制名 | `A`、`LCtrl`、`Mouse.Left`、`Windows.VirtualKey` | 亮蓝色 |
+| 类型名 | `state`、`number`、`duration`、`meter` | 青绿色 |
+| 变量、数组、计量器和内蕴值 | 用户声明名、`TARGET`、`PAUSE`、`TAP_DURATION`、`ACTION_GAP` | 浅蓝色 |
+| 属性与字段 | `values.length`、`Mouse.x`、`path.progress`、`@path.dx` 中的名称与 `@` | 浅蓝色 |
+| 常量与事件后缀 | `GLOBAL`、`on`、`off`、`held`、`idle`、`down`、`again`、`up`、`move`、`wheel`、`horizontalwheel`、`tick`、数字、时长 | 浅绿色 |
+| 控制名与事件源 | `A`、`LCtrl`、`Mouse.Left`、`Windows.VirtualKey`、`Mouse:move` 中的 `Mouse` | 亮蓝色 |
 | 动作和分隔符 | `tap`、`set`、`toggle`、`append`、`pop`、`clear`、`|` | 黄色 |
 | 规则和映射箭头 | `->`、`~>`、`=>`、`=>>`、`~>>` | 亮白色 |
 | 普通源码文本 | `and`、`or`、`not`、括号、方括号、逗号、冒号、分号、点和表达式运算符 | 默认前景色 |
 | 字符串 | `"..."` | 橙色 |
 | 注释 | `//...`、`/*...*/` | 绿色 |
+
+属性与字段和用户声明名共用 `syntax_variable` 配色；点号使用正文配色 `text`。成员着色按所属数组、`Mouse` 或已声明计量器识别。`length`、`dx` 等名称也可以用于用户声明，按变量配色显示；具体命名规则见[名称和保留字](grammar.md#名称和保留字)。
 
 `[V]` 在 Source 和 Compiled Dump 之间切换。没有已保存的 Dump 时，切换会立即调用编译器生成；生成失败会进入 Console。源码一旦保存，旧 Dump 会被移除，原 `.weavec` 文件可以暂时保留，但它的源码摘要不再匹配，因此不会被下一次运行复用。
 
@@ -228,9 +231,9 @@ HEALTH 显示连接、捕获、信任状态、Dry-run、`PAUSE`、DebugClient �
 
 ## TUI 按键保护
 
-宿主启动每个 `InputWeaver.exe` 时都会附加 `--exclude InputWeaverTUI.exe`。Exclude 使用与 Target 相同的进程定位器，并随前台窗口变化重新定位；前端关闭并重新创建后保护继续生效。排除选择命中前台进程时，执行器不会把操作 TUI 的物理输入送入规则分派，也不会消费这些输入或发布新的 `down` 和 `again` 输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
+宿主启动每个 `InputWeaver.exe` 时都会附加 `--exclude InputWeaverTUI.exe`。Exclude 使用与 Target 相同的进程定位器，并随前台窗口变化重新定位；前端关闭并重新创建后保护继续生效。排除选择命中前台进程时，执行器阻止普通分派并放行对应物理输入，同时阻止新的 `down` 和 `again` 输出；保护同样应用于 Global 目标。为清理执行器已经持有的控制而产生的释放仍然允许通过。
 
-该保护不隐藏 Debug EVENTS 中观察到的原始输入，而是保证这些输入被放行且不触发新的映射或规则效果。命令行排除选择器的完整解析规则和生命周期见 `docs/safety-guide.md` 与 `docs/runtime-boundaries.md`。
+Debug EVENTS 仍可观察这些原始输入。退出规则先于排除判断，命中时仍接管输入并停止执行器；模拟运行时物理输入始终放行。命令行排除选择器的完整解析规则和生命周期见[运行安全指南](safety-guide.md)与[运行边界](runtime-boundaries.md)。
 
 
 ## 配色

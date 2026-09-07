@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-本文档是当前 Weave 编译器唯一的正式语言定义，规定编译器接受的源码语法、名称绑定、类型系统、规则匹配、动作流和可观察运行语义。`.weave` 源文件必须先编译为持久化的 `.weavec` 程序，执行器不会在运行期间重新解析源码。
+本文档规定编译器接受的源码语法、名称绑定、类型系统、规则匹配、动作流和可观察运行语义。教程与产品使用说明见[中文文档首页](../docs/zh/README.md)。`.weave` 源文件必须先编译为持久化的 `.weavec` 程序，执行器不会在运行期间重新解析源码。
 
 ## 完整示例
 
@@ -21,7 +21,11 @@ state[] gates = [on, off];
 
 A -> B when combat == on;
 
-A:down when count < values.length ~> tap(B) | set(count, count + values[count]);
+A:down when count < values.length ~>
+    tap(B) |
+    if count >= 0 and count < values.length then
+        set(count, count + values[count])
+    end;
 A:down when count >= 5 ~> tap(C) | set(count, count - 1);
 
 F1:down =>
@@ -32,7 +36,7 @@ F1:down =>
     end;
 
 F2:down => set(gates[0], on) | toggle(gates[1]);
-F3:down => pop(values, popped);
+F3:down => if values.length > 0 then pop(values, popped) end;
 F4:down => set(count, RAND01 * 10);
 
 pause Pause:down ~> toggle;
@@ -51,9 +55,11 @@ exit F12:down when LCtrl == held and LShift == held;
 
 ### 名称和保留字
 
-所有名称区分大小写。标识符以 ASCII 字母开头，后续字符可以是 ASCII 字母、十进制数字或 `_`。用户变量和数组不能使用语言关键字、内蕴名称、扫描码限定符或无前缀的命名控制名。
+所有名称区分大小写。标识符以 ASCII 字母开头，后续字符可以是 ASCII 字母、十进制数字或 `_`。用户变量、数组和计量器共用名称空间，不能使用语言关键字、内蕴名称、扫描码限定符或无前缀的命名控制名。
 
-保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`RAND_SEED`、`RAND01`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`exit`、`pause`、`when`、`on`、`off`、`held`、`idle`、`toggle`、`down`、`again`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`append`、`pop`、`clear`、`length`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`repeat`、`E0` 和 `E1`。
+保留字和内蕴名称是 `TARGET`、`TAP_DURATION`、`ACTION_GAP`、`MOUSE_IDLE_TIMEOUT`、`Mouse`、`RAND_SEED`、`RAND01`、`PAUSE`、`GLOBAL`、`state`、`number`、`duration`、`meter`、`every`、`move`、`wheel`、`horizontalwheel`、`tick`、`move_by`、`move_to`、`scroll`、`scroll_horizontal`、`restart`、`exit`、`pause`、`when`、`on`、`off`、`held`、`idle`、`toggle`、`down`、`repeat`、`again`、`up`、`and`、`or`、`not`、`press`、`release`、`tap`、`wait`、`gap`、`set`、`append`、`pop`、`clear`、`exec`、`if`、`then`、`else`、`end`、`do`、`while`、`E0` 和 `E1`。
+
+数组属性 `length` 与鼠标、计量器字段名按点号前的对象识别，也可作为用户变量、数组或计量器的名称。例如 `number length = 0;` 和 `number dx = 0;` 都是合法声明；`values.length` 读取数组长度，单独的 `length` 读取同名用户变量，名为 `length` 的数组通过 `length.length` 读取长度。成员拼写和所属对象见[属性与字段速查](../docs/zh/language.md#属性与字段速查)。
 
 `on`、`off`、`held` 和 `idle` 都是常量。
 
@@ -302,7 +308,7 @@ string-literal  = ? 遵循上文转义规则的 ASCII 字符串记号 ? ;
 
 一个活动程序的并发求值共享同一条随机流，并按实际取得样本的顺序推进它。固定种子使相同程序在相同实现中的串行取样序列可重放；运行时不保证并发求值的先后次序，因此固定种子不保证并发程序的完整行为可重放。
 
-数组索引表达式求值一次，结果必须是有限且非负的 `number`，向下取整后必须小于数组当前逻辑长度。`index < values.length and values[index] > 0` 这样的短路条件可以先完成边界保护。数组索引和长度不引入独立的整数类型。
+数组索引表达式求值一次，结果必须是有限且非负的 `number`，向下取整后必须小于数组当前逻辑长度。`index >= 0 and index < values.length and values[index] > 0` 这样的短路条件可以保护同一次表达式求值中的访问；后续动作访问共享数组时，应在动作内部重新检查，并让检查与访问连续执行。数组索引和长度不引入独立的整数类型。
 
 `.length` 可以出现在映射、事件、PAUSE、退出规则和动作控制流的任何表达式中。数组声明不设置固定长度上限，实际增长受运行时数组存储容量约束。
 
@@ -404,7 +410,7 @@ exit F12:down when (LCtrl == held or RCtrl == held) and (LShift == held or RShif
 | 动作 | 约束和效果 |
 | --- | --- |
 | `press(control)` | 取得输出所有权；所有权从零变为一时发送按下。 |
-| `release(control)` | 释放当前任务持有的所有权；释放未持有的控制会使任务失败。 |
+| `release(control)` | 释放当前任务持有的所有权；释放未持有的控制会报告错误并结束当前任务，后续动作不再执行。 |
 | `tap(control)` | 取得所有权，等待 `TAP_DURATION`，再释放所有权。 |
 | `wait(expression)` | 要求 `duration` 表达式并进行可取消等待。 |
 | `gap()` | 按照 `ACTION_GAP` 进行可取消等待。 |
@@ -446,7 +452,7 @@ exit F12:down when (LCtrl == held or RCtrl == held) and (LShift == held or RShif
 
 ## Mouse compilation contract
 
-The mouse vocabulary reserves `meter`, `every`, `Mouse`, `MOUSE_IDLE_TIMEOUT`, `move`, `wheel`, `horizontalwheel`, `tick`, `move_by`, `move_to`, `scroll`, `scroll_horizontal`, and `restart`. `meter` is a declaration type in the shared compiler/highlighter word catalog.
+`meter` is a declaration type in the shared compiler/highlighter word catalog. Mouse keywords and builtin names are included in the [reserved-name list](#名称和保留字).
 
 The compiler also accepts the following mouse constructs and encodes them in the version 5 `.weavec` contract. These programs carry explicit mouse-observation and pointer-output requirements, checked by the executor during activation.
 
@@ -484,7 +490,7 @@ All current meters also expose `period`, `progress`, and `remaining`, with the p
 
 The platform-independent runtime observes physical position deltas in pixels and wheel deltas in standard detents. A move, vertical-wheel, or horizontal-wheel report replaces the complete `Mouse.dx/dy/wheel_x/wheel_y` tuple, setting unrelated components to zero. Keys and buttons preserve the tuple. Pointer polling updates `Mouse.x/y`; physical movement alone updates `Mouse.moving` and `Mouse.idle_time`. Idle time starts at activation and keeps growing after the timeout turns `moving` off.
 
-Each qualified input updates all named meters before ordinary matching. Raw rules run first, followed by meters in declaration order and their completed cycles in order. All matching and period openings for that input share the same variable state. A stopping rule stops only its event's subscription scan; consuming a raw report still permits its cycle statistics to advance.
+Each qualified input updates all named meters before ordinary matching. Raw rules are matched and submitted first, followed by tick rules for meters in declaration order and their completed cycles in order. All matching and period openings for that input share the same variable state; task actions execute through the scheduler after matching. A stopping rule stops only its event's subscription scan; consuming a raw report still permits its cycle statistics to advance.
 
 Distance progress sums segment lengths and keeps its remainder across ordinary idle. Wheel progress is signed, with opposite scrolling canceling the current remainder. A report crossing several boundaries creates a separate completion for each, with movement split proportionally between their start and end coordinates. Each completion immediately latches the next period expression, including an opening with zero remainder.
 

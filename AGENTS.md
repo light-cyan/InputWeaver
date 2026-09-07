@@ -13,7 +13,7 @@ The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and i
 ## Environment
 
 - Platform: Windows.
-- Compiler: MinGW-w64 GCC and G++ 15.1.0 are available on `PATH`.
+- Compiler: MinGW-w64 GCC and G++ 15.1.0 are available on `PATH`; product builds also require `windres` on `PATH`.
 - Language: C++.
 - Dependencies: use only the C++ standard library and the Windows API; do not introduce third-party libraries.
 - Git: this repository is initialized for Git-based version control. Inspect `git status` before changing files and do not commit or push unless explicitly requested.
@@ -23,8 +23,10 @@ The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and i
 - Keep canonical build, test, analysis, and run commands in batch files under `script/`.
 - Place generated executables and other build output under `bin/` and keep them out of version control.
 - Compile with `g++` and verify a successful build after changing C++ source code.
-- Use `docs/grammar.md` for current Weave syntax, binding, type, matching, action, and execution behavior.
+- Use `docs/zh/language.md`, `docs/zh/rules.md`, `docs/zh/actions.md`, and `docs/zh/mouse.md` for current Weave syntax and behavior; use `docs/zh/running.md` for execution behavior and limits.
 - Use `script/build_products.bat` to build release products without tests, `script/build_tests.bat` to build all test executables, and `script/build.bat` to build both groups.
+- Use `script/build_tui.bat` to build the Windows tray host and frontend.
+- Use `script/package_release.bat` to build products and package all files under `docs/` with the executables and color resources. It creates `bin/release/InputWeaver/` and `bin/release/InputWeaver-windows-x64.zip`.
 - Use `script/test.bat` to run all test suites; focused test suites use matching `script/build_<area>_tests.bat` and `script/test_<area>.bat` commands.
 - For compiler, compiler CLI, or Windows compiler-backend changes, build `script/build_compiler.bat` and `script/build_compiler_tests.bat`, then run `script/test_compiler.bat`.
 - For platform-independent runtime or Windows runtime-adapter changes, use `script/build_runtime_tests.bat` followed by `script/test_runtime.bat`.
@@ -34,8 +36,9 @@ The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and i
 ## Agent Coordination
 
 - `AGENTS.md` contains stable repository rules, the dependency model, the source layout, and concise product-status pointers.
-- `docs/grammar.md` owns the current Weave source-language definition.
-- Chinese product operation guides live directly under `docs/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
+- `docs/README.md` is the documentation entry point, and `docs/zh/README.md` indexes the Chinese documentation. `docs/zh/language.md`, `docs/zh/rules.md`, `docs/zh/actions.md`, and `docs/zh/mouse.md` own the current Weave language explanations and examples.
+- `docs/zh/windows.md` owns Windows control capabilities and external-process path behavior; keep platform-specific details separate from shared language and runtime semantics.
+- Chinese tutorials and product references live under `docs/zh/`; validation-specific manual test procedures live with their validation assets as `ManualTest.md`.
 - `development/legacy/` contains archived material from past work. It is not a current requirement or development input and does not need to be read unless the user explicitly requests historical comparison.
 - Move completed phase directories into `development/legacy/` as content-preserving snapshots; do not rewrite their internal references solely because the containing directory moved.
 - `validation/` is the tracked location for validation assets.
@@ -105,12 +108,12 @@ all modules except language -> support only for domain-independent primitives
 - `src/platform/windows/ui/tui/` owns the tray-host and native-frontend entry points, their inherited-pipe IPC, the Win32 TUI window, GDI cell rendering, keyboard and clipboard input, resize handling, notification icon, and color-resource loading.
 - `src/support/` owns primitives that are independent of Weave, compiled programs, input devices, runtime execution, application policy, and operating systems.
 - `tests/program/`, `tests/compiler/`, `tests/debug/`, `tests/runtime/`, `tests/app/`, and `tests/ui/` mirror the corresponding source-module boundaries; platform integration tests remain explicitly Windows-scoped.
-- `docs/grammar.md` contains the current Weave language definition; the other direct files under `docs/` contain product operation guides; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
+- `docs/README.md` is the documentation entry point; `docs/zh/` contains Chinese tutorials and references, organized by `docs/zh/README.md`; `validation/` is the tracked location for validation assets; `development/legacy/` contains archived engineering material.
 - `script/` contains canonical build, test, analysis, and release-packaging commands; `res/` contains Windows resources; `bin/` contains ignored generated artifacts.
 
 ## Repository Practices
 
-- Keep source code, comments, filenames, language specifications, and engineering documentation in English; keep Chinese product operation guides under `docs/` and validation-specific manual test procedures with their validation assets.
+- Keep source code, comments, filenames, and engineering documentation in English; keep Chinese language tutorials and product references under `docs/zh/` and validation-specific manual test procedures with their validation assets.
 - Keep `src/ui/` platform-independent; native entry points, operating-system APIs, and platform adapter dependencies belong under `src/platform/<platform>/<module>/`.
 - Keep code concise and avoid unnecessary complexity or verbosity.
 - Design structures carefully so each implementation is clear, cohesive, and efficient.
