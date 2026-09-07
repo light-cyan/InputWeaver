@@ -35,6 +35,12 @@ F6:down => tap(H) | tap(I);
 
 记事本是当前有效目标时，A 表现为 B，按下 F6 则依次点击 H 和 I。`TARGET` 选择目标应用，`->` 定义完整按键映射，`|` 在动作之间插入间隔。默认快捷键 `Ctrl+Shift+F12` 用于停止执行器。
 
+<a id="section-examples"></a>
+
+## 示例程序
+
+[`examples`](examples/) 目录收录了表达式求值器、2048、贪吃蛇和鼠标弹弓等复杂而有趣的 Weave 程序，通过完整作品集中组合并充分展示 InputWeaver 的各项能力。
+
 <a id="section-getting-started"></a>
 
 ## 开始使用

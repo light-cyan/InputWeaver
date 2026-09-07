@@ -35,6 +35,12 @@ F6:down => tap(H) | tap(I);
 
 While Notepad is the active target, A acts as B, and pressing F6 taps H followed by I. `TARGET` selects the application, `->` defines a complete key mapping, and `|` inserts a gap between actions. The default `Ctrl+Shift+F12` shortcut stops the executor.
 
+<a id="section-examples"></a>
+
+## Examples
+
+The [`examples`](examples/) directory contains complex and playful Weave programs—including an expression evaluator, 2048, Snake, and a mouse slingshot—that combine a broad range of InputWeaver capabilities into full-featured demonstrations.
+
 <a id="section-getting-started"></a>
 
 ## Getting started
