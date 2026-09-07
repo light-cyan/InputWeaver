@@ -8,6 +8,8 @@ Context-aware input mapping and macro engine.
 
 InputWeaver uses the Weave language to turn keyboard and mouse input into mappings, conditional macros, and actions triggered by mouse movement. Create and debug programs in the built-in editor, or compile and run them from the command line.
 
+InputWeaver is developed 100% by AI under human direction.
+
 [Documentation](docs/en/README.md)
 
 <a id="section-features"></a>

@@ -8,6 +8,8 @@
 
 InputWeaver 使用 Weave 语言，将键盘和鼠标输入组织成映射、条件宏，以及由鼠标移动触发的动作。可以在内置编辑器中创建和调试程序，也可以通过命令行编译和运行。
 
+InputWeaver 由 AI 在人工指导下完成 100% 的开发。
+
 [使用文档](docs/zh/README.md)
 
 <a id="section-features"></a>
