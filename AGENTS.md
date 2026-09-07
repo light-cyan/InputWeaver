@@ -48,6 +48,7 @@ The Windows control UI consists of the GUI tray host `InputWeaverHost.exe` and i
 
 ## Documentation Synchronization
 
+- Repository landing pages are `README.md` in English and `README.zh-CN.md` in Simplified Chinese. Keep their heading structure, shared anchors, and examples synchronized, with reciprocal language links below the title and links to documentation in the selected language.
 - Update Chinese and English pages together in the same change. Keep identical relative filenames and the same ordered heading levels and section meanings; translate titles and prose naturally. Review meaning as well as the mechanical checks.
 - Give each heading a standalone `<a id="section-name"></a>` immediately above it, separated by a blank line. Use the same stable English ID in both languages, retain it when wording changes, and use it in section links.
 - Put a direct link to the corresponding page in the other language below each page title. Keep other page links within the current language. `docs/README.md` links to both language indexes; all local documentation links must resolve within the packaged `docs/` tree.
